@@ -6,33 +6,6 @@
 # - Skill tool invoking ponytail: marks the session "ponytail-loaded" (the PreToolUse hook gates Luau writes on it).
 . (Join-Path $PSScriptRoot 'kb-common.ps1')
 
-function Test-ReadOnlyCommand($cmd) {
-    if ([string]::IsNullOrWhiteSpace($cmd)) { return $true }
-    $ro = @('ls', 'dir', 'cat', 'type', 'echo', 'pwd', 'cd', 'tree', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'findstr', 'where', 'which',
-            'whoami', 'hostname', 'get-childitem', 'gci', 'get-content', 'gc', 'get-location', 'get-item', 'gi', 'get-command', 'gcm',
-            'test-path', 'select-string', 'sls', 'resolve-path', 'rvpa', 'where-object', 'select-object', 'sort-object', 'format-table',
-            'format-list', 'out-string', 'measure-object', 'get-date', 'get-process', 'get-help', 'get-member', 'write-output',
-            'write-host', 'set-location', 'sl', 'gm', 'select', 'sort', 'ft', 'fl', 'measure', 'get-filehash', 'get-itemproperty', 'gp')
-    $roGit = @('status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'ls-files', 'blame', 'describe', 'config', 'shortlog', 'reflog', 'stash')
-    $segments = [regex]::Split($cmd, '(?:\|\||&&|;|\||\r?\n)')
-    foreach ($seg in $segments) {
-        $s = $seg.Trim().TrimStart('&', '(', ' ')
-        if ($s -eq '') { continue }
-        if ($s -match '^\$\w+\s*=\s*(.*)$') { $s = $matches[1].Trim() }
-        if ($s -match '^\(?\s*([\w\.\-]+)(?:\s+(\S+))?') {
-            $first  = $matches[1].ToLowerInvariant()
-            $second = if ($matches[2]) { $matches[2].ToLowerInvariant() } else { '' }
-        } else { return $false }
-        if ($first -eq 'git' -or $first -eq 'git.exe') {
-            if ($roGit -notcontains $second) { return $false }
-            if ($second -eq 'stash' -and $s -notmatch '^\S+\s+stash\s+(list|show)\b') { return $false }
-            continue
-        }
-        if ($ro -notcontains $first) { return $false }
-    }
-    return $true
-}
-
 try {
     $hookInput = Read-HookInput
     if ($null -eq $hookInput) { exit 0 }

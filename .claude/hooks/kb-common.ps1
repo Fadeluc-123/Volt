@@ -252,3 +252,52 @@ function Update-KbIndexes {
         if ($n -ne $c) { Write-Text $idx $n }
     }
 }
+
+# ---------------------------------------------------------------- git and shell
+
+# True when every segment of a shell command is a listed read-only command. Conservative: anything
+# unlisted, including a variable assignment, counts as work. Used by the PostToolUse dirty marker and
+# by the PreToolUse branch guard.
+function Test-ReadOnlyCommand($cmd) {
+    if ([string]::IsNullOrWhiteSpace($cmd)) { return $true }
+    $ro = @('ls', 'dir', 'cat', 'type', 'echo', 'pwd', 'cd', 'tree', 'head', 'tail', 'wc', 'grep', 'rg', 'find', 'findstr', 'where', 'which',
+            'whoami', 'hostname', 'get-childitem', 'gci', 'get-content', 'gc', 'get-location', 'get-item', 'gi', 'get-command', 'gcm',
+            'test-path', 'select-string', 'sls', 'resolve-path', 'rvpa', 'where-object', 'select-object', 'sort-object', 'format-table',
+            'format-list', 'out-string', 'measure-object', 'get-date', 'get-process', 'get-help', 'get-member', 'write-output',
+            'write-host', 'set-location', 'sl', 'gm', 'select', 'sort', 'ft', 'fl', 'measure', 'get-filehash', 'get-itemproperty', 'gp')
+    $roGit = @('status', 'log', 'diff', 'show', 'branch', 'remote', 'rev-parse', 'ls-files', 'blame', 'describe', 'config', 'shortlog', 'reflog', 'stash')
+    $segments = [regex]::Split($cmd, '(?:\|\||&&|;|\||\r?\n)')
+    foreach ($seg in $segments) {
+        $s = $seg.Trim().TrimStart('&', '(', ' ')
+        if ($s -eq '') { continue }
+        # A stdout redirect turns any command into a write; stderr forms (2>&1, 2>nul) stay read-only
+        if ($s -match '(^|[^0-9&>])>(?!&)') { return $false }
+        if ($s -match '^\$\w+\s*=\s*(.*)$') { $s = $matches[1].Trim() }
+        if ($s -match '^\(?\s*([\w\.\-]+)(?:\s+(\S+))?') {
+            $first  = $matches[1].ToLowerInvariant()
+            $second = if ($matches[2]) { $matches[2].ToLowerInvariant() } else { '' }
+        } else { return $false }
+        if ($first -eq 'git' -or $first -eq 'git.exe') {
+            if ($roGit -notcontains $second) { return $false }
+            if ($second -eq 'stash' -and $s -notmatch '^\S+\s+stash\s+(list|show)\b') { return $false }
+            continue
+        }
+        if ($ro -notcontains $first) { return $false }
+    }
+    return $true
+}
+
+# The checked-out branch name, or $null when HEAD is detached or this is not a repository.
+function Get-GitBranch {
+    $ErrorActionPreference = 'SilentlyContinue'
+    $b = & git -C $ProjectDir symbolic-ref --short -q HEAD 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ([string]$b).Trim()
+}
+
+# True when .gitignore excludes the path (KB/, .claude/state/, Handoffs/, Reference/ and the rest).
+function Test-GitIgnored($fullPath) {
+    $ErrorActionPreference = 'SilentlyContinue'
+    $null = & git -C $ProjectDir check-ignore -q -- $fullPath 2>$null
+    return ($LASTEXITCODE -eq 0)
+}

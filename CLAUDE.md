@@ -35,6 +35,7 @@ At the start of any coding task (writing, changing, reviewing or designing code,
 7. All Luau written for Volt follows the `code-style-*` nodes in `KB/Standards`. They are law, not guidance.
 8. Do not hand-edit the lists between `<!-- kb:auto-start -->` and `<!-- kb:auto-end -->`. Hooks regenerate them.
 9. The KB records only what is current: what Volt is, does, uses and will do. Nothing rejected, set aside or unused is kept or mentioned; when a ruling changes, its node is rewritten in place. The rule is `KB/Standards/kb-records-only-what-is-current.md`.
+10. Nothing is written on `main`. Before the first file change of a task, switch to a branch with `git switch -c <name>`, named per `KB/Standards/code-style-tooling-config-conventions.md` 11.8 (`feature/<system>`, `fix/<x>`, `docs/<x>`, or `CU-<taskid>_<compactname>_<author>`). The PreToolUse hook denies Write, Edit and non-read-only shell commands while the working tree is on `main`; gitignored paths such as `KB/` are exempt. The rule is `KB/Standards/never-write-on-main.md`.
 
 ## Repository layout
 
