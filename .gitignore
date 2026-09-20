@@ -12,3 +12,8 @@ Handoffs/
 
 # Third-party source snapshots (Blink, Zap) kept locally for design reference; re-fetch from GitHub
 Reference/
+
+# Wally packages, the luau-lsp sourcemap and built place files
+Packages/
+sourcemap.json
+*.rbxl*
