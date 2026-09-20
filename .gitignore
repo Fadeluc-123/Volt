@@ -1,0 +1,13 @@
+# Claude Code per-session hook state and personal overrides
+.claude/state/
+.claude/settings.local.json
+
+# Obsidian per-machine UI state (the rest of KB/.obsidian is shared config)
+KB/.obsidian/workspace.json
+KB/.obsidian/workspace-mobile.json
+
+# Inbox for handoff bundles awaiting ingestion into KB/
+Handoffs/
+
+# Third-party source snapshots (Blink, Zap) kept locally for design reference; re-fetch from GitHub
+Reference/

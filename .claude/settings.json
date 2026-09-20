@@ -1,0 +1,90 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git commit*)",
+      "Bash(git push*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              "& { $s = '.claude/hooks/kb-session-start.ps1'; $d = $env:CLAUDE_PROJECT_DIR; if (-not $d -or -not (Test-Path (Join-Path $d $s))) { $d = (Get-Location).Path }; if (-not (Test-Path (Join-Path $d $s))) { $d = 'C:/Users/Michael/OneDrive/Desktop/Game Development/Volt' }; & (Join-Path $d $s); exit $LASTEXITCODE }"
+            ],
+            "timeout": 60,
+            "statusMessage": "Loading KB into context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Agent|WebSearch|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              "& { $s = '.claude/hooks/kb-pretool.ps1'; $d = $env:CLAUDE_PROJECT_DIR; if (-not $d -or -not (Test-Path (Join-Path $d $s))) { $d = (Get-Location).Path }; if (-not (Test-Path (Join-Path $d $s))) { $d = 'C:/Users/Michael/OneDrive/Desktop/Game Development/Volt' }; & (Join-Path $d $s); exit $LASTEXITCODE }"
+            ],
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|WebSearch|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              "& { $s = '.claude/hooks/kb-posttool.ps1'; $d = $env:CLAUDE_PROJECT_DIR; if (-not $d -or -not (Test-Path (Join-Path $d $s))) { $d = (Get-Location).Path }; if (-not (Test-Path (Join-Path $d $s))) { $d = 'C:/Users/Michael/OneDrive/Desktop/Game Development/Volt' }; & (Join-Path $d $s); exit $LASTEXITCODE }"
+            ],
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-NonInteractive",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-Command",
+              "& { $s = '.claude/hooks/kb-stop.ps1'; $d = $env:CLAUDE_PROJECT_DIR; if (-not $d -or -not (Test-Path (Join-Path $d $s))) { $d = (Get-Location).Path }; if (-not (Test-Path (Join-Path $d $s))) { $d = 'C:/Users/Michael/OneDrive/Desktop/Game Development/Volt' }; & (Join-Path $d $s); exit $LASTEXITCODE }"
+            ],
+            "timeout": 30,
+            "statusMessage": "Checking KB is updated"
+          }
+        ]
+      }
+    ]
+  }
+}
