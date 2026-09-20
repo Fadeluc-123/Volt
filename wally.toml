@@ -1,8 +1,10 @@
 [package]
 name = "fadeluc-123/volt"
-version = "1.0.0"
+version = "0.1.0"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 license = "MIT"
+description = "Buffer networking for Roblox: a schema compiler and a small runtime"
+exclude = ["src/Compiler", "CLAUDE.md", "rokit.toml", "selene.toml", "stylua.toml", "tests", "tools", "place", "KB", "Reference", "Handoffs"]
 
 [dependencies]

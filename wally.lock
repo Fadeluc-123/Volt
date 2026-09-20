@@ -4,5 +4,5 @@ registry = "test"
 
 [[package]]
 name = "fadeluc-123/volt"
-version = "1.0.0"
+version = "0.1.0"
 dependencies = []
