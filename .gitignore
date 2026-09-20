@@ -1,6 +1,7 @@
 # Claude Code per-session hook state and personal overrides
 .claude/state/
 .claude/settings.local.json
+KB/
 
 # Obsidian per-machine UI state (the rest of KB/.obsidian is shared config)
 KB/.obsidian/workspace.json

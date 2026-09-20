@@ -48,7 +48,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|WebSearch|WebFetch",
+        "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|WebSearch|WebFetch|Skill",
         "hooks": [
           {
             "type": "command",

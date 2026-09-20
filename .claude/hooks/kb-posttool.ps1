@@ -3,6 +3,7 @@
 # - Write/Edit outside KB: marks the session "dirty" (work done, not yet recorded in Memory).
 # - Write/Edit of this session's Memory node: clears "dirty".
 # - Non-read-only shell command, WebSearch, WebFetch: marks "dirty".
+# - Skill tool invoking ponytail: marks the session "ponytail-loaded" (the PreToolUse hook gates Luau writes on it).
 . (Join-Path $PSScriptRoot 'kb-common.ps1')
 
 function Test-ReadOnlyCommand($cmd) {
@@ -80,6 +81,14 @@ try {
             $q = [string](Get-Prop $ti 'query'); if (-not $q) { $q = [string](Get-Prop $ti 'url') }
             Append-State $sid 'research' ($tool + ': ' + $q)
             Touch-State $sid 'dirty'
+        }
+        '^Skill$' {
+            $skill = ''
+            foreach ($k in @('skill', 'skill_name', 'name', 'command')) {
+                $v = [string](Get-Prop $ti $k)
+                if ($v) { $skill = $v; break }
+            }
+            if ($skill -match '(?i)(^|[:/])ponytail$') { Touch-State $sid 'ponytail-loaded' }
         }
     }
     exit 0

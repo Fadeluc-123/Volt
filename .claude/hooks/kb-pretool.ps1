@@ -2,6 +2,8 @@
 # 1. Denies git commit / push / merge / rebase / cherry-pick / revert and gh pr create / merge.
 # 2. Denies every work tool until the session is marked KB-loaded (by SessionStart, or by reading
 #    every required KB file with the Read tool, which the PostToolUse hook tracks).
+# 3. Denies Write/Edit of any .lua or .luau file outside KB/ until the ponytail skill has been invoked
+#    this session (the PostToolUse hook records the Skill call as the "ponytail-loaded" marker).
 . (Join-Path $PSScriptRoot 'kb-common.ps1')
 
 function Deny($reason) {
@@ -42,6 +44,16 @@ try {
         } else {
             $list = ($missing | ForEach-Object { 'KB/' + $_ }) -join ', '
             Deny ('BLOCKED: the Volt knowledge base has not been loaded in this session and no work may start before it is read (KB/Standards/kb-read-before-work.md). Use the Read tool on each of these files now; the gate opens automatically after the last one: ' + $list)
+        }
+    }
+
+    # ---- 3. ponytail gate for Luau writes ---------------------------------------------------------
+    if ($tool -match '^(Write|Edit|MultiEdit|NotebookEdit)$') {
+        $fp   = Get-Prop $ti 'file_path'
+        if (-not $fp) { $fp = Get-Prop $ti 'notebook_path' }
+        $full = Resolve-ToolPath $fp
+        if ($full -and ($full -match '(?i)\.luau?$') -and -not (Test-UnderDir $full $KbDir) -and -not (Test-State $sid 'ponytail-loaded')) {
+            Deny 'BLOCKED by KB policy (KB/Standards/invoke-ponytail-before-writing-code.md): Volt code is written with the ponytail skill active. Invoke it now with the Skill tool (skill "ponytail:ponytail"), then retry this write. One invocation per session is enough.'
         }
     }
     exit 0

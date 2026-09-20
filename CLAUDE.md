@@ -13,12 +13,16 @@ Structure: **Core -> Path -> Node**.
 - A **Path** is a folder inside `KB/` with an index note of the same name, for example `KB/Mistakes/Mistakes.md`. The index says what belongs there, gives the node template, and lists the nodes.
 - A **Node** is one `.md` file about exactly one thing. Never combine two things into one node.
 
-Paths: Decisions, Library, Memory, Mistakes, Planning, Research, Standards.
+Paths: Decisions, Design, Library, Memory, Mistakes, Planning, Research, Standards.
 
-**Before any work in a session**, `KB/Core.md` and every node in `KB/Decisions`, `KB/Mistakes` and `KB/Standards` must be in context. `KB/Library`, `KB/Memory`, `KB/Planning` and `KB/Research` are listed by index and opened with Read when relevant; check the Research index before researching anything.
+**Before any work in a session**, `KB/Core.md` and every node in `KB/Decisions`, `KB/Mistakes` and `KB/Standards` must be in context. `KB/Design`, `KB/Library`, `KB/Memory`, `KB/Planning` and `KB/Research` are listed by index and opened with Read when relevant; check the Research index before researching anything, and open the Design node for anything before implementing it.
 The SessionStart hook injects all of this automatically (look for the "VOLT KNOWLEDGE BASE" block). If that block is missing, read those files with the Read tool. Write, Edit, shell, Agent and web tools are denied by the PreToolUse hook until the KB is read.
 
 **Before ending any turn that did work**, create or update this session's Memory node at the path printed in the injected context (`KB/Memory/<date>-<session>.md`), and add nodes to Mistakes, Research, Standards or Decisions for anything new. The Stop hook refuses to end the turn until the Memory node is written.
+
+## Ponytail is invoked before any code
+
+At the start of any coding task (writing, changing, reviewing or designing code, or choosing a dependency), invoke the `ponytail:ponytail` skill with the Skill tool, once per session, before the first line of code. The PreToolUse hook denies Write and Edit on any `.lua` or `.luau` file outside `KB/` until that has happened. Where Ponytail and the `code-style-*` nodes disagree, the code style decides the form of the code and Ponytail decides how much of it exists; the rule is `KB/Standards/invoke-ponytail-before-writing-code.md`.
 
 ## Hard rules
 
@@ -30,10 +34,12 @@ The SessionStart hook injects all of this automatically (look for the "VOLT KNOW
 6. Record every ruling Mike makes about Volt in `KB/Decisions`. Do not re-litigate a recorded decision; if it needs reopening, say so and ask.
 7. All Luau written for Volt follows the `code-style-*` nodes in `KB/Standards`. They are law, not guidance.
 8. Do not hand-edit the lists between `<!-- kb:auto-start -->` and `<!-- kb:auto-end -->`. Hooks regenerate them.
+9. The KB records only what is current: what Volt is, does, uses and will do. Nothing rejected, set aside or unused is kept or mentioned; when a ruling changes, its node is rewritten in place. The rule is `KB/Standards/kb-records-only-what-is-current.md`.
 
 ## Repository layout
 
-- `KB/` the knowledge base (Obsidian vault).
+- `KB/` the knowledge base (Obsidian vault). Gitignored and local-only, like `Reference/`; the hooks require it to exist on the machine running Claude Code, and git keeps no history of its edits.
+- `rokit.toml` the Rokit tool pins for the project (Rokit is the toolchain manager; see `KB/Decisions/wally-and-rokit-toolchain.md`).
 - `Reference/` gitignored, local-only snapshots of third-party source (Blink 0.18, Blink 1.0 rewrite, Zap 0.6.x) kept for design reference. Never restyled, never edited. If the folder is missing, re-fetch it as described in `KB/Research/reference-source-snapshots.md`.
 - `Handoffs/` gitignored inbox for bundles from other sessions awaiting ingestion into `KB/`.
 - `.claude/` hooks and settings that enforce the KB workflow.
