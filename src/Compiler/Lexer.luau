@@ -24,7 +24,7 @@ local KEYWORDS: { [string]: boolean } = {
 	namespace = true,
 	event = true,
 	set = true,
-	
+
 	["function"] = true,
 }
 

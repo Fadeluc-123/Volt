@@ -8,11 +8,14 @@
 local Source = {}
 Source.__index = Source
 
-export type Source = typeof(setmetatable({} :: {
-	path: string,
-	text: string,
-	_lineStarts: { number }
-}, Source))
+export type Source = typeof(setmetatable(
+	{} :: {
+		path: string,
+		text: string,
+		_lineStarts: { number },
+	},
+	Source
+))
 
 function Source.new(path: string, text: string): Source
 	local lineStarts: { number } = { 1 }
