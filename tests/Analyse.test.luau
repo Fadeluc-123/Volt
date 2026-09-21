@@ -14,7 +14,10 @@ local Analyse = require("@volt/Compiler/Analyse")
 local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Lexer = require("@volt/Compiler/Lexer")
 local Parser = require("@volt/Compiler/Parser")
+local Print = require("@volt/Compiler/Analyse/Print")
 local Resolve = require("@volt/Compiler/Resolve")
+local Schema = require("@volt/Compiler/Config/Types/Schema")
+local Sizes = require("@volt/Compiler/Analyse/Sizes")
 local Source = require("@volt/Compiler/Source")
 
 local describe = Suite.describe
@@ -83,6 +86,7 @@ local SIZES: { { any } } = {
 	{ `enum "kind" \{ A \{ x: u8 }, B \{ y: u16, z: boolean? } }`, 1, 4, 1, 0 },
 	{ "u8 | string", 1, 65537, 1, 0 },
 	{ "Vector3 | Stack", 5, 36, 1, 1 },
+	{ "Team | enum { Green }", 0, 0, 2, 0 },
 }
 
 -- A discriminant with more variants than a byte holds is two raw bytes
@@ -101,9 +105,9 @@ end
     and the schema hash
 --]]
 
-local function compile(text: string): (Parser.File, Diagnostics.Diagnostics, number)
+local function compile(text: string): (Schema.File, Diagnostics.Diagnostics, number)
 	local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(Source.new("Test.volt", text))
-	local file: Parser.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
+	local file: Schema.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
 
 	Resolve.file(file, diagnostics)
 	return file, diagnostics, Analyse.file(file, diagnostics)
@@ -118,8 +122,8 @@ describe("Analyse", function ()
 	describe("sizes", function ()
 		for _, row: { any } in SIZES do
 			test(row[1], function ()
-				local file: Parser.File, diagnostics = compile(schema(`{NAMED}type T = {row[1]}`))
-				local size: Analyse.Size = Analyse.size((file.declarations[3] :: any).type)
+				local file: Schema.File, diagnostics = compile(schema(`{NAMED}type T = {row[1]}`))
+				local size: Sizes.Size = Sizes.size((file.declarations[3] :: any).type)
 
 				expect(diagnostics:render()).is("")
 				expect(size.min).is(row[2])
@@ -128,13 +132,23 @@ describe("Analyse", function ()
 				expect(size.slots).is(row[5])
 			end)
 		end
+
+		test("a named type shared by two references is a block of its own", function ()
+			local file: Schema.File = compile(schema(`{NAMED}type A = Stack\ntype B = Stack`))
+			local size: Sizes.Size = Sizes.size((file.declarations[3] :: any).type)
+
+			expect(size.min).is(5)
+			expect(size.max).is(36)
+			expect(size.bits).is(0)
+			expect(size.slots).is(1)
+		end)
 	end)
 
 	test("assigns ids in declaration order, per direction, depth first through namespaces", function ()
 		local text: string = schema(
 			"event A { from: Client, type: Reliable, call: Polling }\nevent B { from: Server, type: Reliable, call: Polling }\nevent C { from: Both, type: Reliable, call: Polling }\nnamespace N { function F {} event D { from: Client, type: Reliable, call: Polling } }\nevent E { from: Server, type: Reliable, call: Polling }"
 		)
-		local file: Parser.File, diagnostics = compile(text)
+		local file: Schema.File, diagnostics = compile(text)
 		local a: any, b: any, c: any, n: any, e: any = table.unpack(file.declarations)
 		local f: any, d: any = table.unpack(n.declarations)
 
@@ -200,7 +214,7 @@ describe("Analyse", function ()
 			local third: string = rendered(
 				text,
 				"struct { b: u8 }",
-				"error V3009: union members struct { a: u8 } and struct { b: u8 } are both tables with named fields at runtime"
+				"error V3009: union members struct { a: u8 } and struct { b: u8 } are both tables at runtime"
 			)
 			local fourth: string = rendered(
 				text,
@@ -218,7 +232,7 @@ describe("Analyse", function ()
 			local seventh: string = rendered(
 				text,
 				"{ [u8]: u8 }",
-				"error V3009: union members u8[] and { [u8]: u8 } are both arrays or maps at runtime"
+				"error V3009: union members u8[] and { [u8]: u8 } are both tables at runtime"
 			)
 
 			expect(report(text)).is(`{first}\n\n{second}\n\n{third}\n\n{fourth}\n\n{fifth}\n\n{sixth}\n\n{seventh}`)
@@ -287,8 +301,8 @@ describe("Analyse", function ()
 	end)
 
 	test("prints the canonical form with resolved paths, ids and sizes, namespaces indented", function ()
-		local file: Parser.File = compile(EXAMPLE)
-		local printed: string = Analyse.print(file)
+		local file: Schema.File = compile(EXAMPLE)
+		local printed: string = Print.file(file)
 		local lines: { string } = {
 			"option scope = Test",
 			"type Stack = struct { item: string(1..32), quantity: u16(1..999), properties: unknown? } -- 4..35 bytes, 1 flag bit, 2 references",

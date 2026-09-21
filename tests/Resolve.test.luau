@@ -11,6 +11,7 @@ local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Lexer = require("@volt/Compiler/Lexer")
 local Parser = require("@volt/Compiler/Parser")
 local Resolve = require("@volt/Compiler/Resolve")
+local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Source = require("@volt/Compiler/Source")
 
 local describe = Suite.describe
@@ -28,9 +29,9 @@ end
     Lexes, parses and resolves a text, returning the file and its diagnostics
 --]]
 
-local function resolve(text: string): (Parser.File, Diagnostics.Diagnostics)
+local function resolve(text: string): (Schema.File, Diagnostics.Diagnostics)
 	local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(Source.new("Test.volt", text))
-	local file: Parser.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
+	local file: Schema.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
 
 	Resolve.file(file, diagnostics)
 	return file, diagnostics
@@ -43,7 +44,7 @@ end
 
 describe("Resolve", function ()
 	test("fills every option default and takes the scope from the file name", function ()
-		local file: Parser.File, diagnostics = resolve(schema("option queue = 8"))
+		local file: Schema.File, diagnostics = resolve(schema("option queue = 8"))
 		local options: any = file.options
 
 		expect(diagnostics:render()).is("")
@@ -69,7 +70,7 @@ describe("Resolve", function ()
 		local text: string = schema(
 			`option queue = 8\noption rate = unlimited\noption functionRate = 30\noption timeout = 2\noption yield = promise\noption promise = "P"\nevent E \{ from: Client, type: Reliable, call: Polling }\nfunction F \{}\nfunction G \{ yield: Coroutine, timeout: 1, rate: 5 }`
 		)
-		local file: Parser.File, diagnostics = resolve(text)
+		local file: Schema.File, diagnostics = resolve(text)
 		local event: any, first: any, second: any = file.declarations[1], file.declarations[2], file.declarations[3]
 
 		expect(diagnostics:render()).is("")
@@ -87,7 +88,7 @@ describe("Resolve", function ()
 		local text: string = schema(
 			"type Id = u8\nnamespace A {\n\ttype Local = u8\n\tnamespace B {\n\t\ttype Deep = struct { a: Local, b: Id }\n\t\tevent E { from: Client, type: Reliable, call: Polling, data: A.Local }\n\t}\n\ttype Mine = B.Deep\n}\ntype Outer = A.B.Deep"
 		)
-		local file: Parser.File, diagnostics = resolve(text)
+		local file: Schema.File, diagnostics = resolve(text)
 		local id: any, a: any, outer: any = file.declarations[1], file.declarations[2], file.declarations[3]
 		local localType: any, b: any, mine: any = a.declarations[1], a.declarations[2], a.declarations[3]
 		local deep: any, event: any = b.declarations[1], b.declarations[2]
@@ -128,7 +129,7 @@ describe("Resolve", function ()
 			local text: string = schema(
 				"type Dup = u8\ntype Dup = u16\nnamespace N { type Dup = u8 event Dup { from: Client, type: Reliable, call: Polling } }\ntype X = Dup"
 			)
-			local file: Parser.File = resolve(text)
+			local file: Schema.File = resolve(text)
 			local first: string = rendered(text, "Dup", `error V3002: "Dup" is declared twice`, 2)
 			local second: string = rendered(text, "Dup", `error V3002: "N.Dup" is declared twice`, 4)
 

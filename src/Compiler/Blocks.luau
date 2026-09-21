@@ -10,45 +10,33 @@
 local Blocks = {} :: any
 Blocks.__index = Blocks
 
+local Reserved = require("./Config/Reserved")
+
 export type Side = "write" | "read"
+
+-- A run of bytes a parent took from the allocator or checked once, for its children to fill
+export type Region = { offset: string, out: string }
 
 export type Block = {
 	side: Side,
 	path: string,
 	out: string,
+	allocate: string,
+	slot: string,
 	reserve: (self: Block, bytes: number) -> number,
 	at: (self: Block, index: number) -> string,
 	flags: (self: Block, bits: number) -> (),
 	flag: (self: Block, count: number?) -> (string, number),
 	name: (self: Block, hint: string) -> string,
+	empty: (self: Block) -> boolean,
 	line: (self: Block, text: string) -> (),
 	tail: (self: Block, text: string) -> (),
+	open: (self: Block, text: string) -> (),
+	close: (self: Block, text: string) -> (),
+	region: (self: Block, hint: string, path: string, bytes: string) -> Region,
 	extend: (self: Block, hint: string, path: string, bytes: string, payload: (string, string) -> string) -> (),
-	child: (self: Block, path: string?) -> Block,
-	done: (self: Block) -> string,
-}
-
--- Names the generated code reaches for that no local may shadow
-local RESERVED: { string } = {
-	"allocate",
-	"bit32",
-	"buffer",
-	"cursor",
-	"deliver",
-	"error",
-	"length",
-	"math",
-	"net",
-	"packet",
-	"player",
-	"readf16",
-	"side",
-	"sideCursor",
-	"string",
-	"table",
-	"tostring",
-	"typeof",
-	"writef16",
+	child: (self: Block, path: string?, region: Region?) -> Block,
+	done: (self: Block, final: string?) -> string,
 }
 
 local WORD_BITS: number = 32 -- What one flags local holds, which is as far as bit32 reaches
@@ -76,23 +64,47 @@ local function stores(word: number, bytes: number): { { width: number, byte: num
 	return list
 end
 
-local function append(list: { string }, indent: number, text: string)
-	for line: string in text:gmatch("[^\n]+") do
-		table.insert(list, `{string.rep("\t", indent)}{line}`)
+-- A statement's lines each indented by the level, with a blank line left blank
+local function indent(level: number, text: string): string
+	return (text:gsub("[^\n]+", `{string.rep("\t", level)}%0`))
+end
+
+--[[
+    Statements one per line, with a blank line on either side of any that
+    spans several lines, so a check or a branch stands apart from the
+    straight-line writes around it
+--]]
+
+local function paragraphs(statements: { string }): string
+	local parts: { string } = {}
+	local spanned: boolean = false -- Whether the statement before spans several lines
+
+	for index: number, statement: string in statements do
+		local spans: boolean = statement:find("\n") ~= nil
+
+		if index > 1 then
+			table.insert(parts, (spans or spanned) and "\n\n" or "\n")
+		end
+
+		table.insert(parts, statement)
+		spanned = spans
 	end
+
+	return table.concat(parts)
 end
 
 --[[
     A root block for one generated function, or with a parent a child of
     it: an optional payload, a variant body or a loop iteration whose
-    lines land in the parent's tail once it is done
+    lines land in the parent's tail once it is done. A child opened over a
+    region fills bytes its parent already took or checked
 --]]
 
-function Blocks.new(side: Side, path: string, allocate: string?, parent: Block?): Block
+function Blocks.new(side: Side, path: string, parent: Block?, region: Region?): Block
 	local names: { [string]: boolean } = parent and (parent :: any)._names or {}
 
 	if not parent then
-		for _, name: string in RESERVED do
+		for _, name: string in Reserved.generated do
 			names[name] = true
 		end
 	end
@@ -100,22 +112,25 @@ function Blocks.new(side: Side, path: string, allocate: string?, parent: Block?)
 	local self = setmetatable({
 		side = side,
 		path = path,
-		out = "packet", -- The buffer the fixed bytes are read from, or written to once allocated
+		out = region and region.out or "packet", -- The buffer the fixed bytes are read from, or written to once allocated
+		allocate = parent and parent.allocate or "allocate", -- What the write side calls for its bytes
+		slot = parent and parent.slot or "slot", -- What the write side calls to store a side-array value
 		_parent = parent,
 		_indent = parent and (parent :: any)._indent + 1 or 1,
-		_allocate = allocate or "allocate", -- What the write side calls for its bytes
-		_offset = "cursor", -- Where the fixed bytes start
+		_offset = region and region.offset or "cursor", -- Where the fixed bytes start
+		_region = region ~= nil, -- Whether the parent took or checked the fixed bytes already
 		_bytes = 0, -- Fixed bytes reserved so far
 		_bits = 0, -- Flag bits the block was opened with
 		_claimed = 0, -- Flag bits handed out so far
 		_flagsAt = 0, -- Where the flag bytes sit among the fixed bytes
 		_words = {} :: { string }, -- The flags locals, one per 32 bits
-		_body = {} :: { string },
-		_tail = {} :: { string },
+		_body = {} :: { string }, -- The statements among the fixed bytes
+		_tail = {} :: { string }, -- The statements after them
+		_groups = {} :: { { string } }, -- The scopes open in the tail, innermost last, each gathering one statement
 		_names = names, -- Every local the function holds, so no two collide
 	}, Blocks)
 
-	if side == "write" then
+	if side == "write" and not region then
 		self._offset = self:name("offset")
 		self.out = self:name("out")
 	end
@@ -124,12 +139,12 @@ function Blocks.new(side: Side, path: string, allocate: string?, parent: Block?)
 end
 
 --[[
-    Opens a child block. The caller writes the lines that open and close
-    the scope around it into this block's tail
+    Opens a child block. The caller opens and closes the scope around it
+    in this block's tail
 --]]
 
-function Blocks:child(path: string?): Block
-	return Blocks.new(self.side, path or self.path, self._allocate, self)
+function Blocks:child(path: string?, region: Region?): Block
+	return Blocks.new(self.side, path or self.path, self, region)
 end
 
 --[[
@@ -215,58 +230,112 @@ function Blocks:name(hint: string): string
 	return candidate
 end
 
--- A line among the fixed bytes, at a constant offset
-function Blocks:line(text: string)
-	append(self._body, self._indent, text)
+-- Whether nothing was reserved or written into the block, so a branch around it would be empty
+function Blocks:empty(): boolean
+	return self._bytes == 0 and self._bits == 0 and #self._body == 0 and #self._tail == 0
 end
 
--- A line after the fixed bytes, where the variable payloads and child blocks go
+-- The list a tail statement lands in: the innermost open scope, or the tail itself
+function Blocks:_target(): { string }
+	return self._groups[#self._groups] or self._tail
+end
+
+-- A statement among the fixed bytes, at a constant offset
+function Blocks:line(text: string)
+	table.insert(self._body, indent(self._indent, text))
+end
+
+-- A statement after the fixed bytes, where the variable payloads and child blocks go
 function Blocks:tail(text: string)
-	append(self._tail, self._indent, text)
+	table.insert(self:_target(), indent(self._indent, text))
 end
 
 --[[
-    A variable-size payload after the fixed bytes: the write side takes
-    it from the allocator into locals named for the field, the read side
-    checks it is all there and steps the cursor past it. The payload
-    callback writes the line between, given the buffer and offset to use
+    Opens a scope in the tail, a branch or a loop, that closes as one
+    statement: everything that lands in the tail until the close, a child
+    block's lines included, is part of it and stays packed together
 --]]
 
-function Blocks:extend(hint: string, path: string, bytes: string, payload: (string, string) -> string)
+function Blocks:open(text: string)
+	table.insert(self._groups, { indent(self._indent, text) })
+end
+
+function Blocks:close(text: string)
+	local group: { string }? = table.remove(self._groups)
+	assert(group, `{self.path}: closing a scope when none is open`)
+
+	table.insert(group, indent(self._indent, text))
+	table.insert(self:_target(), table.concat(group, "\n"))
+end
+
+--[[
+    Takes a run of bytes after the fixed bytes: the write side from the
+    allocator into locals named for the field, the read side checked to
+    be all there. What fills it, a payload or a loop of child blocks over
+    the region, comes next in the tail
+--]]
+
+function Blocks:region(hint: string, path: string, bytes: string): Region
 	if self.side == "write" then
 		local offset: string = self:name(`{hint}Offset`)
 		local out: string = self:name(`{hint}Out`)
 
-		self:tail(`local {offset}: number, {out}: buffer = {self._allocate}({bytes})`)
-		self:tail(payload(out, offset))
-		return
+		self:tail(`local {offset}: number, {out}: buffer = {self.allocate}({bytes})`)
+
+		return {
+			offset = offset,
+			out = out,
+		}
 	end
 
 	self:tail(`if cursor + {bytes} > length then\n\terror("{path}: truncated")\nend`)
-	self:tail(payload("packet", "cursor"))
-	self:tail(`cursor += {bytes}`)
+
+	return {
+		offset = "cursor",
+		out = "packet",
+	}
+end
+
+--[[
+    A variable-size payload after the fixed bytes, taken as a region and
+    filled by the payload callback, which writes the line between given
+    the buffer and offset to use; the read side steps the cursor past it
+--]]
+
+function Blocks:extend(hint: string, path: string, bytes: string, payload: (string, string) -> string)
+	local region: Region = self:region(hint, path, bytes)
+	self:tail(payload(region.out, region.offset))
+
+	if self.side == "read" then
+		self:tail(`cursor += {bytes}`)
+	end
 end
 
 --[[
     Closes the block: one allocation or bounds check for its fixed bytes
-    at the top, the flag bytes stored after those bytes are written on
-    the write side and the cursor stepped past them on the read side,
-    then the tail. A child's lines land in its parent's tail
+    at the top unless a region holds them, the flag bytes stored after
+    those bytes are written on the write side and the offset or cursor
+    stepped past them, then the tail, then the final statement as a
+    paragraph of its own. A child's text lands in its parent's tail
 --]]
 
-function Blocks:done(): string
+function Blocks:done(final: string?): string
 	assert(self._claimed == self._bits, `{self.path}: {self._claimed} flag bits claimed of {self._bits} reserved`)
+	assert(#self._groups == 0, `{self.path}: a scope was left open`)
 
-	local lines: { string } = {}
+	local statements: { string } = {}
 	local bytes: number = self._bytes
 
-	if bytes > 0 and self.side == "write" then
-		append(lines, self._indent, `local {self._offset}: number, {self.out}: buffer = {self._allocate}({bytes})`)
-	elseif bytes > 0 then
-		append(lines, self._indent, `if cursor + {bytes} > length then\n\terror("{self.path}: truncated")\nend`)
+	-- A region's bytes were taken or checked by the parent, so only a block of its own opens with a line
+	if bytes > 0 and not self._region and self.side == "write" then
+		self:line(`local {self._offset}: number, {self.out}: buffer = {self.allocate}({bytes})`)
+		table.insert(statements, table.remove(self._body) :: string)
+	elseif bytes > 0 and not self._region then
+		self:line(`if cursor + {bytes} > length then\n\terror("{self.path}: truncated")\nend`)
+		table.insert(statements, table.remove(self._body) :: string)
 	end
 
-	table.move(self._body, 1, #self._body, #lines + 1, lines)
+	table.move(self._body, 1, #self._body, #statements + 1, statements)
 
 	if self.side == "write" then
 		local flagBytes: number = math.ceil(self._bits / 8)
@@ -279,20 +348,32 @@ function Blocks:done(): string
 				local value: string = whole and name or `bit32.extract({name}, {store.shift}, {store.width * 8})`
 				local at: string = self:at(self._flagsAt + store.byte)
 
-				append(lines, self._indent, `buffer.writeu{store.width * 8}({self.out}, {at}, {value})`)
+				table.insert(
+					statements,
+					indent(self._indent, `buffer.writeu{store.width * 8}({self.out}, {at}, {value})`)
+				)
 			end
 		end
+
+		if bytes > 0 and self._region then
+			table.insert(statements, indent(self._indent, `{self._offset} += {bytes}`))
+		end
 	elseif bytes > 0 then
-		append(lines, self._indent, `cursor += {bytes}`)
+		table.insert(statements, indent(self._indent, `cursor += {bytes}`))
 	end
 
-	table.move(self._tail, 1, #self._tail, #lines + 1, lines)
+	table.move(self._tail, 1, #self._tail, #statements + 1, statements)
 
-	if self._parent then
-		table.move(lines, 1, #lines, #self._parent._tail + 1, self._parent._tail)
+	local text: string = paragraphs(statements)
+	if final then
+		text = `{text == "" and "" or `{text}\n\n`}{indent(self._indent, final)}`
 	end
 
-	return #lines == 0 and "" or `{table.concat(lines, "\n")}\n`
+	if self._parent and text ~= "" then
+		table.insert(self._parent:_target(), text)
+	end
+
+	return text == "" and "" or `{text}\n`
 end
 
 return Blocks

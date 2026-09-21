@@ -1,8 +1,9 @@
 --[[
     Proves the block builder hands out constant offsets, unique locals
     and flag bits, stores flag bytes at every width, lands a child's lines
-    in its parent's tail after the fixed bytes, and refuses a block whose
-    claimed flag bits differ from those it reserved
+    in its parent's tail inside the scope opened around it, sets apart the
+    statements that span lines, and refuses a block whose claimed flag
+    bits differ from those it reserved or whose scope was left open
 --]]
 
 --!strict
@@ -75,6 +76,7 @@ describe("Blocks", function ()
 				"\tif cursor + 4 > length then",
 				'\t\terror("Test: truncated")',
 				"\tend",
+				"",
 				"\tlocal flags: number = buffer.readu16(packet, cursor) + buffer.readu8(packet, cursor + 2) * 65536",
 				"\ta",
 				"\tcursor += 4",
@@ -102,20 +104,41 @@ describe("Blocks", function ()
 		)
 	end)
 
-	test("lands a child's lines in the parent's tail after its own bytes", function ()
+	test("sets a statement that spans lines apart from its neighbours", function ()
+		local write: Block = Blocks.new("write", "Test")
+
+		write:line("a")
+		write:line("if x then\n\tb\nend")
+		write:line("c")
+		write:line("d")
+
+		expect(write:done()).is(lines("\ta", "", "\tif x then", "\t\tb", "\tend", "", "\tc", "\td"))
+	end)
+
+	test("closes with a final statement in a paragraph of its own", function ()
+		local read: Block = Blocks.new("read", "Test")
+
+		read:line("a")
+
+		expect(read:done("return cursor")).is(lines("\ta", "", "\treturn cursor"))
+		expect(Blocks.new("read", "Test"):done("return cursor")).is(lines("\treturn cursor"))
+	end)
+
+	test("lands a child's lines in the parent's tail inside the scope opened around it", function ()
 		local write: Block = Blocks.new("write", "Test")
 		local child: Block = write:child()
 
 		write:line("parent")
-		write:tail("if present then")
+		write:open("if present then")
 		child:reserve(1)
 		child:line("child")
 		child:done()
-		write:tail("end")
+		write:close("end")
 
 		expect(write:done()).is(
 			lines(
 				"\tparent",
+				"",
 				"\tif present then",
 				"\t\tlocal offset_2: number, out_2: buffer = allocate(1)",
 				"\t\tchild",
@@ -142,8 +165,50 @@ describe("Blocks", function ()
 				"\tif cursor + nameLength > length then",
 				'\t\terror("Test.name: truncated")',
 				"\tend",
+				"",
 				"\tuse packet at cursor",
 				"\tcursor += nameLength"
+			)
+		)
+	end)
+
+	test("fills a region the parent took or checked with no line of its own", function ()
+		local write: Block = Blocks.new("write", "Test")
+		local read: Block = Blocks.new("read", "Test")
+		local writeChild: Block = write:child("Test", write:region("items", "Test.items", "4 * #items"))
+		local readChild: Block = read:child("Test", read:region("items", "Test.items", "4 * count"))
+
+		write:open("for")
+		read:open("for")
+		writeChild:reserve(4)
+		writeChild:line("child")
+		readChild:reserve(4)
+		readChild:line("child")
+		writeChild:done()
+		readChild:done()
+		write:close("end")
+		read:close("end")
+
+		expect(write:done()).is(
+			lines(
+				"\tlocal itemsOffset: number, itemsOut: buffer = allocate(4 * #items)",
+				"",
+				"\tfor",
+				"\t\tchild",
+				"\t\titemsOffset += 4",
+				"\tend"
+			)
+		)
+		expect(read:done()).is(
+			lines(
+				"\tif cursor + 4 * count > length then",
+				'\t\terror("Test.items: truncated")',
+				"\tend",
+				"",
+				"\tfor",
+				"\t\tchild",
+				"\t\tcursor += 4",
+				"\tend"
 			)
 		)
 	end)
@@ -157,5 +222,15 @@ describe("Blocks", function ()
 		local ok: boolean, message: any = pcall(write.done, write)
 		expect(ok).is(false)
 		expect(tostring(message):find("Test: 1 flag bits claimed of 2 reserved", 1, true) ~= nil).is(true)
+	end)
+
+	test("refuses a block whose scope was left open", function ()
+		local write: Block = Blocks.new("write", "Test")
+
+		write:open("if x then")
+
+		local ok: boolean, message: any = pcall(write.done, write)
+		expect(ok).is(false)
+		expect(tostring(message):find("Test: a scope was left open", 1, true) ~= nil).is(true)
 	end)
 end)

@@ -11,51 +11,37 @@ local Resolve = {} :: any
 Resolve.__index = Resolve
 
 local Diagnostics = require("./Diagnostics")
+local Options = require("./Config/Options")
 local Parser = require("./Parser")
+local Schema = require("./Config/Types/Schema")
 
-type Declaration = Parser.Declaration
+type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
-type File = Parser.File
-type Options = Parser.Options
-type Pack = Parser.Pack
+type File = Schema.File
+type Options = Schema.Options
+type Pack = Schema.Pack
 type Span = Diagnostics.Span
-type Spec = Parser.Spec
-type Type = Parser.Type
-type TypeDeclaration = Parser.TypeDeclaration
+type Spec = Options.Spec
+type Type = Schema.Type
+type TypeDeclaration = Schema.TypeDeclaration
 
-local DEFAULTS: { [string]: any } = {
-	runtime = "ReplicatedStorage.Packages.Volt",
-	casing = "camel",
-	writeValidation = true,
-	manualReplication = false,
-	flush = 1,
-	maxPacket = 8192,
-	maxPacketsPerSecond = 240,
-	unreliableBudget = 900,
-	queue = 64,
-	rate = 120,
-	functionRate = 60,
-	timeout = 10,
-	yield = "coroutine",
-}
-
--- Every numeric option and key must be positive, and all but timeout whole
-local NUMERIC: { { key: string, integer: boolean } } = {
-	{ key = "flush", integer = true },
-	{ key = "maxPacket", integer = true },
-	{ key = "maxPacketsPerSecond", integer = true },
-	{ key = "unreliableBudget", integer = true },
-	{ key = "queue", integer = true },
-	{ key = "rate", integer = true },
-	{ key = "functionRate", integer = true },
-	{ key = "timeout", integer = false },
-}
-
-local REQUIRED: { string } = { "clientOutput", "serverOutput" }
 local KINDS: { [string]: string } = { event = "an event", ["function"] = "a function", namespace = "a namespace" }
 
 -- Where a diagnostic about the file as a whole points
 local FILE_START: Span = { start = 1, finish = 1 }
+
+--[[
+    Fills the keys of a message that default from a file option, as the
+    shape names them
+--]]
+
+local function defaults(target: { [string]: any }, shape: { Spec }, options: Options)
+	for _, spec: Spec in shape do
+		if spec.option and target[spec.key] == nil then
+			target[spec.key] = (options :: any)[spec.option]
+		end
+	end
+end
 
 --[[
     Resolves a parsed file in place: options and message keys take their
@@ -86,24 +72,22 @@ function Resolve.file(file: File, diagnostics: Diagnostics)
 end
 
 --[[
-    Checks the options that must be present and positive, then fills in
-    every default; the scope defaults to the schema file's own name
+    Reports the options that must be present, fills in every default and
+    checks the numbers; the scope defaults to the schema file's own name
 --]]
 
 function Resolve:options(options: Options, path: string)
-	for _, key: string in REQUIRED do
-		if options[key] == nil then
-			self._diagnostics:error("V3004", `missing option {key}`, FILE_START)
+	for _, spec: Spec in Options.file do
+		if options[spec.key] ~= nil then
+			continue
+		elseif spec.required then
+			self._diagnostics:error("V3004", `missing option {spec.key}`, FILE_START)
 		end
+
+		options[spec.key] = spec.default
 	end
 
-	self:positive(options)
-
-	for _, spec: Spec in Parser.OPTIONS do
-		if options[spec.key] == nil then
-			options[spec.key] = DEFAULTS[spec.key]
-		end
-	end
+	self:positive(options, Options.file)
 
 	options.scope = options.scope or path:match("([^/\\]+)%.volt$") or path
 
@@ -117,16 +101,20 @@ end
     is needed, fractional. A key the target does not carry is skipped
 --]]
 
-function Resolve:positive(target: { [string]: any })
-	for _, entry: { key: string, integer: boolean } in NUMERIC do
-		local value: any = target[entry.key]
+function Resolve:positive(target: { [string]: any }, shape: { Spec })
+	for _, spec: Spec in shape do
+		local value: any = target[spec.key]
 
-		if typeof(value) == "number" and (value <= 0 or (entry.integer and value % 1 ~= 0)) then
-			local wanted: string = entry.integer and "integer" or "number"
+		if spec.kind ~= "number" or typeof(value) ~= "number" then
+			continue
+		end
+
+		if value <= 0 or (not spec.fractional and value % 1 ~= 0) then
+			local wanted: string = spec.fractional and "number" or "integer"
 			self._diagnostics:error(
 				"V3005",
-				`{entry.key} must be a positive {wanted}, got {value}`,
-				target.spans[entry.key]
+				`{spec.key} must be a positive {wanted}, got {value}`,
+				target.spans[spec.key]
 			)
 		end
 	end
@@ -168,7 +156,7 @@ function Resolve:bind(declarations: { Declaration }, prefix: string, options: Op
 		elseif declaration.kind == "namespace" then
 			self:bind(declaration.declarations, declaration.path :: string, options)
 		elseif declaration.kind == "event" then
-			self:positive(declaration)
+			self:positive(declaration, Options.event)
 
 			if declaration.from == "Server" and declaration.spans.rate then
 				local message: string =
@@ -176,17 +164,16 @@ function Resolve:bind(declarations: { Declaration }, prefix: string, options: Op
 				self._diagnostics:warn("V3006", message, declaration.spans.rate)
 			end
 
-			declaration.queue = declaration.queue or options.queue
-			declaration.rate = declaration.rate or options.rate
+			defaults(declaration, Options.event, options)
 
 			if declaration.data then
 				self:type(declaration.data, prefix)
 			end
 		else
-			self:positive(declaration)
+			self:positive(declaration, Options["function"])
+			defaults(declaration, Options["function"], options)
 
-			declaration.timeout = declaration.timeout or options.timeout
-			declaration.rate = declaration.rate or options.functionRate
+			-- The file's yield is spelled in lower case and a function's in upper, so it is not a plain default
 			declaration.yield = declaration.yield or (options.yield == "promise" and "Promise" or "Coroutine")
 
 			if declaration.yield == "Promise" then
