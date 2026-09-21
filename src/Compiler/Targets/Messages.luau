@@ -1,9 +1,8 @@
 --[[
-    The walk of one event through the emitter for one side: a writer
-    with the id first and the mark last for an unreliable event, and an
-    outgoing row, when the side fires it; a reader ending in the runtime's
-    deliver, and a message row, when it hears it; and the Luau types the
-    signatures name
+    The walk of one message through the emitter for one side: an event's
+    writer, id first and mark last when unreliable, and its reader ending
+    in deliver; a function's call and reply, written and read from the
+    side that sends each; the schema rows of both, and the Luau types
 --]]
 
 --!strict
@@ -15,10 +14,13 @@ local Emit = require("../Emit")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
 type Event = Schema.Event
 type Field = Schema.Field
+type Function = Schema.Function
+type Pack = Schema.Pack
 type Type = Schema.Type
 
 -- What an event's API entry is built from once it is walked: its id on this side, its writer's signature and its listener's
@@ -30,6 +32,53 @@ export type Walked = {
 	listener: string,
 	iterator: string,
 }
+
+-- What a function's API entry is built from once it is walked: this side's id, the call's signature and the handler's
+export type Exchanged = {
+	id: number,
+	label: string,
+	typed: string,
+	arguments: string,
+	handler: string,
+}
+
+local SLOT_BYTES: number = Wire.slotBytes
+local STATUS_BYTES: number = Wire.statusBytes
+
+-- The prefix and the bounds of the reason a refusal carries, by the length rule the runtime follows
+local REASON_PREFIX: number, REASON_MIN: number, REASON_MAX: number =
+	Sizes.lengths({ min = 0, max = Wire.replyMessage, start = 0, finish = 0 })
+
+-- The bytes a message's payload takes at its least and most, laid out as its block
+local function bounds(data: (Type | Pack)?): (number, number)
+	return Sizes.block(data and Sizes.size(data) or Sizes.fixed(0))
+end
+
+-- The id a writer puts first among its fixed bytes
+local function identify(write: Block, width: number, id: number)
+	write:line(`buffer.writeu{width * 8}({write.out}, {write:at(write:reserve(width))}, {id})`)
+end
+
+-- A fixed field of a call's framing, written from the parameter of that name and read into a local of it
+local function frame(write: Block, read: Block, name: string, bytes: number)
+	write:line(`buffer.writeu{bytes * 8}({write.out}, {write:at(write:reserve(bytes))}, {name})`)
+	read:line(`local {name}: number = buffer.readu{bytes * 8}(packet, {read:at(read:reserve(bytes))})`)
+end
+
+-- The values a reader hands on after the cursors, as the tail of an argument list
+local function handed(values: { string }): string
+	return #values == 0 and "" or `, {table.concat(values, ", ")}`
+end
+
+-- Each field of a pack typed under the name the walk gave it, and the types alone
+local function typed(names: { string }, data: (Type | Pack)?): ({ string }, { string })
+	local annotated: { string }, types: { string } = {}, {}
+	for index: number, field: Field in Messages.parameters(data) do
+		types[index] = Messages.luauType(field.type)
+		annotated[index] = `{names[index]}: {types[index]}`
+	end
+	return annotated, types
+end
 
 --[[
     The Luau type a value of a schema type is annotated as where one name
@@ -53,9 +102,8 @@ function Messages.luauType(node: Type): string
 	return "any"
 end
 
--- The fields a fire takes: a pack's parameters, or the one value
-function Messages.parameters(event: Event): { Field }
-	local data = event.data
+-- The fields a pack of data carries: a pack's parameters, or the one value
+function Messages.parameters(data: (Type | Pack)?): { Field }
 	if not data then
 		return {}
 	elseif data.kind == "pack" then
@@ -89,40 +137,37 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	local write: Block = Blocks.new("write", path)
 	local read: Block = Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
-	local typed: { string }, types: { string } = {}, {}
 
 	write.allocate = reliable and "allocateReliable" or "allocateUnreliable"
 	write.slot = reliable and "slotReliable" or "slotUnreliable"
 
 	if outId then
-		write:line(`buffer.writeu{width * 8}({write.out}, {write:at(write:reserve(width))}, {outId})`)
+		identify(write, width, outId)
 	end
 
 	if event.data then
 		names, values = self._emitter:block(event.data, write, read)
 	end
 
-	for index: number, field: Field in Messages.parameters(event) do
-		types[index] = Messages.luauType(field.type)
-		typed[index] = `{names[index]}: {types[index]}`
-	end
+	local annotated: { string }, types: { string } = typed(names, event.data)
 
 	if outId then
-		local size: Sizes.Size = event.data and Sizes.size(event.data) or Sizes.fixed(0)
-		local least: number, most: number = Sizes.block(size)
+		local least: number, most: number = bounds(event.data)
 
 		if not reliable then
 			write:tail("markUnreliable()")
 		end
 
-		table.insert(self._functions, `local function write{label}({table.concat(typed, ", ")})\n{write:done()}end\n`)
+		table.insert(
+			self._functions,
+			`local function write{label}({table.concat(annotated, ", ")})\n{write:done()}end\n`
+		)
 		self._outgoing[outId] =
 			`\{ name = "{path}", reliable = {reliable}, minBytes = {width + least}, maxBytes = {width + most} }`
 	end
 
 	if inId then
-		local delivered: string = #values == 0 and "" or `, {table.concat(values, ", ")}`
-		local body: string = read:done(`return runtime:deliver({inId}, player, cursor, sideCursor{delivered})`)
+		local body: string = read:done(`return runtime:deliver({inId}, player, cursor, sideCursor{handed(values)})`)
 		local rate: string = server and typeof(event.rate) == "number" and `, rate = {event.rate}` or ""
 		local taken: string = Emit.parameters(body, Contract.message)
 
@@ -132,7 +177,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	end
 
 	-- A server listener and a server iterator take the player before the values
-	local heard: { string } = table.clone(typed)
+	local heard: { string } = table.clone(annotated)
 	local yielded: { string } = table.clone(types)
 
 	if server then
@@ -145,10 +190,114 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	return {
 		id = inId,
 		label = label,
-		typed = table.concat(typed, ", "),
+		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),
 		listener = `({table.concat(heard, ", ")}) -> ()`,
 		iterator = `() -> ({table.concat(yielded, ", ")})`,
+	}
+end
+
+--[[
+    Walks one function through the emitter for one side: the call, slot
+    first after the id, which the client writes and the server reads into
+    the runtime's call; and the reply, whose returns follow the status
+    only when it is ok, which the server writes and the client reads into
+    the runtime's reply, or its refused. Both are walked on both sides
+--]]
+
+function Messages:exchange(declaration: Function): Exchanged
+	local server: boolean = self._server
+	local path: string = declaration.path :: string
+	local label: string = path:gsub("%.", "_")
+	local width: number = Sizes.idBytes(server and self._toClient or self._toServer)
+	local callId: number = declaration.toServer :: number
+	local replyId: number = declaration.toClient :: number
+	local returns: (Type | Pack)? = declaration["return"]
+	local callWrite: Block, callRead: Block = Blocks.new("write", path), Blocks.new("read", path)
+	local replyWrite: Block, replyRead: Block = Blocks.new("write", path), Blocks.new("read", path)
+	local names: { string }, values: { string } = {}, {}
+	local results: { string }, yields: { string } = {}, {}
+
+	for _, write: Block in { callWrite, replyWrite } do
+		write.allocate = "allocateReliable"
+		write.slot = "slotReliable"
+	end
+
+	identify(callWrite, width, callId)
+	frame(callWrite, callRead, "slot", SLOT_BYTES)
+
+	if declaration.data then
+		names, values = self._emitter:block(declaration.data, callWrite, callRead)
+	end
+
+	identify(replyWrite, width, replyId)
+	frame(replyWrite, replyRead, "slot", SLOT_BYTES)
+	frame(replyWrite, replyRead, "status", STATUS_BYTES)
+
+	-- The returns are a block of their own under the status, since a refusal carries none
+	local returnsWrite: Block = replyWrite:child()
+	local returnsRead: Block = replyRead:child()
+
+	replyRead:open("if status == 0 then")
+
+	if returns then
+		results, yields = self._emitter:block(returns, returnsWrite, returnsRead)
+	end
+
+	if not returnsWrite:empty() then
+		replyWrite:open("if status == 0 then")
+		returnsWrite:done()
+		replyWrite:close("end")
+	end
+
+	returnsRead:done(`return runtime:reply({replyId}, slot, cursor, sideCursor{handed(yields)})`)
+	replyRead:close("end")
+
+	local annotated: { string } = typed(names, declaration.data)
+	local returned: { string }, returnTypes: { string } = typed(results, returns)
+
+	if server then
+		local body: string =
+			callRead:done(`return runtime:call({callId}, player, slot, cursor, sideCursor{handed(values)})`)
+		local taken: string = Emit.parameters(body, Contract.message)
+		local rate: string = typeof(declaration.rate) == "number" and `, rate = {declaration.rate}` or ""
+		local given: string = table.concat({ "slot: number", "status: number", table.unpack(returned) }, ", ")
+		local least: number, most: number = bounds(returns)
+		local shortest: number = width + SLOT_BYTES + STATUS_BYTES + math.min(least, REASON_PREFIX + REASON_MIN)
+		local longest: number = width + SLOT_BYTES + STATUS_BYTES + math.max(most, REASON_PREFIX + REASON_MAX)
+
+		table.insert(self._functions, `local function read{label}({taken}): (number, number)\n{body}end\n`)
+		table.insert(self._functions, `local function write{label}({given})\n{replyWrite:done()}end\n`)
+		self._messages[callId] = `\{ name = "{path}", kind = "call"{rate}, read = read{label}, reply = write{label} }`
+		self._outgoing[replyId] = `\{ name = "{path}", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
+	else
+		local body: string =
+			replyRead:done(`return runtime:refused({replyId}, slot, packet, cursor, sideCursor, length)`)
+		local taken: string = Emit.parameters(body, Contract.message)
+		local promise: string = declaration.yield == "Promise" and ", promise = Promise" or ""
+		local given: string = table.concat({ "slot: number", table.unpack(annotated) }, ", ")
+		local least: number, most: number = bounds(declaration.data)
+		local shortest: number = width + SLOT_BYTES + least
+		local longest: number = width + SLOT_BYTES + most
+
+		self._promise = self._promise or promise ~= ""
+		table.insert(self._functions, `local function write{label}({given})\n{callWrite:done()}end\n`)
+		table.insert(self._functions, `local function read{label}({taken}): (number, number)\n{body}end\n`)
+		self._messages[replyId] =
+			`\{ name = "{path}", kind = "reply", timeout = {declaration.timeout}{promise}, read = read{label} }`
+		self._outgoing[callId] = `\{ name = "{path}", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
+	end
+
+	-- A server handler takes the player before the arguments
+	local heard: { string } = table.clone(annotated)
+	table.insert(heard, 1, "player: Player")
+
+	return {
+		id = server and callId or replyId,
+		label = label,
+		typed = table.concat(annotated, ", "),
+		arguments = table.concat(names, ", "),
+		handler = `({table.concat(heard, ", ")}) -> ({table.concat(returnTypes, ", ")})`,
 	}
 end
 

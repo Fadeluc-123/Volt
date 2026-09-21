@@ -1,8 +1,9 @@
 --[[
     The API tables of a generated module: an entry per event with fire
     and, on the server, the broadcast variants when the side fires it and
-    on and iter when it hears it, nested per namespace and frozen, then
-    the members every module has
+    on and iter when it hears it; an entry per function with invoke on
+    the client and on for its handler on the server; nested per namespace
+    and frozen, then the members every module has
 --]]
 
 --!strict
@@ -14,6 +15,8 @@ local Schema = require("../Config/Types/Schema")
 
 type Declaration = Schema.Declaration
 type Event = Schema.Event
+type Exchanged = Messages.Exchanged
+type Function = Schema.Function
 type Walked = Messages.Walked
 
 -- The fire variants a server event has beside fire, each writing to the scratch state and broadcasting from it
@@ -40,7 +43,7 @@ local function member(name: string, signature: string, ...: string): string
 	return `{name} = function {signature}\n\t{table.concat({ ... }, "\n\t")}\nend,`
 end
 
--- The API table's entries: every event's, nested per namespace, then the members every module has
+-- The API table's entries: every message's, nested per namespace, then the members every module has
 function Api:api(): string
 	local entries: { string } = self:declarations(self._file.declarations)
 
@@ -51,17 +54,18 @@ function Api:api(): string
 end
 
 --[[
-    The API entries of a declaration list: an event's entry, and a
-    namespace's frozen table of its own entries
+    The API entries of a declaration list: an event's entry, a function's,
+    and a namespace's frozen table of its own entries
 --]]
 
 function Api:declarations(declarations: { Declaration }): { string }
 	local entries: { string } = {}
 
-	-- Whiteoak TODO: a function's invoke and on land with the calls
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "event" then
 			table.insert(entries, self:event(declaration))
+		elseif declaration.kind == "function" then
+			table.insert(entries, self:call(declaration))
 		elseif declaration.kind == "namespace" then
 			local inner: string = Blocks.paragraphs(self:declarations(declaration.declarations))
 			table.insert(entries, `{declaration.name} = table.freeze(\{\n{Blocks.indent(1, inner)}\n}),`)
@@ -113,6 +117,27 @@ function Api:event(event: Event): string
 	end
 
 	return `{event.name} = table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs(members))}\n}),`
+end
+
+--[[
+    The API entry of one function on this side: invoke on the client,
+    which the runtime carries through the call's writer and answers with
+    the reply; on for the one handler on the server
+--]]
+
+function Api:call(declaration: Function): string
+	local exchanged: Exchanged = self:exchange(declaration)
+	local entry: string
+
+	if self._server then
+		local signature: string = `(handler: {exchanged.handler}): () -> ()`
+		entry = member(self:method("on"), signature, `return runtime:handle({exchanged.id}, handler)`)
+	else
+		local passed: string = joined(`write{exchanged.label}`, exchanged.arguments)
+		entry = member(self:method("invoke"), `({exchanged.typed})`, `return runtime:invoke({exchanged.id}, {passed})`)
+	end
+
+	return `{declaration.name} = table.freeze(\{\n{Blocks.indent(1, entry)}\n}),`
 end
 
 return Api

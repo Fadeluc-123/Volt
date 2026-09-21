@@ -76,6 +76,7 @@ function Remotes.open(scope: string, server: boolean): Transport
 	-- The Heartbeat still runs, so what a fire wrote is dropped every frame rather than kept
 	if not RunService:IsRunning() then
 		return {
+			inert = true,
 			reliable = nothing,
 			unreliable = nothing,
 			receive = nothing,

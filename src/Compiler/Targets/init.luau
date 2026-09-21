@@ -3,7 +3,7 @@
     entry point that refuses a name the API owns, the shell of a module
     (header, requires, send locals and the schema table) and the assembly
     of every piece in reading order. The API tables and the walk of each
-    event are the methods of one sibling file each
+    message are the methods of one sibling file each
 --]]
 
 --!strict
@@ -103,9 +103,10 @@ function Targets.new(file: File, side: string)
 		_emitter = Emit.new(file.options),
 		_toServer = 0, -- The last id in each direction, functions included, which is what sets how wide ids are
 		_toClient = 0,
-		_functions = {} :: { string }, -- A writer per event fired and a reader per event heard, in declaration order
-		_messages = {} :: { [number]: string }, -- The schema row of every event heard, by id
-		_outgoing = {} :: { [number]: string }, -- The schema row of every event fired, by id
+		_promise = false, -- Whether a function on this side yields a promise, so the module requires the library
+		_functions = {} :: { string }, -- A writer per message sent and a reader per message heard, in declaration order
+		_messages = {} :: { [number]: string }, -- The schema row of every message heard, by id
+		_outgoing = {} :: { [number]: string }, -- The schema row of every message sent, by id
 	}, Targets)
 
 	self:count(file.declarations)
@@ -165,36 +166,55 @@ end
 
 --[[
     The header naming the schema and the compiler, the directives, the
-    service the runtime path starts from and the runtime require
+    services the runtime path and the promise library's start from, the
+    runtime require and the promise require when a function yields one
 --]]
 
 function Targets:header(name: string): string
-	local runtime: string = self._file.options.runtime :: string
-	local service: string = runtime:match("^[^.]+") or runtime
+	local options: { [string]: any } = self._file.options :: any
+	local requires: { string } = { `local Volt = require({options.runtime})` }
+	local services: { string } = { options.runtime:match("^[^.]+") or options.runtime }
 	local lines: { string } = {
 		"--[[",
 		`    The {self._side} module Volt {VERSION} generated from {name}: a writer per`,
-		"    event this side fires, a reader per event it hears, the schema table",
-		"    the runtime starts from and the API a game calls. Generated code:",
+		"    message this side sends, a reader per message it hears, the schema",
+		"    table the runtime starts from and the API a game calls. Generated code:",
 		"    change the schema and run volt again rather than editing this file",
 		"--]]",
 		"",
 		"--!strict",
 		"--!native",
 		"--!optimize 2",
-		`local {service} = game:GetService("{service}")`,
-		"",
-		`local Volt = require({runtime})`,
-		"",
 	}
+
+	if self._promise then
+		local promise: string = options.promise
+		local service: string = promise:match("^[^.]+") or promise
+
+		table.insert(requires, `local Promise = require({promise})`)
+
+		if not table.find(services, service) then
+			table.insert(services, service)
+			table.sort(services)
+		end
+	end
+
+	for _, service: string in services do
+		table.insert(lines, `local {service} = game:GetService("{service}")`)
+	end
+
+	table.insert(lines, "")
+	table.move(requires, 1, #requires, #lines + 1, lines)
+	table.insert(lines, "")
 
 	return table.concat(lines, "\n")
 end
 
 --[[
     The schema table the runtime is started with: what the compiler knows
-    and the runtime must not derive, the events heard by id with their
-    readers, and the events fired by id for their names and sizes
+    and the runtime must not derive, the promise library when a function
+    yields one, the messages heard by id with their readers, and the
+    messages sent by id for their names and sizes
 --]]
 
 function Targets:start(hash: number): string
@@ -220,10 +240,15 @@ function Targets:start(hash: number): string
 		`\tscope = "{options.scope}",`,
 		`\tside = "{self._side}",`,
 		`\tidBytes = {Sizes.idBytes(server and self._toServer or self._toClient)},`,
-		tables,
-		"})",
-		"",
 	}
+
+	if self._promise then
+		table.insert(lines, "\tpromise = Promise,")
+	end
+
+	table.insert(lines, tables)
+	table.insert(lines, "})")
+	table.insert(lines, "")
 
 	return table.concat(lines, "\n")
 end

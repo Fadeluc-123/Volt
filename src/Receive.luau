@@ -36,11 +36,6 @@ local function invoke(listener: (...any) -> (), player: any, ...: any)
 	return listener(player, ...)
 end
 
--- The error of a sync listener with the stack that raised it, taken before the stack unwinds
-local function trace(message: any): string
-	return debug.traceback(tostring(message), 2)
-end
-
 -- The oldest queued message, or nil; an empty queue starts its indices over
 local function pop(channel: Channel): Entry?
 	local head: number = channel.head
@@ -99,7 +94,7 @@ function Receive:channels(messages: { [number]: Message })
 				name = message.name,
 				kind = mode == "Polling" and "polling" or mode:find("Async") and "async" or "sync",
 				single = mode:sub(1, 6) == "Single",
-				depth = message.queue,
+				depth = message.queue :: number,
 				listeners = {},
 				queue = {},
 				head = 1,
@@ -216,10 +211,15 @@ function Receive:_run(channel: Channel, listener: (...any) -> (), player: any, .
 	end
 end
 
+-- The error a listener or a handler raised with the stack that raised it, taken before the stack unwinds
+function Receive._trace(message: any): string
+	return debug.traceback(tostring(message), 2)
+end
+
 -- Runs one sync listener inline; an error or a yield is the listener's failure and the packet goes on
 function Receive:_call(channel: Channel, listener: (...any) -> (), player: any, ...: any)
 	local frame: number = self.frame
-	local ok: boolean, message: any = xpcall(invoke, trace, listener, player, ...)
+	local ok: boolean, message: any = xpcall(invoke, self._trace, listener, player, ...)
 
 	if not ok then
 		self:fail(player, "listener", `{channel.name}: {message}`)

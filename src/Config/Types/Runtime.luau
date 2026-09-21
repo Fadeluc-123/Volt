@@ -23,6 +23,7 @@ export type Transport = {
 	receive: (handler: Handler) -> (),
 	heartbeat: (callback: () -> ()) -> (),
 	spawn: Spawn,
+	inert: boolean?, -- Outside a running game, where nothing is sent or heard
 	players: (() -> { any })?, -- The server's transport carries the player list and its two signals
 	playerAdded: ((callback: (player: any) -> ()) -> ())?,
 	playerRemoving: ((callback: (player: any) -> ()) -> ())?,
@@ -30,11 +31,14 @@ export type Transport = {
 
 export type Message = {
 	name: string,
-	kind: string, -- event or call
+	kind: string, -- event, call or reply
 	mode: string?, -- An event's call mode
-	queue: number,
+	queue: number?, -- An event's queue depth
 	rate: number?,
+	timeout: number?, -- A reply's: the seconds a call waits for it
+	promise: any?, -- A reply's: the promise library, when the function yields one
 	read: Reader,
+	reply: ((slot: number, status: number, ...any) -> ())?, -- A call's: what writes its reply
 }
 
 export type Outgoing = {
@@ -50,6 +54,7 @@ export type Schema = {
 	scope: string,
 	side: string, -- client or server
 	idBytes: number, -- How wide an incoming message id is
+	promise: any?, -- The promise library, on a client with a function that yields one
 	options: { [string]: any },
 	messages: { [number]: Message },
 	outgoing: { [number]: Outgoing },
