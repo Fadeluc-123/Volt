@@ -9,19 +9,20 @@ local fs = require("@lune/fs")
 local process = require("@lune/process")
 
 local ROOTS: { string } = { "src", "tests", "tools" }
-local VENDORED: string = "tests/tiniest"
+local SKIPPED: { [string]: boolean } = { ["tests/tiniest"] = true, ["tests/Golden"] = true } -- Vendored and generated
 
 local files: { string } = {}
 
 --[[
-    Collects every .luau file under a directory, skipping the vendored tree
+    Collects every .luau file under a directory, skipping the vendored and
+    generated trees
 --]]
 
 local function collect(directory: string)
 	for _, name: string in fs.readDir(directory) do
 		local path: string = `{directory}/{name}`
 
-		if path == VENDORED then
+		if SKIPPED[path] then
 			continue
 		end
 

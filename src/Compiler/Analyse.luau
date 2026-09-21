@@ -846,4 +846,10 @@ function Analyse:union(node: Type)
 	end
 end
 
+-- The emitter lays bytes out by the same tables and rules analysis sizes them with
+Analyse.BYTES = BYTES
+Analyse.BOUNDS = BOUNDS
+Analyse.prefix = lengths
+Analyse.printType = printType
+
 return Analyse
