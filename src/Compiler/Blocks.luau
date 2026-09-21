@@ -65,7 +65,7 @@ local function stores(word: number, bytes: number): { { width: number, byte: num
 end
 
 -- A statement's lines each indented by the level, with a blank line left blank
-local function indent(level: number, text: string): string
+function Blocks.indent(level: number, text: string): string
 	return (text:gsub("[^\n]+", `{string.rep("\t", level)}%0`))
 end
 
@@ -75,7 +75,7 @@ end
     straight-line writes around it
 --]]
 
-local function paragraphs(statements: { string }): string
+function Blocks.paragraphs(statements: { string }): string
 	local parts: { string } = {}
 	local spanned: boolean = false -- Whether the statement before spans several lines
 
@@ -242,12 +242,12 @@ end
 
 -- A statement among the fixed bytes, at a constant offset
 function Blocks:line(text: string)
-	table.insert(self._body, indent(self._indent, text))
+	table.insert(self._body, Blocks.indent(self._indent, text))
 end
 
 -- A statement after the fixed bytes, where the variable payloads and child blocks go
 function Blocks:tail(text: string)
-	table.insert(self:_target(), indent(self._indent, text))
+	table.insert(self:_target(), Blocks.indent(self._indent, text))
 end
 
 --[[
@@ -257,14 +257,14 @@ end
 --]]
 
 function Blocks:open(text: string)
-	table.insert(self._groups, { indent(self._indent, text) })
+	table.insert(self._groups, { Blocks.indent(self._indent, text) })
 end
 
 function Blocks:close(text: string)
 	local group: { string }? = table.remove(self._groups)
 	assert(group, `{self.path}: closing a scope when none is open`)
 
-	table.insert(group, indent(self._indent, text))
+	table.insert(group, Blocks.indent(self._indent, text))
 	table.insert(self:_target(), table.concat(group, "\n"))
 end
 
@@ -350,23 +350,23 @@ function Blocks:done(final: string?): string
 
 				table.insert(
 					statements,
-					indent(self._indent, `buffer.writeu{store.width * 8}({self.out}, {at}, {value})`)
+					Blocks.indent(self._indent, `buffer.writeu{store.width * 8}({self.out}, {at}, {value})`)
 				)
 			end
 		end
 
 		if bytes > 0 and self._region then
-			table.insert(statements, indent(self._indent, `{self._offset} += {bytes}`))
+			table.insert(statements, Blocks.indent(self._indent, `{self._offset} += {bytes}`))
 		end
 	elseif bytes > 0 then
-		table.insert(statements, indent(self._indent, `cursor += {bytes}`))
+		table.insert(statements, Blocks.indent(self._indent, `cursor += {bytes}`))
 	end
 
 	table.move(self._tail, 1, #self._tail, #statements + 1, statements)
 
-	local text: string = paragraphs(statements)
+	local text: string = Blocks.paragraphs(statements)
 	if final then
-		text = `{text == "" and "" or `{text}\n\n`}{indent(self._indent, final)}`
+		text = `{text == "" and "" or `{text}\n\n`}{Blocks.indent(self._indent, final)}`
 	end
 
 	if self._parent and text ~= "" then

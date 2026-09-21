@@ -1,10 +1,12 @@
 --[[
     Proves the volt command checks a schema and exits with the right code,
-    prints the resolved declarations on --ast, and prints nothing but the
-    diagnostics on --quiet
+    prints the resolved declarations on --ast, prints nothing but the
+    diagnostics on --quiet, and writes both modules beside the schema
+    unless it only checks
 --]]
 
 --!strict
+local fs = require("@lune/fs")
 local process = require("@lune/process")
 
 local Suite = require("./Suite")
@@ -14,6 +16,7 @@ local test = Suite.test
 local expect = Suite.expect
 
 local EXAMPLE: string = "tests/Schemas/Example.volt"
+local EVENTS: string = "tests/Schemas/Events.volt"
 
 local function volt(...: string): process.ExecResult
 	return process.exec("lune", { "run", "src/Compiler", ... })
@@ -29,12 +32,28 @@ describe("Compiler", function ()
 	end)
 
 	test("--ast prints the resolved declarations and --quiet drops the summary", function ()
-		local result: process.ExecResult = volt(EXAMPLE, "--ast", "--quiet")
+		local result: process.ExecResult = volt(EXAMPLE, "--check", "--ast", "--quiet")
 		local line: string = "type Reference = string(1..64) -- 2..65 bytes, 2 references"
 
 		expect(result.code).is(0)
 		expect(result.stdout:find(line, 1, true) ~= nil).is(true)
 		expect((result.stdout:find("schema hash", 1, true))).is(nil)
+	end)
+
+	test("writes both modules beside the schema unless it only checks", function ()
+		local directory: string = `{process.env.TEMP or process.env.TMPDIR or "/tmp"}/VoltCompilerTest`
+		local schema: string = `{directory}/Cli.volt`
+
+		fs.writeDir(directory)
+		fs.writeFile(schema, fs.readFile(EVENTS))
+
+		local result: process.ExecResult = volt(schema, "--quiet")
+
+		expect(result.code).is(0)
+		expect(fs.readFile(`{directory}/Client.luau`):find("The client module Volt", 1, true) ~= nil).is(true)
+		expect(fs.readFile(`{directory}/Server.luau`):find("The server module Volt", 1, true) ~= nil).is(true)
+
+		fs.removeDir(directory)
 	end)
 
 	test("exits 2 without a schema and 1 with diagnostics on a file that is not one", function ()

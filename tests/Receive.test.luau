@@ -269,7 +269,7 @@ describe("Receive", function ()
 		server.runtime:on(PING, function ()
 			table.insert(server.seen, "b")
 		end)
-		
+
 		send(server, pings(3))
 		disconnect()
 		send(server, pings(5))

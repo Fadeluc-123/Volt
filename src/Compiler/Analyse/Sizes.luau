@@ -127,6 +127,11 @@ function Sizes.discriminant(count: number): (number, number)
 	return bits, 0
 end
 
+-- How wide a message id is on the wire, from how many ids the direction carries
+function Sizes.idBytes(count: number): number
+	return count > Wire.idsPerByte and 2 or 1
+end
+
 --[[
     A size laid out as its own block: the flag bytes its bits need, then
     its bytes

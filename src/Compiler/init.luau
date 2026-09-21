@@ -1,8 +1,9 @@
 --[[
     The volt command: reads a schema, runs it through the lexer, parser,
-    resolver and analyser, prints every diagnostic and exits non-zero on
-    an error. --check writes nothing, --ast prints the resolved
-    declarations and --quiet keeps the summary line off the output
+    resolver, analyser and generator, prints every diagnostic, exits
+    non-zero on an error and otherwise writes the client and server
+    modules beside the schema. --check writes nothing, --ast prints the
+    resolved declarations and --quiet keeps the summary line off
 --]]
 
 --!strict
@@ -19,6 +20,7 @@ local Print = require("./Compiler/Analyse/Print")
 local Resolve = require("./Compiler/Resolve")
 local Schema = require("./Compiler/Config/Types/Schema")
 local Source = require("./Compiler/Source")
+local Targets = require("./Compiler/Targets")
 
 local USAGE: string = "usage: volt <schema.volt> [--check] [--ast] [--quiet]"
 
@@ -45,6 +47,12 @@ local file: Schema.File = Parser.parse(Lexer.scan(source, diagnostics), diagnost
 Resolve.file(file, diagnostics)
 
 local hash: number = Analyse.file(file, diagnostics)
+local client: string, server: string = "", ""
+
+-- The generator walks a tree in which every lookup succeeds, so it runs only when the stages before it are clean
+if diagnostics.errors == 0 then
+	client, server = Targets.modules(file, diagnostics, hash)
+end
 
 if #diagnostics.list > 0 then
 	stdio.ewrite(`{diagnostics:render()}\n`)
@@ -54,9 +62,18 @@ if flags.ast then
 	print(Print.file(file))
 end
 
--- Whiteoak TODO: generate and write the three modules once the emitter exists; until then every run is a check
 if diagnostics.errors > 0 then
 	process.exit(1)
-elseif not flags.quiet then
+end
+
+-- Whiteoak TODO: the types module is written here once it is generated
+if not flags.check then
+	local directory: string = (path :: string):match("^(.*[/\\])") or ""
+
+	fs.writeFile(`{directory}{file.options.clientOutput}`, client)
+	fs.writeFile(`{directory}{file.options.serverOutput}`, server)
+end
+
+if not flags.quiet then
 	print(`{source.path}: ok, schema hash {string.format("0x%08X", hash)}`)
 end

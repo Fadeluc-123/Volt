@@ -1,8 +1,9 @@
 --[[
     The names nothing in a schema or a generated function may take: Luau's
     reserved words, which cannot name anything the generated code spells
-    out, and the names the generated code already reaches for, which no
-    local it declares may shadow
+    out, the names the generated code already reaches for, which no local
+    it declares may shadow, and the members the generated API has of its
+    own, which no top-level declaration may take
 --]]
 
 --!strict
@@ -23,8 +24,11 @@ local Reserved = {
 		"Instance",
 		"Vector2",
 		"Vector3",
+		"Volt",
 		"alignedIndex",
 		"allocate",
+		"allocateReliable",
+		"allocateUnreliable",
 		"axisAngle",
 		"bit32",
 		"buffer",
@@ -34,20 +38,27 @@ local Reserved = {
 		"enumItem",
 		"error",
 		"length",
+		"markUnreliable",
 		"math",
 		"net",
 		"packet",
 		"player",
+		"players",
 		"readf16",
+		"runtime",
 		"side",
 		"sideCursor",
 		"slot",
+		"slotReliable",
+		"slotUnreliable",
 		"string",
 		"table",
 		"tostring",
 		"typeof",
 		"writef16",
 	} :: { string },
+
+	api = { "flush", "onFailure" } :: { string }, -- In camel casing; the schema's casing is applied before a name is checked
 }
 
 for word: string in LUAU_WORDS:gmatch("%a+") do
