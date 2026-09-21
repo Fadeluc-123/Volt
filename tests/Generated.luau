@@ -1,15 +1,16 @@
 --[[
-    The harness the emitter tests run generated code through: a schema
-    text compiled through every stage before the emitter, its events
-    rendered as one loadable chunk that is also the golden file, and the
-    chunk loaded with an allocator, a slot store and a packet function
-    that hands back exactly what was written
+    The harness the generator tests run generated code through: a schema
+    text compiled through every stage before the generator, its events
+    rendered as one loadable chunk that is also the emitter's golden, the
+    chunk loaded over an allocator and a slot store, and an assembled
+    module loaded as a game would load it, over a transport of the test's
 --]]
 
 --!strict
 local luau = require("@lune/luau")
 
 local Environment = require("./Environment")
+local Volt = require("@volt")
 local Analyse = require("@volt/Compiler/Analyse")
 local Blocks = require("@volt/Compiler/Blocks")
 local Contract = require("@volt/Compiler/Config/Contract")
@@ -17,35 +18,48 @@ local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Emit = require("@volt/Compiler/Emit")
 local Helpers = require("@volt/Compiler/Emit/Helpers")
 local Lexer = require("@volt/Compiler/Lexer")
+local Messages = require("@volt/Compiler/Targets/Messages")
 local Parser = require("@volt/Compiler/Parser")
 local Resolve = require("@volt/Compiler/Resolve")
-local Roblox = require("@volt/Compiler/Config/Roblox")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
-local Sizes = require("@volt/Compiler/Analyse/Sizes")
 local Source = require("@volt/Compiler/Source")
+local Targets = require("@volt/Compiler/Targets")
 
 type Block = Blocks.Block
+type Diagnostics = Diagnostics.Diagnostics
 type Event = Schema.Event
 type Field = Schema.Field
 type File = Schema.File
-type Type = Schema.Type
+type Transport = Volt.Transport
 
 local Generated = {}
 
 --[[
-    Runs a schema text through every stage before the emitter, refusing
-    one that does not compile clean
+    Runs a schema text through every stage before the generator, refusing
+    one that does not compile clean. Returns the file, its hash and the
+    diagnostics, which the generator adds its own to
 --]]
 
-function Generated.compile(name: string, text: string): File
-	local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(Source.new(`{name}.volt`, text))
+function Generated.compile(name: string, text: string): (File, number, Diagnostics)
+	local diagnostics: Diagnostics = Diagnostics.new(Source.new(`{name}.volt`, text))
 	local file: File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
 
 	Resolve.file(file, diagnostics)
-	Analyse.file(file, diagnostics)
+
+	local hash: number = Analyse.file(file, diagnostics)
 	assert(diagnostics.errors == 0, diagnostics:render())
 
-	return file
+	return file, hash, diagnostics
+end
+
+-- Both assembled modules of a schema text, the client's then the server's
+function Generated.modules(name: string, text: string): (string, string)
+	local file: File, hash: number, diagnostics: Diagnostics = Generated.compile(name, text)
+	local client: string, server: string = Targets.modules(file, diagnostics, hash)
+
+	assert(diagnostics.errors == 0, diagnostics:render())
+
+	return client, server
 end
 
 function Generated.events(file: File): { Event }
@@ -56,41 +70,6 @@ function Generated.events(file: File): { Event }
 		end
 	end
 	return list
-end
-
--- The fields a fire takes: a pack's parameters, or the one value
-function Generated.parameters(event: Event): { Field }
-	local data = event.data
-
-	if not data then
-		return {}
-	elseif data.kind == "pack" then
-		return data.parameters
-	end
-
-	return { {
-		name = "value",
-		type = data,
-		start = 0,
-		finish = 0,
-	} }
-end
-
--- The Luau type a fire takes a value as, where one name says it
-local function luauType(node: Type): string
-	local shape: any = Sizes.resolved(node)
-	if shape.kind == "primitive" then
-		local name: string = shape.name
-		local direct: boolean = name == "boolean" or name == "string" or name == "buffer"
-
-		return direct and name or name == "unknown" and "any" or "number"
-	elseif shape.kind == "roblox" then
-		return shape.name == "Enum" and `Enum.{shape.item}` or shape.class or Roblox[shape.name].class
-	elseif shape.kind == "optional" then
-		return `{luauType(shape.inner)}?`
-	end
-
-	return "any"
 end
 
 --[[
@@ -128,8 +107,8 @@ function Generated.render(file: File): string
 		end
 
 		local typed: { string } = {}
-		for index: number, field: Field in Generated.parameters(event) do
-			typed[index] = `{names[index]}: {luauType(field.type)}`
+		for index: number, field: Field in Messages.parameters(event) do
+			typed[index] = `{names[index]}: {Messages.luauType(field.type)}`
 		end
 
 		local results: string = #values == 0 and "" or `, {table.concat(values, ", ")}`
@@ -214,6 +193,39 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 
 	local chunk = luau.load(text, { debugName = name, environment = Environment })
 	return chunk(allocate, slot), packet
+end
+
+--[[
+    Loads an assembled module as a game would: game answers GetService
+    with a table that indexes to itself, so any runtime path resolves,
+    and require hands back a Volt whose start takes the transport given
+    here in place of the remotes. Returns the module
+--]]
+
+function Generated.module(name: string, text: string, transport: Transport): any
+	local environment: { [string]: any } = table.clone(Environment)
+	local anything: any = setmetatable({}, {
+		__index = function (self: any)
+			return self
+		end,
+	})
+
+	environment.game = {
+		GetService = function ()
+			return anything
+		end,
+	}
+
+	environment.require = function ()
+		return {
+			start = function (schema: Volt.Schema)
+				return Volt.start(schema, transport)
+			end,
+		}
+	end
+
+	local chunk = luau.load(text, { debugName = name, environment = environment })
+	return chunk()
 end
 
 return Generated

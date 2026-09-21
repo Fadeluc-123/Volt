@@ -13,6 +13,7 @@ local Suite = require("./Suite")
 local Environment = require("./Environment")
 local Generated = require("./Generated")
 local Values = require("./Values")
+local Messages = require("@volt/Compiler/Targets/Messages")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 
 local describe = Suite.describe
@@ -135,14 +136,14 @@ describe("Emit", function ()
 	-- Every parameter of an event at its least, as a list the write takes
 	local function least(schema: string, name: string): { any }
 		local written: { any } = {}
-		for index: number, field: Field in Generated.parameters(byName(schema, name)) do
+		for index: number, field: Field in Messages.parameters(byName(schema, name)) do
 			written[index] = valueOf(field.type, "min")
 		end
 		return written
 	end
 
 	local function fire(module: any, schema: string, name: string, written: { any }): (boolean, any)
-		return pcall(module[name].write, table.unpack(written, 1, #Generated.parameters(byName(schema, name))))
+		return pcall(module[name].write, table.unpack(written, 1, #Messages.parameters(byName(schema, name))))
 	end
 
 	local function failure(ok: boolean, message: any, expected: string)
@@ -173,7 +174,7 @@ describe("Emit", function ()
 
 				for _, event: Event in Generated.events(files[schema]) do
 					test(event.name, function ()
-						local fields: { Field } = Generated.parameters(event)
+						local fields: { Field } = Messages.parameters(event)
 
 						for round: number = 0, ROUNDS do
 							local ends: string? = round == 0 and "min" or round == 1 and "max" or nil
@@ -232,7 +233,7 @@ describe("Emit", function ()
 
 		for _, schema: string in SCHEMAS do
 			local source: string = `option writeValidation = false\n{fs.readFile(`tests/Schemas/{schema}.volt`)}`
-			local text: string = Generated.render(Generated.compile(schema, source))
+			local text: string = Generated.render((Generated.compile(schema, source)))
 
 			loose[schema] = Generated.load(schema, text)
 			checks[schema] = typeChecks(text)

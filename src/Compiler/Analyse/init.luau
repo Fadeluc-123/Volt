@@ -17,7 +17,6 @@ local Print = require("./Analyse/Print")
 local Roblox = require("./Config/Roblox")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
-local Wire = require("./Config/Wire")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
@@ -145,9 +144,9 @@ end
 
 function Analyse:budget(budget: number)
 	for _, event: Event in self._unreliable do
-		local wide: boolean = (event.toServer ~= nil and self._toServer > Wire.idsPerByte)
-			or (event.toClient ~= nil and self._toClient > Wire.idsPerByte)
-		local idBytes: number = wide and 2 or 1
+		local toServer: number = event.toServer and self._toServer or 0
+		local toClient: number = event.toClient and self._toClient or 0
+		local idBytes: number = Sizes.idBytes(math.max(toServer, toClient))
 		local payload: Size = event.data and Sizes.size(event.data) or Sizes.fixed(0)
 		local largest: number = idBytes + select(2, Sizes.block(payload))
 
