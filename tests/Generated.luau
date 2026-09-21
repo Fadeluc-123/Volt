@@ -3,13 +3,15 @@
     text compiled through every stage before the generator, its events
     rendered as one loadable chunk that is also the emitter's golden, the
     chunk loaded over an allocator and a slot store, and an assembled
-    module loaded as a game would load it, over a transport of the test's
+    module loaded as a game would, over a transport of the test's and
+    with the promise stand-in for the promise library
 --]]
 
 --!strict
 local luau = require("@lune/luau")
 
 local Environment = require("./Environment")
+local Promise = require("./Promise")
 local Volt = require("@volt")
 local Analyse = require("@volt/Compiler/Analyse")
 local Blocks = require("@volt/Compiler/Blocks")
@@ -107,7 +109,7 @@ function Generated.render(file: File): string
 		end
 
 		local typed: { string } = {}
-		for index: number, field: Field in Messages.parameters(event) do
+		for index: number, field: Field in Messages.parameters(event.data) do
 			typed[index] = `{names[index]}: {Messages.luauType(field.type)}`
 		end
 
@@ -195,28 +197,41 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 	return chunk(allocate, slot), packet
 end
 
+-- A path under a service, growing by one name per index, so require can tell one library's from another's
+local function path(text: string): any
+	return setmetatable({}, {
+		__index = function (_, key: string)
+			return path(`{text}.{key}`)
+		end,
+
+		__tostring = function ()
+			return text
+		end,
+	})
+end
+
 --[[
     Loads an assembled module as a game would: game answers GetService
-    with a table that indexes to itself, so any runtime path resolves,
-    and require hands back a Volt whose start takes the transport given
-    here in place of the remotes. Returns the module
+    with a path any runtime path resolves under, and require hands back
+    the promise stand-in for the promise library's path and, for any
+    other, a Volt whose start takes the transport given here in place of
+    the remotes. Returns the module
 --]]
 
 function Generated.module(name: string, text: string, transport: Transport): any
 	local environment: { [string]: any } = table.clone(Environment)
-	local anything: any = setmetatable({}, {
-		__index = function (self: any)
-			return self
-		end,
-	})
 
 	environment.game = {
-		GetService = function ()
-			return anything
+		GetService = function (_, service: string)
+			return path(service)
 		end,
 	}
 
-	environment.require = function ()
+	environment.require = function (target: any): any
+		if tostring(target):match("%.Promise$") then
+			return Promise
+		end
+
 		return {
 			start = function (schema: Volt.Schema)
 				return Volt.start(schema, transport)

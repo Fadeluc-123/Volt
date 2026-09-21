@@ -7,11 +7,11 @@
 
 --!strict
 local fs = require("@lune/fs")
-local process = require("@lune/process")
 
 local Suite = require("./Suite")
 local Environment = require("./Environment")
 local Generated = require("./Generated")
+local golden = require("./Expected")
 local Values = require("./Values")
 local Messages = require("@volt/Compiler/Targets/Messages")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
@@ -136,14 +136,14 @@ describe("Emit", function ()
 	-- Every parameter of an event at its least, as a list the write takes
 	local function least(schema: string, name: string): { any }
 		local written: { any } = {}
-		for index: number, field: Field in Messages.parameters(byName(schema, name)) do
+		for index: number, field: Field in Messages.parameters(byName(schema, name).data) do
 			written[index] = valueOf(field.type, "min")
 		end
 		return written
 	end
 
 	local function fire(module: any, schema: string, name: string, written: { any }): (boolean, any)
-		return pcall(module[name].write, table.unpack(written, 1, #Messages.parameters(byName(schema, name))))
+		return pcall(module[name].write, table.unpack(written, 1, #Messages.parameters(byName(schema, name).data)))
 	end
 
 	local function failure(ok: boolean, message: any, expected: string)
@@ -153,20 +153,10 @@ describe("Emit", function ()
 
 	for _, schema: string in SCHEMAS do
 		describe(schema, function ()
-			local directory: string = `tests/Golden/{schema}`
-			local golden: string = `{directory}/Emit.luau`
 			local text: string = texts[schema]
 
 			test("renders as the golden file", function ()
-				if table.find(process.args, "--update") then
-					if not fs.isDir(directory) then
-						fs.writeDir(directory)
-					end
-
-					fs.writeFile(golden, text)
-				end
-
-				expect(fs.isFile(golden) and fs.readFile(golden) or "").is(text)
+				expect(golden(`tests/Golden/{schema}`, "Emit", text)).is(text)
 			end)
 
 			describe("round trips", function ()
@@ -174,7 +164,7 @@ describe("Emit", function ()
 
 				for _, event: Event in Generated.events(files[schema]) do
 					test(event.name, function ()
-						local fields: { Field } = Messages.parameters(event)
+						local fields: { Field } = Messages.parameters(event.data)
 
 						for round: number = 0, ROUNDS do
 							local ends: string? = round == 0 and "min" or round == 1 and "max" or nil

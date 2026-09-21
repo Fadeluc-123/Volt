@@ -8,12 +8,12 @@
 
 --!strict
 local fs = require("@lune/fs")
-local process = require("@lune/process")
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
 local Environment = require("./Environment")
 local Generated = require("./Generated")
+local golden = require("./Expected")
 local Volt = require("@volt")
 local Contract = require("@volt/Compiler/Config/Contract")
 local Targets = require("@volt/Compiler/Targets")
@@ -66,18 +66,7 @@ end
 describe("Targets", function ()
 	for _, side in SIDES do
 		test(`renders the {side.name:lower()} module as its golden file`, function ()
-			local directory: string = "tests/Golden/Events"
-			local golden: string = `{directory}/{side.name}.luau`
-
-			if table.find(process.args, "--update") then
-				if not fs.isDir(directory) then
-					fs.writeDir(directory)
-				end
-
-				fs.writeFile(golden, side.text)
-			end
-
-			expect(fs.isFile(golden) and fs.readFile(golden) or "").is(side.text)
+			expect(golden("tests/Golden/Events", side.name, side.text)).is(side.text)
 		end)
 	end
 

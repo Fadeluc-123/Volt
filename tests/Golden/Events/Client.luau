@@ -1,7 +1,7 @@
 --[[
     The client module Volt 0.1.0 generated from Events.volt: a writer per
-    event this side fires, a reader per event it hears, the schema table
-    the runtime starts from and the API a game calls. Generated code:
+    message this side sends, a reader per message it hears, the schema
+    table the runtime starts from and the API a game calls. Generated code:
     change the schema and run volt again rather than editing this file
 --]]
 

@@ -9,6 +9,7 @@
 local Runtime = {} :: any
 Runtime.__index = Runtime
 
+local Calls = require("@self/Calls")
 local Mock = require("@self/Mock")
 local Receive = require("@self/Receive")
 local Remotes = require("@self/Remotes")
@@ -31,6 +32,30 @@ export type Runtime = {
 	deliver: (self: Runtime, id: number, player: any, cursor: number, sideCursor: number, ...any) -> (number, number),
 	on: (self: Runtime, id: number, listener: (...any) -> ()) -> () -> (),
 	iter: (self: Runtime, id: number) -> () -> ...any,
+	invoke: (self: Runtime, id: number, write: (slot: number, ...any) -> (), ...any) -> ...any,
+	handle: (self: Runtime, id: number, handler: (...any) -> ...any) -> () -> (),
+	reply: (self: Runtime, id: number, slot: number, cursor: number, sideCursor: number, ...any) -> (number, number),
+	
+	call: (
+		self: Runtime,
+		id: number,
+		player: any,
+		slot: number,
+		cursor: number,
+		sideCursor: number,
+		...any
+	) -> (number, number),
+	
+	refused: (
+		self: Runtime,
+		id: number,
+		slot: number,
+		packet: buffer,
+		cursor: number,
+		sideCursor: number,
+		length: number
+	) -> (number, number),
+
 	packet: (self: Runtime, player: any, packet: any, side: any) -> (),
 	flush: (self: Runtime) -> (),
 	fail: (self: Runtime, player: any, kind: string, detail: string) -> (),
@@ -81,11 +106,14 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		_idBytes = schema.idBytes,
 		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
 		_spawn = live.spawn,
+		_inert = live.inert == true, -- Outside a running game, where a call would never be answered
 		_players = {} :: { [any]: { reliable: State, unreliable: State } },
+		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
 		_failure = report :: Failure,
 	}, Runtime)
 
 	self:channels(schema.messages)
+	self:functions(schema.messages)
 
 	if server then
 		local players, added, removing = live.players, live.playerAdded, live.playerRemoving
@@ -159,8 +187,9 @@ function Runtime:target(player: any): boolean
 	return true
 end
 
--- Sends every target's accumulated bytes now; the Heartbeat does this every flush-th frame
+-- Fails the calls past their deadline, then sends every target's accumulated bytes; the Heartbeat does this every flush-th frame
 function Runtime:flush()
+	self:_sweep()
 	self.reliable:flush()
 	self.unreliable:flush()
 end
@@ -190,10 +219,12 @@ function Runtime:_leave(player: any)
 	self.unreliable:remove(player)
 end
 
--- The receive side's methods live in their own file, and a name defined twice is a bug
-for name: string, method in Receive do
-	assert(Runtime[name] == nil, `Runtime.{name} is defined twice`)
-	Runtime[name] = method
+-- The receive side and the calls are the methods of one sibling each, and a name defined twice is a bug
+for _, part in { Calls, Receive } do
+	for name: string, method in part do
+		assert(Runtime[name] == nil, `Runtime.{name} is defined twice`)
+		Runtime[name] = method
+	end
 end
 
 return Volt
