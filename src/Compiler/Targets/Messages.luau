@@ -70,6 +70,16 @@ local function handed(values: { string }): string
 	return #values == 0 and "" or `, {table.concat(values, ", ")}`
 end
 
+-- Points a message's write block at the runtime's calls for one reliability, the module's locals of that name
+local function sends(write: Block, reliable: boolean)
+	local suffix: string = reliable and "Reliable" or "Unreliable"
+
+	write.first = `begin{suffix}`
+	write.allocate = `allocate{suffix}`
+	write.slot = `slot{suffix}`
+	write.refuse = `refuse{suffix}`
+end
+
 -- Each field of a pack typed under the name the walk gave it, and the types alone
 local function typed(names: { string }, data: (Type | Pack)?): ({ string }, { string })
 	local annotated: { string }, types: { string } = {}, {}
@@ -138,8 +148,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	local read: Block = Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
 
-	write.allocate = reliable and "allocateReliable" or "allocateUnreliable"
-	write.slot = reliable and "slotReliable" or "slotUnreliable"
+	sends(write, reliable)
 
 	if outId then
 		identify(write, width, outId)
@@ -218,11 +227,9 @@ function Messages:exchange(declaration: Function): Exchanged
 	local names: { string }, values: { string } = {}, {}
 	local results: { string }, yields: { string } = {}, {}
 
-	for _, write: Block in { callWrite, replyWrite } do
-		write.allocate = "allocateReliable"
-		write.slot = "slotReliable"
-	end
-
+	sends(callWrite, true)
+	sends(replyWrite, true)
+	
 	identify(callWrite, width, callId)
 	frame(callWrite, callRead, "slot", SLOT_BYTES)
 
@@ -240,9 +247,15 @@ function Messages:exchange(declaration: Function): Exchanged
 
 	replyRead:open("if status == 0 then")
 
+	-- The returns are checked on every build, since a return the type cannot carry is the server's own bug
+	-- Whiteoak TODO: a shared type first walked here keeps its checks elsewhere in a module with validation off
+	local validated: boolean = self._emitter:validating(true)
+
 	if returns then
 		results, yields = self._emitter:block(returns, returnsWrite, returnsRead)
 	end
+
+	self._emitter:validating(validated)
 
 	if not returnsWrite:empty() then
 		replyWrite:open("if status == 0 then")

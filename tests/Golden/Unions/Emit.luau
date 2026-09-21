@@ -1,27 +1,27 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 local TEAM: { string } = { "Red", "Blue" }
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), value: any)
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
 	if typeof(value) ~= "table" then
-		error("Stack: expected table")
+		refuse("Stack: expected table")
 	end
 
 	if typeof(value.item) ~= "string" then
-		error("Stack.item: expected string")
+		refuse("Stack.item: expected string")
 	end
 
 	if #value.item < 1 or #value.item > 8 then
-		error("Stack.item: length out of range")
+		refuse("Stack.item: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 1, #value.item - 1)
 
 	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
-		error("Stack.quantity: expected u16(1..999)")
+		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
 	buffer.writeu16(out, offset + 2, value.quantity)
@@ -78,13 +78,13 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 	return cursor, sideCursor, value
 end
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
 	local valueIndex: number? = table.find(TEAM, value)
 
 	if not valueIndex then
-		error("Team: expected enum { Red, Blue }")
+		refuse("Team: expected enum { Red, Blue }")
 	end
 
 	flags += valueIndex - 1
@@ -109,26 +109,26 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 end
 
 local function writeUnions(a: any, b: any, c: any)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 	local aMember: number? = typeof(a) == "number" and 0 or typeof(a) == "string" and 1 or typeof(a) == "boolean" and 2 or nil
 
 	if not aMember then
-		error("Unions.a: expected u8 | string(0..4) | boolean")
+		refuseReliable("Unions.a: expected u8 | string(0..4) | boolean")
 	end
 
 	flags += aMember
 	local bMember: number? = typeof(b) == "Vector3" and 0 or typeof(b) == "table" and 1 or nil
 
 	if not bMember then
-		error("Unions.b: expected Vector3 | Stack")
+		refuseReliable("Unions.b: expected Vector3 | Stack")
 	end
 
 	flags += bMember * 4
 	local cMember: number? = typeof(c) == "Color3" and 0 or typeof(c) == "table" and 1 or typeof(c) == "string" and 2 or nil
 
 	if not cMember then
-		error("Unions.c: expected Color3 | u8[0..3] | Team")
+		refuseReliable("Unions.c: expected Color3 | u8[0..3] | Team")
 	end
 
 	flags += cMember * 8
@@ -138,7 +138,7 @@ local function writeUnions(a: any, b: any, c: any)
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
 		if a % 1 ~= 0 or a < 0 or a > 255 then
-			error("Unions.a: expected u8")
+			refuseReliable("Unions.a: expected u8")
 		end
 
 		buffer.writeu8(out_2, offset_2, a)
@@ -146,7 +146,7 @@ local function writeUnions(a: any, b: any, c: any)
 		local offset_3: number, out_3: buffer = allocateReliable(1)
 
 		if #a > 4 then
-			error("Unions.a: length out of range")
+			refuseReliable("Unions.a: length out of range")
 		end
 
 		buffer.writeu8(out_3, offset_3, #a)
@@ -163,24 +163,24 @@ local function writeUnions(a: any, b: any, c: any)
 		local offset_5: number, out_5: buffer = allocateReliable(12)
 
 		if b.X ~= b.X then
-			error("Unions.b.X: expected f32")
+			refuseReliable("Unions.b.X: expected f32")
 		end
 
 		buffer.writef32(out_5, offset_5, b.X)
 
 		if b.Y ~= b.Y then
-			error("Unions.b.Y: expected f32")
+			refuseReliable("Unions.b.Y: expected f32")
 		end
 
 		buffer.writef32(out_5, offset_5 + 4, b.Y)
 
 		if b.Z ~= b.Z then
-			error("Unions.b.Z: expected f32")
+			refuseReliable("Unions.b.Z: expected f32")
 		end
 
 		buffer.writef32(out_5, offset_5 + 8, b.Z)
 	elseif bMember == 1 then
-		writeStack(allocateReliable, slotReliable, b)
+		writeStack(allocateReliable, slotReliable, refuseReliable, b)
 	end
 
 	if cMember == 0 then
@@ -192,7 +192,7 @@ local function writeUnions(a: any, b: any, c: any)
 		local offset_8: number, out_8: buffer = allocateReliable(1)
 
 		if #c > 3 then
-			error("Unions.c: length out of range")
+			refuseReliable("Unions.c: length out of range")
 		end
 
 		buffer.writeu8(out_8, offset_8, #c)
@@ -200,14 +200,14 @@ local function writeUnions(a: any, b: any, c: any)
 
 		for index = 1, #c do
 			if typeof(c[index]) ~= "number" or c[index] % 1 ~= 0 or c[index] < 0 or c[index] > 255 then
-				error("Unions.c[]: expected u8")
+				refuseReliable("Unions.c[]: expected u8")
 			end
 
 			buffer.writeu8(cOut, cOffset, c[index])
 			cOffset += 1
 		end
 	elseif cMember == 2 then
-		writeTeam(allocateReliable, slotReliable, c)
+		writeTeam(allocateReliable, slotReliable, refuseReliable, c)
 	end
 end
 

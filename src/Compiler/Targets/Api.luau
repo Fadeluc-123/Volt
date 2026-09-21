@@ -3,7 +3,7 @@
     and, on the server, the broadcast variants when the side fires it and
     on and iter when it hears it; an entry per function with invoke on
     the client and on for its handler on the server; nested per namespace
-    and frozen, then the members every module has
+    and frozen, then flush, onFailure and stats, which every module has
 --]]
 
 --!strict
@@ -49,6 +49,7 @@ function Api:api(): string
 
 	table.insert(entries, member(self:method("flush"), "()", "runtime:flush()"))
 	table.insert(entries, member(self:method("onFailure"), "(handler: Volt.Failure)", "runtime:onFailure(handler)"))
+	table.insert(entries, member(self:method("stats"), "(player: Player?): Volt.Stats", "return runtime:stats(player)"))
 
 	return Blocks.paragraphs(entries)
 end

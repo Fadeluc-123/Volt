@@ -14,15 +14,16 @@ local Volt = require(ReplicatedStorage.Packages.Volt)
 local Promise = require(ReplicatedStorage.Packages.Promise)
 
 local runtime: Volt.Runtime
-local allocateReliable: (number) -> (number, buffer)
+local beginReliable: (number) -> (number, buffer)
+local refuseReliable: (string) -> ()
 
 local function writeEcho(slot: number, value: number)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 1)
 	buffer.writeu16(out, offset + 1, slot)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
-		error("Echo: expected u8")
+		refuseReliable("Echo: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 3, value)
@@ -52,7 +53,7 @@ local function readEcho(_, packet: buffer, cursor: number, _, sideCursor: number
 end
 
 local function writePing(slot: number)
-	local offset: number, out: buffer = allocateReliable(3)
+	local offset: number, out: buffer = beginReliable(3)
 	buffer.writeu8(out, offset, 2)
 	buffer.writeu16(out, offset + 1, slot)
 end
@@ -74,18 +75,18 @@ local function readPing(_, packet: buffer, cursor: number, _, sideCursor: number
 end
 
 local function writeDivide(slot: number, dividend: number, divisor: number)
-	local offset: number, out: buffer = allocateReliable(19)
+	local offset: number, out: buffer = beginReliable(19)
 	buffer.writeu8(out, offset, 3)
 	buffer.writeu16(out, offset + 1, slot)
 
 	if typeof(dividend) ~= "number" or dividend ~= dividend then
-		error("Divide.dividend: expected f64")
+		refuseReliable("Divide.dividend: expected f64")
 	end
 
 	buffer.writef64(out, offset + 3, dividend)
 
 	if typeof(divisor) ~= "number" or divisor ~= divisor then
-		error("Divide.divisor: expected f64")
+		refuseReliable("Divide.divisor: expected f64")
 	end
 
 	buffer.writef64(out, offset + 11, divisor)
@@ -131,24 +132,24 @@ local function readDivide(_, packet: buffer, cursor: number, _, sideCursor: numb
 end
 
 local function writeInventory_Transfer(slot: number, source: number, destination: number, quantity: number)
-	local offset: number, out: buffer = allocateReliable(7)
+	local offset: number, out: buffer = beginReliable(7)
 	buffer.writeu8(out, offset, 4)
 	buffer.writeu16(out, offset + 1, slot)
 
 	if typeof(source) ~= "number" or source % 1 ~= 0 or source < 0 or source > 255 then
-		error("Inventory.Transfer.source: expected u8")
+		refuseReliable("Inventory.Transfer.source: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 3, source)
 
 	if typeof(destination) ~= "number" or destination % 1 ~= 0 or destination < 0 or destination > 255 then
-		error("Inventory.Transfer.destination: expected u8")
+		refuseReliable("Inventory.Transfer.destination: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 4, destination)
 
 	if typeof(quantity) ~= "number" or quantity % 1 ~= 0 or quantity < 0 or quantity > 65535 then
-		error("Inventory.Transfer.quantity: expected u16")
+		refuseReliable("Inventory.Transfer.quantity: expected u16")
 	end
 
 	buffer.writeu16(out, offset + 5, quantity)
@@ -230,7 +231,8 @@ runtime = Volt.start({
 	},
 })
 
-allocateReliable = runtime.reliable.allocate
+beginReliable = runtime.reliable.begin
+refuseReliable = runtime.reliable.refuse
 
 local net = table.freeze({
 	Echo = table.freeze({
@@ -265,6 +267,10 @@ local net = table.freeze({
 
 	onFailure = function (handler: Volt.Failure)
 		runtime:onFailure(handler)
+	end,
+
+	stats = function (player: Player?): Volt.Stats
+		return runtime:stats(player)
 	end,
 })
 

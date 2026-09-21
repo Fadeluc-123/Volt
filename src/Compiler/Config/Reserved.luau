@@ -31,6 +31,9 @@ local Reserved = {
 		"allocateReliable",
 		"allocateUnreliable",
 		"axisAngle",
+		"begin",
+		"beginReliable",
+		"beginUnreliable",
 		"bit32",
 		"buffer",
 		"cframe",
@@ -46,6 +49,9 @@ local Reserved = {
 		"player",
 		"players",
 		"readf16",
+		"refuse",
+		"refuseReliable",
+		"refuseUnreliable",
 		"runtime",
 		"side",
 		"sideCursor",
@@ -60,7 +66,7 @@ local Reserved = {
 		"writef16",
 	} :: { string },
 
-	api = { "flush", "onFailure" } :: { string }, -- In camel casing; the schema's casing is applied before a name is checked
+	api = { "flush", "onFailure", "stats" } :: { string }, -- In camel casing; the schema's casing is applied before a name is checked
 }
 
 for word: string in LUAU_WORDS:gmatch("%a+") do

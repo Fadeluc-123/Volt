@@ -1,25 +1,25 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), value: any)
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
 	if typeof(value) ~= "table" then
-		error("Stack: expected table")
+		refuse("Stack: expected table")
 	end
 
 	if typeof(value.item) ~= "string" then
-		error("Stack.item: expected string")
+		refuse("Stack.item: expected string")
 	end
 
 	if #value.item < 1 or #value.item > 8 then
-		error("Stack.item: length out of range")
+		refuse("Stack.item: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 1, #value.item - 1)
 
 	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
-		error("Stack.quantity: expected u16(1..999)")
+		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
 	buffer.writeu16(out, offset + 2, value.quantity)
@@ -76,31 +76,31 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 	return cursor, sideCursor, value
 end
 
-local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), value: any)
+local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(3)
 
 	if typeof(value) ~= "table" then
-		error("Save: expected table")
+		refuse("Save: expected table")
 	end
 
 	if typeof(value.version) ~= "number" or value.version % 1 ~= 0 or value.version < 0 or value.version > 65535 then
-		error("Save.version: expected u16")
+		refuse("Save.version: expected u16")
 	end
 
 	buffer.writeu16(out, offset, value.version)
 
 	if typeof(value.stacks) ~= "table" then
-		error("Save.stacks: expected table")
+		refuse("Save.stacks: expected table")
 	end
 
 	if #value.stacks > 4 then
-		error("Save.stacks: length out of range")
+		refuse("Save.stacks: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 2, #value.stacks)
 
 	for index = 1, #value.stacks do
-		writeStack(allocate, slot, value.stacks[index])
+		writeStack(allocate, slot, refuse, value.stacks[index])
 	end
 end
 
@@ -136,44 +136,44 @@ local function readSave(packet: buffer, cursor: number, side: { any }, sideCurso
 end
 
 local function writeRecords(a: any, b: any, c: any, d: any)
-	local offset: number, out: buffer = allocateReliable(3)
+	local offset: number, out: buffer = beginReliable(3)
 	local flags: number = 0
 
 	if typeof(a) ~= "table" then
-		error("Records.a: expected table")
+		refuseReliable("Records.a: expected table")
 	end
 
 	if typeof(a.x) ~= "number" or a.x % 1 ~= 0 or a.x < 0 or a.x > 255 then
-		error("Records.a.x: expected u8")
+		refuseReliable("Records.a.x: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, a.x)
 
 	if typeof(a.y) ~= "string" then
-		error("Records.a.y: expected string")
+		refuseReliable("Records.a.y: expected string")
 	end
 
 	if #a.y > 4 then
-		error("Records.a.y: length out of range")
+		refuseReliable("Records.a.y: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 2, #a.y)
 
 	if typeof(a.z) ~= "boolean" then
-		error("Records.a.z: expected boolean")
+		refuseReliable("Records.a.z: expected boolean")
 	end
 
 	flags += a.z and 1 or 0
 
 	if typeof(b) ~= "table" then
-		error("Records.b: expected table")
+		refuseReliable("Records.b: expected table")
 	end
 
 	buffer.writeu8(out, offset, flags)
 	local yOffset: number, yOut: buffer = allocateReliable(#a.y)
 	buffer.writestring(yOut, yOffset, a.y)
-	writeStack(allocateReliable, slotReliable, c)
-	writeSave(allocateReliable, slotReliable, d)
+	writeStack(allocateReliable, slotReliable, refuseReliable, c)
+	writeSave(allocateReliable, slotReliable, refuseReliable, d)
 end
 
 local function readRecords(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)

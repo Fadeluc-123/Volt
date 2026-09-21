@@ -92,8 +92,14 @@ function Calls:invoke(id: number, write: (slot: number, ...any) -> (), ...: any)
 	end
 
 	local pending: Pending = { deadline = os.clock() + call.timeout }
+	local written: boolean, refused: any = pcall(write, slot, ...)
 
-	write(slot, ...)
+	-- A refused argument undid the call's bytes; its slot goes back too, and the refusal reaches the caller
+	if not written then
+		table.insert(call.free, slot)
+		error(refused, 0)
+	end
+
 	call.last = math.max(call.last, slot)
 	call.pending[slot] = pending
 
@@ -143,7 +149,6 @@ function Calls:refused(
 	sideCursor: number,
 	length: number
 ): (number, number)
-
 	local name: string = self._calls[id].name
 	if cursor + PREFIX_BYTES > length then
 		error(`{name}: truncated`)
@@ -183,9 +188,9 @@ end
 
 --[[
     Runs a call from a player: the handler on a thread of its own, since
-    most yield, with its returns as the reply; a call with no handler is
-    refused at once. Returns the cursors, so a reader's tail is this one
-    call
+    most yield, with its returns as the reply; a call past the function's
+    rate or with no handler is refused at once. Returns the cursors, so a
+    reader's tail is this one call
 --]]
 
 function Calls:call(
@@ -196,13 +201,18 @@ function Calls:call(
 	sideCursor: number,
 	...: any
 ): (number, number)
-
+	local message: Message = self._messages[id]
+	local rate: number? = message.rate
 	local handler = self._handlers[id]
-	if handler then
+
+	if rate and not self:allow(player, id, message.name, rate) then
+		self:_reply(id, player, slot, STATUS.limited, "rate limited")
+	elseif handler then
 		self._spawn(self._serve, self, id, player, slot, handler, ...)
 	else
 		self:_reply(id, player, slot, STATUS.unhandled, "no handler")
 	end
+
 	return cursor, sideCursor
 end
 
@@ -221,8 +231,10 @@ end
 
 --[[
     Writes a reply into the caller's state: the returns after a status of
-    ok, or after any other the reason, cut to what a refusal carries.
-    Nothing is sent to a caller who has left
+    ok, or after any other the reason, cut to what a refusal carries. A
+    return the function's return type cannot carry is the handler's
+    bug: the writer refuses it and undoes the reply, which then fails
+    the call with the refusal. Nothing is sent to a caller who has left
 --]]
 
 function Calls:_reply(id: number, player: any, slot: number, status: number, ...: any)
@@ -230,9 +242,19 @@ function Calls:_reply(id: number, player: any, slot: number, status: number, ...
 		return
 	end
 
-	local reply = self._messages[id].reply
+	local message: Message = self._messages[id]
+	local reply = message.reply :: (slot: number, status: number, ...any) -> ()
+
 	if status == STATUS.ok then
-		return reply(slot, status, ...)
+		local ok: boolean, refused: any = pcall(reply, slot, status, ...)
+		if ok then
+			return
+		end
+
+		local reason: string = tostring(refused) -- Names the function and the return itself, as every refusal does
+
+		self:fail(player, "handler", reason)
+		return self:_reply(id, player, slot, STATUS.failed, reason)
 	end
 
 	local reason: string = ...

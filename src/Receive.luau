@@ -11,6 +11,7 @@ local Receive = {} :: any
 local Types = require("./Config/Types/Runtime")
 
 type Message = Types.Message
+type Stats = Types.Stats
 
 type Entry = { n: number, [number]: any } -- A queued message: the player, then its values
 
@@ -19,6 +20,7 @@ type Channel = {
 	kind: string, -- sync, async or polling
 	single: boolean, -- Whether one listener is the most the event allows
 	depth: number, -- How many messages the queue holds before the oldest is dropped
+	rate: number?, -- What the server allows a player a second, when the event is limited
 	listeners: { (...any) -> () },
 	queue: { Entry },
 	head: number,
@@ -53,18 +55,22 @@ local function pop(channel: Channel): Entry?
 end
 
 --[[
-    Reads every message of a packet in turn: the id, then the reader,
-    which decodes the bytes and delivers the values in one call and
-    returns the cursors past them. Runs under the packet's pcall, so an
-    error anywhere in a message drops the rest of the packet
+    Reads every message of a packet in turn from where the checks before
+    decode left off: the id, then the reader, which decodes the bytes and
+    delivers the values in one call and returns the cursors past them.
+    Runs under the packet's pcall, so an error anywhere in a message
+    drops the rest of the packet
 --]]
 
-local function loop(self: any, player: any, packet: buffer, side: { any })
+local function loop(self: any, player: any, packet: buffer, side: { any }, start: number)
 	local length: number = buffer.len(packet)
 	local idBytes: number = self._idBytes
 	local readId = self._readId
 	local messages: { [number]: Message } = self._messages
-	local cursor: number, sideCursor: number = 0, 1
+	local total: Stats = self._stats
+	local state = self._players[player]
+	local mine: Stats? = state and state.stats
+	local cursor: number, sideCursor: number = start, 1
 
 	while cursor < length do
 		if cursor + idBytes > length then
@@ -76,6 +82,12 @@ local function loop(self: any, player: any, packet: buffer, side: { any })
 
 		if not message then
 			error(`unknown message {id}`)
+		end
+
+		total.messagesIn += 1
+
+		if mine then
+			mine.messagesIn += 1
 		end
 
 		cursor, sideCursor = message.read(player, packet, cursor + idBytes, side, sideCursor, length)
@@ -95,6 +107,7 @@ function Receive:channels(messages: { [number]: Message })
 				kind = mode == "Polling" and "polling" or mode:find("Async") and "async" or "sync",
 				single = mode:sub(1, 6) == "Single",
 				depth = message.queue :: number,
+				rate = message.rate,
 				listeners = {},
 				queue = {},
 				head = 1,
@@ -108,9 +121,10 @@ function Receive:channels(messages: { [number]: Message })
 end
 
 --[[
-    Handles one packet from a player, or from the server on the client.
-    A message that fails to decode leaves the cursor nowhere, so the
-    rest of the packet is dropped with it and reported once
+    Handles one packet from a player, or from the server on the client:
+    the checks before decode, then the loop. A message that fails to
+    decode leaves the cursor nowhere, so the rest of the packet is
+    dropped with it and reported once
 --]]
 
 function Receive:packet(player: any, packet: any, side: any)
@@ -118,22 +132,34 @@ function Receive:packet(player: any, packet: any, side: any)
 		return self:fail(player, "packet", "not a packet")
 	end
 
-	local ok: boolean, message: any = pcall(loop, self, player, packet, side or NO_SLOTS)
+	local start: number? = self:admit(player, packet)
+	if not start then
+		return
+	end
+
+	local ok: boolean, message: any = pcall(loop, self, player, packet, side or NO_SLOTS, start)
 	if not ok then
 		self:fail(player, "decode", (tostring(message):gsub("^.-:%d+: ", "")))
 	end
 end
 
 --[[
-    Hands a decoded message to its listeners by the event's call mode:
-    inline for a sync mode, on a new thread for an async mode, and into
-    the queue for a polled event or one no listener has claimed yet.
-    Returns the cursors, so a reader's tail is this one call
+    Hands a decoded message to its listeners by the event's call mode,
+    unless the player is past the event's rate, when it is dropped here,
+    decoded, so the packet goes on: inline for a sync mode, on a new
+    thread for an async mode, and into the queue for a polled event or
+    one no listener has claimed yet. Returns the cursors, so a reader's
+    tail is this one call
 --]]
 
 function Receive:deliver(id: number, player: any, cursor: number, sideCursor: number, ...: any): (number, number)
 	local channel: Channel = self._channels[id]
+	local rate: number? = channel.rate
 	local listeners = channel.listeners
+
+	if rate and not self:allow(player, id, channel.name, rate) then
+		return cursor, sideCursor
+	end
 
 	if channel.kind == "polling" or #listeners == 0 then
 		self:_push(channel, player, ...)

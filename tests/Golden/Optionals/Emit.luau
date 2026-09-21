@@ -1,14 +1,14 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 local TEAM: { string } = { "Red", "Blue" }
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
 	local valueIndex: number? = table.find(TEAM, value)
 
 	if not valueIndex then
-		error("Team: expected enum { Red, Blue }")
+		refuse("Team: expected enum { Red, Blue }")
 	end
 
 	flags += valueIndex - 1
@@ -33,7 +33,7 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 end
 
 local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: string?)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 	flags += a ~= nil and 1 or 0
 	flags += b ~= nil and 2 or 0
@@ -46,7 +46,7 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
 		if typeof(a) ~= "number" or a % 1 ~= 0 or a < 0 or a > 255 then
-			error("Optionals.a: expected u8")
+			refuseReliable("Optionals.a: expected u8")
 		end
 
 		buffer.writeu8(out_2, offset_2, a)
@@ -56,11 +56,11 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 		local offset_3: number, out_3: buffer = allocateReliable(1)
 
 		if typeof(b) ~= "string" then
-			error("Optionals.b: expected string")
+			refuseReliable("Optionals.b: expected string")
 		end
 
 		if #b > 8 then
-			error("Optionals.b: length out of range")
+			refuseReliable("Optionals.b: length out of range")
 		end
 
 		buffer.writeu8(out_3, offset_3, #b)
@@ -72,11 +72,11 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 		local offset_4: number, out_4: buffer = allocateReliable(1)
 
 		if typeof(c) ~= "table" then
-			error("Optionals.c: expected table")
+			refuseReliable("Optionals.c: expected table")
 		end
 
 		if typeof(c.n) ~= "number" or c.n % 1 ~= 0 or c.n < 0 or c.n > 255 then
-			error("Optionals.c.n: expected u8")
+			refuseReliable("Optionals.c.n: expected u8")
 		end
 
 		buffer.writeu8(out_4, offset_4, c.n)
@@ -87,7 +87,7 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 		local flags_2: number = 0
 
 		if typeof(d) ~= "boolean" then
-			error("Optionals.d: expected boolean")
+			refuseReliable("Optionals.d: expected boolean")
 		end
 
 		flags_2 += d and 1 or 0
@@ -98,11 +98,11 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 		local offset_6: number, out_6: buffer = allocateReliable(1)
 
 		if typeof(e) ~= "string" then
-			error("Optionals.e: expected string")
+			refuseReliable("Optionals.e: expected string")
 		end
 
 		if #e < 1 or #e > 8 then
-			error("Optionals.e: length out of range")
+			refuseReliable("Optionals.e: length out of range")
 		end
 
 		buffer.writeu8(out_6, offset_6, #e - 1)
@@ -203,19 +203,19 @@ local function readOptionals(packet: buffer, cursor: number, _, sideCursor: numb
 end
 
 local function writeNested(value: any)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 
 	if typeof(value) ~= "table" then
-		error("Nested: expected table")
+		refuseReliable("Nested: expected table")
 	end
 
 	if typeof(value.grid) ~= "table" then
-		error("Nested.grid: expected table")
+		refuseReliable("Nested.grid: expected table")
 	end
 
 	if #value.grid ~= 2 then
-		error("Nested.grid: expected 2 entries")
+		refuseReliable("Nested.grid: expected 2 entries")
 	end
 
 	flags += value.slots ~= nil and 1 or 0
@@ -223,18 +223,18 @@ local function writeNested(value: any)
 
 	for index = 1, 2 do
 		if typeof(value.grid[index]) ~= "table" then
-			error("Nested.grid[]: expected table")
+			refuseReliable("Nested.grid[]: expected table")
 		end
 
 		if #value.grid[index] ~= 2 then
-			error("Nested.grid[]: expected 2 entries")
+			refuseReliable("Nested.grid[]: expected 2 entries")
 		end
 
 		local gridEntryOffset: number, gridEntryOut: buffer = allocateReliable(2)
 
 		for index_2 = 1, 2 do
 			if typeof(value.grid[index][index_2]) ~= "number" or value.grid[index][index_2] % 1 ~= 0 or value.grid[index][index_2] < 0 or value.grid[index][index_2] > 255 then
-				error("Nested.grid[][]: expected u8")
+				refuseReliable("Nested.grid[][]: expected u8")
 			end
 
 			buffer.writeu8(gridEntryOut, gridEntryOffset, value.grid[index][index_2])
@@ -246,11 +246,11 @@ local function writeNested(value: any)
 		local offset_3: number, out_3: buffer = allocateReliable(1)
 
 		if typeof(value.slots) ~= "table" then
-			error("Nested.slots: expected table")
+			refuseReliable("Nested.slots: expected table")
 		end
 
 		if #value.slots > 3 then
-			error("Nested.slots: length out of range")
+			refuseReliable("Nested.slots: length out of range")
 		end
 
 		buffer.writeu8(out_3, offset_3, #value.slots)
@@ -260,11 +260,11 @@ local function writeNested(value: any)
 			local flags_2: number = 0
 
 			if typeof(value.slots[index_3]) ~= "table" then
-				error("Nested.slots[]: expected table")
+				refuseReliable("Nested.slots[]: expected table")
 			end
 
 			if typeof(value.slots[index_3].id) ~= "number" or value.slots[index_3].id % 1 ~= 0 or value.slots[index_3].id < 0 or value.slots[index_3].id > 255 then
-				error("Nested.slots[].id: expected u8")
+				refuseReliable("Nested.slots[].id: expected u8")
 			end
 
 			buffer.writeu8(out_4, offset_4 + 1, value.slots[index_3].id)
@@ -272,7 +272,7 @@ local function writeNested(value: any)
 			buffer.writeu8(out_4, offset_4, flags_2)
 
 			if value.slots[index_3].tag ~= nil then
-				writeTeam(allocateReliable, slotReliable, value.slots[index_3].tag)
+				writeTeam(allocateReliable, slotReliable, refuseReliable, value.slots[index_3].tag)
 			end
 		end
 	end

@@ -38,16 +38,19 @@ function Expressions.group(expression: string): string
 end
 
 --[[
-    The lines that refuse a value on one side when a condition holds
+    The lines that refuse a value when a condition holds: an error on the
+    read side, which the runtime's packet pcall turns into a decode
+    failure, or a call to what the block refuses through on the write
+    side, which undoes the message before it raises
 --]]
 
-function Expressions.refusal(condition: string, message: string): string
+function Expressions.refusal(condition: string, message: string, through: string?): string
 	local quoted: string = message:gsub('"', '\\"') -- A printed tagged enum carries its tag in quotes
-	return `if {condition} then\n\terror("{quoted}")\nend`
+	return `if {condition} then\n\t{through or "error"}("{quoted}")\nend`
 end
 
 function Expressions.refuse(block: Block, condition: string, message: string)
-	block:line(Expressions.refusal(condition, message))
+	block:line(Expressions.refusal(condition, message, block.side == "write" and block.refuse or nil))
 end
 
 --[[

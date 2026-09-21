@@ -51,7 +51,13 @@ local function schema(side: string, message: any): Schema
 		scope = "Test",
 		side = side,
 		idBytes = 1,
-		options = { flush = 1, manualReplication = false, unreliableBudget = 900 },
+		options = {
+			flush = 1,
+			manualReplication = false,
+			maxPacket = 8192,
+			maxPacketsPerSecond = 240,
+			unreliableBudget = 900,
+		},
 		messages = { [ID] = message },
 		outgoing = {},
 	}
@@ -323,6 +329,19 @@ describe("Calls", function ()
 		expect(`{ok} {reason}`).is("false edit mode")
 		expect(`{settled[1]} {settled[2]}`).is("false edit mode")
 		expect(#plain.slots + #promised.slots).is(0)
+	end)
+
+	test("a refused argument reaches the caller and takes no slot", function ()
+		local harness: Harness = setup()
+		local ok: boolean, message: any = pcall(harness.client.invoke, harness.client, ID, function ()
+			error("Double: expected u8", 0)
+		end)
+
+		expect(ok).is(false)
+		expect(tostring(message)).is("Double: expected u8")
+
+		call(harness, 5)
+		expect(table.concat(harness.slots, ",")).is("1")
 	end)
 
 	test("fails the call past the ceiling of slots in flight", function ()

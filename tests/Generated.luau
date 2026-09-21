@@ -2,9 +2,9 @@
     The harness the generator tests run generated code through: a schema
     text compiled through every stage before the generator, its events
     rendered as one loadable chunk that is also the emitter's golden, the
-    chunk loaded over an allocator and a slot store, and an assembled
-    module loaded as a game would, over a transport of the test's and
-    with the promise stand-in for the promise library
+    chunk loaded over the calls a writer makes, and an assembled module
+    loaded as a game would, over a transport of the test's and with the
+    promise stand-in for the promise library
 --]]
 
 --!strict
@@ -33,6 +33,9 @@ type Event = Schema.Event
 type Field = Schema.Field
 type File = Schema.File
 type Transport = Volt.Transport
+
+-- The calls a rendered chunk's writers may make, as a module names them and in the order the chunk takes them
+local CALLS: { string } = { "beginReliable", "allocateReliable", "slotReliable", "refuseReliable" }
 
 local Generated = {}
 
@@ -75,11 +78,11 @@ function Generated.events(file: File): { Event }
 end
 
 --[[
-    Renders every event of a file as a write function over an allocator
-    and a slot store and a read function over a bare buffer and side
-    array, with the helpers, constants and shared pairs they need above
-    them and a table of the pairs at the end, so the text is one loadable
-    chunk and one golden file
+    Renders every event of a file as a write function over the calls a
+    writer makes and a read function over a bare buffer and side array,
+    with the helpers, constants and shared pairs they need above them and
+    a table of the pairs at the end, so the text is one loadable chunk
+    and one golden file
 --]]
 
 function Generated.render(file: File): string
@@ -100,9 +103,11 @@ function Generated.render(file: File): string
 		local read: Block = Blocks.new("read", event.name)
 		local names: { string }, values: { string } = {}, {}
 
-		-- A message writes through the chunk's own allocator and slot store, named as a module names them
+		-- A message writes through the chunk's own calls, named as a module names them
+		write.first = "beginReliable"
 		write.allocate = "allocateReliable"
 		write.slot = "slotReliable"
+		write.refuse = "refuseReliable"
 
 		if event.data then
 			names, values = emitter:block(event.data, write, read)
@@ -129,13 +134,17 @@ function Generated.render(file: File): string
 
 	table.sort(helpers)
 
-	-- The chunk takes its slot store only when something stores a slot
+	-- The chunk takes only the calls its writers make, in the order load hands them
 	local body: string = table.concat(functions, "")
-	table.insert(
-		parts,
-		body:find("slotReliable", 1, true) and "local allocateReliable, slotReliable = ...\n"
-			or "local allocateReliable = ...\n"
-	)
+	local taken: { string } = {}
+
+	for _, name: string in CALLS do
+		if body:find(name, 1, true) then
+			table.insert(taken, name)
+		end
+	end
+
+	table.insert(parts, `local {table.concat(taken, ", ")} = ...\n`)
 
 	for _, name: string in helpers do
 		table.insert(parts, Helpers[name])
@@ -152,9 +161,12 @@ function Generated.render(file: File): string
 end
 
 --[[
-    Loads a rendered chunk with an allocator that grows a buffer as the
-    writers ask, a slot store filling a side array, and a packet function
-    that hands back exactly what was written since the last call
+    Loads a rendered chunk with the calls a writer makes: an allocator
+    that grows a buffer as the writers ask, a begin that records where a
+    message starts, a slot store filling a side array and a refuse that
+    returns to the start before it raises, as the runtime's do; and a
+    packet function that hands back exactly what was written since the
+    last call
 --]]
 
 function Generated.load(name: string, text: string): (any, () -> (buffer, { any }))
@@ -162,6 +174,7 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 	local cursor: number = 0
 	local side: { any } = {}
 	local sideCursor: number = 1
+	local committed: number, sideCommitted: number = 0, 1 -- Where the message being written began
 
 	local function allocate(bytes: number): (number, buffer)
 		if cursor + bytes > buffer.len(out) then
@@ -176,14 +189,24 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 		return offset, out
 	end
 
+	local function begin(bytes: number): (number, buffer)
+		committed, sideCommitted = cursor, sideCursor
+		return allocate(bytes)
+	end
+
 	local function slot(value: any)
 		side[sideCursor] = value
 		sideCursor += 1
 	end
 
+	local function refuse(message: string)
+		cursor, sideCursor = committed, sideCommitted
+		error(message, 0)
+	end
+
 	local function packet(): (buffer, { any })
 		local exact: buffer = buffer.create(cursor)
-		local slots: { any } = side
+		local slots: { any } = table.move(side, 1, sideCursor - 1, 1, {})
 
 		buffer.copy(exact, 0, out, 0, cursor)
 		cursor = 0
@@ -193,8 +216,21 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 		return exact, slots
 	end
 
+	-- The chunk's first line names the calls it takes, so it is given those and no other
+	local given: { any } = {}
+	local calls: { [string]: any } = {
+		beginReliable = begin,
+		allocateReliable = allocate,
+		slotReliable = slot,
+		refuseReliable = refuse
+	}
+
+	for taken: string in (text:match("^local (.-) = %.%.%.") :: string):gmatch("[%w_]+") do
+		table.insert(given, calls[taken])
+	end
+
 	local chunk = luau.load(text, { debugName = name, environment = Environment })
-	return chunk(allocate, slot), packet
+	return chunk(table.unpack(given)), packet
 end
 
 -- A path under a service, growing by one name per index, so require can tell one library's from another's

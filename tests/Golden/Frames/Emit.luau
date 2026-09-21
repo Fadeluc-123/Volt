@@ -1,4 +1,4 @@
-local allocateReliable = ...
+local beginReliable, refuseReliable = ...
 
 -- The 24 rotations whose axes lie along the world axes, in the one order both sides share
 local ALIGNED: { CFrame } = {}
@@ -56,67 +56,67 @@ local function cframe(x: number, y: number, z: number, rx: number, ry: number, r
 end
 
 local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
-	local offset: number, out: buffer = allocateReliable(58)
+	local offset: number, out: buffer = beginReliable(58)
 
 	if typeof(a) ~= "CFrame" then
-		error("Frames.a: expected CFrame")
+		refuseReliable("Frames.a: expected CFrame")
 	end
 
 	if a.X ~= a.X then
-		error("Frames.a.X: expected f32")
+		refuseReliable("Frames.a.X: expected f32")
 	end
 
 	buffer.writef32(out, offset, a.X)
 
 	if a.Y ~= a.Y then
-		error("Frames.a.Y: expected f32")
+		refuseReliable("Frames.a.Y: expected f32")
 	end
 
 	buffer.writef32(out, offset + 4, a.Y)
 
 	if a.Z ~= a.Z then
-		error("Frames.a.Z: expected f32")
+		refuseReliable("Frames.a.Z: expected f32")
 	end
 
 	buffer.writef32(out, offset + 8, a.Z)
 	local aAxis: Vector3, aAngle: number = axisAngle(a)
 
 	if aAxis.X * aAngle ~= aAxis.X * aAngle then
-		error("Frames.a.Rotation.X: expected f32")
+		refuseReliable("Frames.a.Rotation.X: expected f32")
 	end
 
 	buffer.writef32(out, offset + 12, aAxis.X * aAngle)
 
 	if aAxis.Y * aAngle ~= aAxis.Y * aAngle then
-		error("Frames.a.Rotation.Y: expected f32")
+		refuseReliable("Frames.a.Rotation.Y: expected f32")
 	end
 
 	buffer.writef32(out, offset + 16, aAxis.Y * aAngle)
 
 	if aAxis.Z * aAngle ~= aAxis.Z * aAngle then
-		error("Frames.a.Rotation.Z: expected f32")
+		refuseReliable("Frames.a.Rotation.Z: expected f32")
 	end
 
 	buffer.writef32(out, offset + 20, aAxis.Z * aAngle)
 
 	if typeof(b) ~= "CFrame" then
-		error("Frames.b: expected CFrame<f32, i16>")
+		refuseReliable("Frames.b: expected CFrame<f32, i16>")
 	end
 
 	if b.X ~= b.X then
-		error("Frames.b.X: expected f32")
+		refuseReliable("Frames.b.X: expected f32")
 	end
 
 	buffer.writef32(out, offset + 24, b.X)
 
 	if b.Y ~= b.Y then
-		error("Frames.b.Y: expected f32")
+		refuseReliable("Frames.b.Y: expected f32")
 	end
 
 	buffer.writef32(out, offset + 28, b.Y)
 
 	if b.Z ~= b.Z then
-		error("Frames.b.Z: expected f32")
+		refuseReliable("Frames.b.Z: expected f32")
 	end
 
 	buffer.writef32(out, offset + 32, b.Z)
@@ -126,72 +126,72 @@ local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
 	buffer.writei16(out, offset + 40, math.round(-32768 + (bAxis.Z * bAngle + math.pi) / (2 * math.pi) * 65535))
 
 	if typeof(c) ~= "CFrame" then
-		error("Frames.c: expected AlignedCFrame<q16(-512..512)>")
+		refuseReliable("Frames.c: expected AlignedCFrame<q16(-512..512)>")
 	end
 
 	local cRotation: number? = alignedIndex(c)
 
 	if not cRotation then
-		error("Frames.c: expected an axis-aligned rotation")
+		refuseReliable("Frames.c: expected an axis-aligned rotation")
 	end
 
 	buffer.writeu8(out, offset + 42, cRotation)
 
 	if c.X ~= c.X then
-		error("Frames.c.X: expected q16(-512..512)")
+		refuseReliable("Frames.c.X: expected q16(-512..512)")
 	end
 
 	buffer.writeu16(out, offset + 43, math.round((math.clamp(c.X, -512, 512) + 512) / 1024 * 65535))
 
 	if c.Y ~= c.Y then
-		error("Frames.c.Y: expected q16(-512..512)")
+		refuseReliable("Frames.c.Y: expected q16(-512..512)")
 	end
 
 	buffer.writeu16(out, offset + 45, math.round((math.clamp(c.Y, -512, 512) + 512) / 1024 * 65535))
 
 	if c.Z ~= c.Z then
-		error("Frames.c.Z: expected q16(-512..512)")
+		refuseReliable("Frames.c.Z: expected q16(-512..512)")
 	end
 
 	buffer.writeu16(out, offset + 47, math.round((math.clamp(c.Z, -512, 512) + 512) / 1024 * 65535))
 
 	if typeof(d) ~= "CFrame" then
-		error("Frames.d: expected CFrame<i16(-1000..1000), q8(-3.2..3.2)>")
+		refuseReliable("Frames.d: expected CFrame<i16(-1000..1000), q8(-3.2..3.2)>")
 	end
 
 	if d.X % 1 ~= 0 or d.X < -1000 or d.X > 1000 then
-		error("Frames.d.X: expected i16(-1000..1000)")
+		refuseReliable("Frames.d.X: expected i16(-1000..1000)")
 	end
 
 	buffer.writei16(out, offset + 49, d.X)
 
 	if d.Y % 1 ~= 0 or d.Y < -1000 or d.Y > 1000 then
-		error("Frames.d.Y: expected i16(-1000..1000)")
+		refuseReliable("Frames.d.Y: expected i16(-1000..1000)")
 	end
 
 	buffer.writei16(out, offset + 51, d.Y)
 
 	if d.Z % 1 ~= 0 or d.Z < -1000 or d.Z > 1000 then
-		error("Frames.d.Z: expected i16(-1000..1000)")
+		refuseReliable("Frames.d.Z: expected i16(-1000..1000)")
 	end
 
 	buffer.writei16(out, offset + 53, d.Z)
 	local dAxis: Vector3, dAngle: number = axisAngle(d)
 
 	if dAxis.X * dAngle ~= dAxis.X * dAngle then
-		error("Frames.d.Rotation.X: expected q8(-3.2..3.2)")
+		refuseReliable("Frames.d.Rotation.X: expected q8(-3.2..3.2)")
 	end
 
 	buffer.writeu8(out, offset + 55, math.round((math.clamp(dAxis.X * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
 
 	if dAxis.Y * dAngle ~= dAxis.Y * dAngle then
-		error("Frames.d.Rotation.Y: expected q8(-3.2..3.2)")
+		refuseReliable("Frames.d.Rotation.Y: expected q8(-3.2..3.2)")
 	end
 
 	buffer.writeu8(out, offset + 56, math.round((math.clamp(dAxis.Y * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
 
 	if dAxis.Z * dAngle ~= dAxis.Z * dAngle then
-		error("Frames.d.Rotation.Z: expected q8(-3.2..3.2)")
+		refuseReliable("Frames.d.Rotation.Z: expected q8(-3.2..3.2)")
 	end
 
 	buffer.writeu8(out, offset + 57, math.round((math.clamp(dAxis.Z * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))

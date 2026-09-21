@@ -1,25 +1,25 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), value: any)
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
 	if typeof(value) ~= "table" then
-		error("Stack: expected table")
+		refuse("Stack: expected table")
 	end
 
 	if typeof(value.item) ~= "string" then
-		error("Stack.item: expected string")
+		refuse("Stack.item: expected string")
 	end
 
 	if #value.item < 1 or #value.item > 8 then
-		error("Stack.item: length out of range")
+		refuse("Stack.item: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 1, #value.item - 1)
 
 	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
-		error("Stack.quantity: expected u16(1..999)")
+		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
 	buffer.writeu16(out, offset + 2, value.quantity)
@@ -77,33 +77,33 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 end
 
 local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
-	local offset: number, out: buffer = allocateReliable(6)
+	local offset: number, out: buffer = beginReliable(6)
 	local flags: number = 0
 
 	if typeof(a) ~= "table" then
-		error("Lists.a: expected table")
+		refuseReliable("Lists.a: expected table")
 	end
 
 	if #a > 8 then
-		error("Lists.a: length out of range")
+		refuseReliable("Lists.a: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 1, #a)
 
 	if typeof(b) ~= "table" then
-		error("Lists.b: expected table")
+		refuseReliable("Lists.b: expected table")
 	end
 
 	if #b ~= 2 then
-		error("Lists.b: expected 2 entries")
+		refuseReliable("Lists.b: expected 2 entries")
 	end
 
 	if typeof(c) ~= "table" then
-		error("Lists.c: expected table")
+		refuseReliable("Lists.c: expected table")
 	end
 
 	if #c ~= 8 then
-		error("Lists.c: expected 8 entries")
+		refuseReliable("Lists.c: expected 8 entries")
 	end
 
 	for index_3 = 1, 8 do
@@ -111,31 +111,31 @@ local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
 	end
 
 	if typeof(d) ~= "table" then
-		error("Lists.d: expected table")
+		refuseReliable("Lists.d: expected table")
 	end
 
 	if #d > 20 then
-		error("Lists.d: length out of range")
+		refuseReliable("Lists.d: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 2, #d)
 
 	if typeof(e) ~= "table" then
-		error("Lists.e: expected table")
+		refuseReliable("Lists.e: expected table")
 	end
 
 	if #e > 2 then
-		error("Lists.e: length out of range")
+		refuseReliable("Lists.e: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 3, #e)
 
 	if typeof(f) ~= "table" then
-		error("Lists.f: expected table")
+		refuseReliable("Lists.f: expected table")
 	end
 
 	if #f > 65535 then
-		error("Lists.f: length out of range")
+		refuseReliable("Lists.f: length out of range")
 	end
 
 	buffer.writeu16(out, offset + 4, #f)
@@ -144,7 +144,7 @@ local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
 
 	for index = 1, #a do
 		if typeof(a[index]) ~= "number" or a[index] % 1 ~= 0 or a[index] < 0 or a[index] > 255 then
-			error("Lists.a[]: expected u8")
+			refuseReliable("Lists.a[]: expected u8")
 		end
 
 		buffer.writeu8(aOut, aOffset, a[index])
@@ -155,11 +155,11 @@ local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
 		if typeof(b[index_2]) ~= "string" then
-			error("Lists.b[]: expected string")
+			refuseReliable("Lists.b[]: expected string")
 		end
 
 		if #b[index_2] > 4 then
-			error("Lists.b[]: length out of range")
+			refuseReliable("Lists.b[]: length out of range")
 		end
 
 		buffer.writeu8(out_2, offset_2, #b[index_2])
@@ -180,14 +180,14 @@ local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
 	end
 
 	for index_5 = 1, #e do
-		writeStack(allocateReliable, slotReliable, e[index_5])
+		writeStack(allocateReliable, slotReliable, refuseReliable, e[index_5])
 	end
 
 	local fOffset: number, fOut: buffer = allocateReliable(#f)
 
 	for index_6 = 1, #f do
 		if typeof(f[index_6]) ~= "number" or f[index_6] % 1 ~= 0 or f[index_6] < 0 or f[index_6] > 255 then
-			error("Lists.f[]: expected u8")
+			refuseReliable("Lists.f[]: expected u8")
 		end
 
 		buffer.writeu8(fOut, fOffset, f[index_6])
