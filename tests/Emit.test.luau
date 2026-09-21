@@ -1,276 +1,148 @@
 --[[
-    Proves the emitter's scalar output: every event in the scalar schema
-    renders to the golden file byte for byte, every value written reads
-    back the same at its bounds and at random, every writer refuses a
-    bad value and every reader refuses a bad byte
+    Proves the emitter's output: every event of every test schema renders
+    to its golden file byte for byte, every value written reads back the
+    same at its bounds and at random, every writer refuses a bad value
+    and every reader refuses a bad byte or an empty slot
 --]]
 
 --!strict
 local fs = require("@lune/fs")
-local luau = require("@lune/luau")
 local process = require("@lune/process")
 
 local Suite = require("./Suite")
-local Analyse = require("@volt/Compiler/Analyse")
-local Blocks = require("@volt/Compiler/Blocks")
-local Diagnostics = require("@volt/Compiler/Diagnostics")
-local Emit = require("@volt/Compiler/Emit")
-local Lexer = require("@volt/Compiler/Lexer")
-local Parser = require("@volt/Compiler/Parser")
-local Resolve = require("@volt/Compiler/Resolve")
-local Source = require("@volt/Compiler/Source")
+local Environment = require("./Environment")
+local Generated = require("./Generated")
+local Values = require("./Values")
+local Schema = require("@volt/Compiler/Config/Types/Schema")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
 
-type Block = Blocks.Block
-type Event = Parser.Event
-type Field = Parser.Field
-type Type = Parser.Type
+type Event = Schema.Event
+type Field = Schema.Field
+type File = Schema.File
 
-local SCHEMA: string = "tests/Schemas/Scalars.volt"
-local GOLDEN_DIRECTORY: string = "tests/Golden/Scalars"
-local GOLDEN: string = `{GOLDEN_DIRECTORY}/Emit.luau`
+local CFrame = Environment.CFrame
+local Enum = Environment.Enum
+local Instance = Environment.Instance
+local Vector3 = Environment.Vector3
+
+local SCHEMAS: { string } = {
+	"Numbers",
+	"Scalars",
+	"Roblox",
+	"Frames",
+	"Objects",
+	"Records",
+	"Optionals",
+	"Enums",
+	"Unions",
+	"Lists",
+	"Tables",
+}
 local ROUNDS: number = 200 -- Random values written and read back per event
-local FREE_LENGTH: number = 100 -- As long as an unbounded string or buffer gets in a test
-local FLOAT_REACH: { [string]: number } = { f16 = 65504, f32 = 2 ^ 20, f64 = 2 ^ 40 } -- How far a random float goes each way
-local LEVELS: { [string]: number } = { q8 = 255, q16 = 65535 }
 
---[[
-    Runs a schema text through every stage before the emitter, refusing
-    one that does not compile clean
---]]
+local valueOf = Values.valueOf
+local near = Values.near
 
-local function compile(text: string): Parser.File
-	local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(Source.new("Scalars.volt", text))
-	local file: Parser.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
+-- Every writer refusal per schema: the event, the parameter, the bad value and the message
+local REFUSALS: { [string]: { { any } } } = {
+	Numbers = {
+		{ "Integers", 1, 0.5, "Integers.a: expected u8" },
+		{ "Integers", 2, 1000, "Integers.b: expected u16(1..999)" },
+		{ "Integers", 6, 2 ^ 53 + 2, "Integers.f: expected u64" },
+		{ "Floats", 1, 0 / 0, "Floats.a: expected f16" },
+		{ "Floats", 3, 2, "Floats.c: expected f64(0..1)" },
+	},
 
-	Resolve.file(file, diagnostics)
-	Analyse.file(file, diagnostics)
-	assert(diagnostics.errors == 0, diagnostics:render())
+	Scalars = {
+		{ "Flags", 1, 1, "Flags.a: expected boolean" },
+		{ "Bytes", 1, 5, "Bytes.name: expected string" },
+		{ "Bytes", 1, string.rep("x", 33), "Bytes.name: length out of range" },
+		{ "Bytes", 2, "abc", "Bytes.tag: expected 4 bytes" },
+		{ "Bytes", 3, "raw", "Bytes.raw: expected buffer" },
+	},
 
-	return file
-end
+	Roblox = {
+		{ "Vectors", 1, 5, "Vectors.a: expected Vector3" },
+		{ "Vectors", 4, Vector3.new(0.5, 0, 0), "Vectors.d.X: expected u8" },
+		{ "Colours", 2, 1004, "Colours.b: expected BrickColor" },
+		{ "Colours", 3, 5, "Colours.c: expected DateTime" },
+	},
 
-local function events(file: Parser.File): { Event }
-	local list: { Event } = {}
-	for _, declaration in file.declarations do
-		if declaration.kind == "event" then
-			table.insert(list, declaration)
-		end
-	end
-	return list
-end
+	Frames = {
+		{ "Frames", 3, CFrame.fromAxisAngle(Vector3.yAxis, 1), "Frames.c: expected an axis-aligned rotation" },
+	},
 
--- The fields a fire takes: a pack's parameters, or the one value
-local function parameters(event: Event): { Field }
-	local data = event.data
+	Objects = {
+		{ "Objects", 1, nil, "Objects.a: expected Instance" },
+		{ "Objects", 2, Instance.new("Folder"), "Objects.b: expected Instance(BasePart)" },
+		{ "Items", 1, Enum.KeyCode.A, "Items.a: expected Enum.Material" },
+		{ "Items", 2, "Plastic", "Items.b: expected EnumItem" },
+	},
 
-	if not data then
-		return {}
-	elseif data.kind == "pack" then
-		return data.parameters
-	end
+	Records = {
+		{ "Records", 1, 5, "Records.a: expected table" },
+		{ "Records", 1, { x = 1, y = "ab", z = 1 }, "Records.a.z: expected boolean" },
+	},
 
-	return { { name = "value", type = data, start = 0, finish = 0 } }
-end
+	Optionals = {
+		{ "Optionals", 2, 5, "Optionals.b: expected string" },
+		{ "Nested", 1, { grid = { { 1, 2 }, { 1 } } }, "Nested.grid[]: expected 2 entries" },
+	},
 
--- The primitive behind a type, through named types
-local function primitive(node: Type): any
-	while node.kind == "reference" and node.target do
-		node = node.target.type
-	end
-	return node
-end
+	Enums = {
+		{ "Enums", 1, "Green", "Team: expected enum { Red, Blue }" },
+		{ "Enums", 3, { kind = "Jump" }, `Enums.c: expected enum "kind" \{ Move` },
+	},
 
--- The Luau type a value of a scalar type has
-local function luauType(node: Type): string
-	local name: string = primitive(node).name
-	local direct: boolean = name == "boolean" or name == "string" or name == "buffer"
+	Unions = {
+		{ "Unions", 1, {}, "Unions.a: expected u8 | string(0..4) | boolean" },
+	},
 
-	return direct and name or "number"
-end
+	Lists = {
+		{ "Lists", 1, table.create(9, 1), "Lists.a: length out of range" },
+		{ "Lists", 2, { "ab" }, "Lists.b: expected 2 entries" },
+		{ "Lists", 3, { true }, "Lists.c: expected 8 entries" },
+	},
 
---[[
-    Renders every event of a file as a write function over an allocator
-    and a read function over a bare buffer, the helpers they need above
-    them and a table of the pairs at the end, so the text is one loadable
-    chunk and one golden file
---]]
-
-local function render(file: Parser.File): string
-	local emitter = Emit.new(file.options)
-	local parts: { string } = { "local allocate = ...\n" }
-	local exports: { string } = {}
-	local functions: { string } = {}
-
-	for _, event: Event in events(file) do
-		local write: Block = Blocks.new("write", event.name)
-		local read: Block = Blocks.new("read", event.name)
-		local names: { string }, values: { string } = {}, {}
-
-		if event.data then
-			names, values = emitter:block(event.data, write, read)
-		end
-
-		-- The fire takes each value typed as Luau sees it; a reader with nothing to read names no packet
-		local typed: { string } = {}
-		for index: number, field: Field in parameters(event) do
-			typed[index] = `{names[index]}: {luauType(field.type)}`
-		end
-
-		local body: string = read:done()
-		local arguments: string = body == "" and "_, cursor: number" or "packet: buffer, cursor: number, length: number"
-		local results: string = #values == 0 and "" or `, {table.concat(values, ", ")}`
-
-		table.insert(functions, `local function write{event.name}({table.concat(typed, ", ")})\n{write:done()}end\n`)
-		table.insert(functions, `local function read{event.name}({arguments})\n{body}\treturn cursor{results}\nend\n`)
-		table.insert(exports, `\t{event.name} = \{ write = write{event.name}, read = read{event.name} },`)
-	end
-
-	local helpers: { string } = {}
-	for name: string in emitter.helpers do
-		table.insert(helpers, name)
-	end
-	table.sort(helpers)
-
-	for _, name: string in helpers do
-		table.insert(parts, Emit.HELPERS[name])
-	end
-
-	table.move(functions, 1, #functions, #parts + 1, parts)
-	table.insert(parts, `return \{\n{table.concat(exports, "\n")}\n}\n`)
-
-	return table.concat(parts, "\n")
-end
-
---[[
-    Loads a rendered chunk with an allocator that grows a buffer as the
-    writers ask, and a packet function that hands back exactly what was
-    written since the last call
---]]
-
-local function load(text: string): (any, () -> buffer)
-	local out: buffer = buffer.create(64)
-	local cursor: number = 0
-
-	local function allocate(bytes: number): (number, buffer)
-		if cursor + bytes > buffer.len(out) then
-			local grown: buffer = buffer.create(math.max(buffer.len(out) * 2, cursor + bytes))
-			buffer.copy(grown, 0, out, 0, cursor)
-			out = grown
-		end
-
-		local offset: number = cursor
-		cursor += bytes
-
-		return offset, out
-	end
-
-	local function packet(): buffer
-		local exact: buffer = buffer.create(cursor)
-		buffer.copy(exact, 0, out, 0, cursor)
-		cursor = 0
-		return exact
-	end
-
-	return luau.load(text, { debugName = "Scalars" })(allocate), packet
-end
-
--- The least and most a number of a type may be
-local function bounds(node: any): (number, number)
-	local reach: number = FLOAT_REACH[node.name] or 0
-	local natural: { number } = Analyse.BOUNDS[node.name] or { -reach, reach }
-	local range = node.range
-
-	return range and range.min or natural[1], range and range.max or natural[2]
-end
-
-local function randomBytes(count: number): string
-	local bytes: { string } = table.create(count)
-	for index: number = 1, count do
-		bytes[index] = string.char(math.random(0, 255))
-	end
-	return table.concat(bytes)
-end
-
---[[
-    A value of a type: its least or most when an end is asked for, or
-    one at random within its bounds
---]]
-
-local function valueOf(node: Type, ends: string?): any
-	local shape: any = primitive(node)
-	local name: string = shape.name
-
-	if name == "boolean" then
-		if ends then
-			return ends == "max"
-		end
-
-		return math.random() < 0.5
-	elseif name == "string" or name == "buffer" then
-		local _, low: number, high: number = Analyse.prefix(shape.range)
-		high = math.min(high, FREE_LENGTH)
-
-		local count: number = ends == "min" and low or ends == "max" and high or math.random(low, high)
-		local text: string = randomBytes(count)
-
-		return name == "buffer" and buffer.fromstring(text) or text
-	end
-
-	local low: number, high: number = bounds(shape)
-
-	if ends then
-		return ends == "min" and low or high
-	elseif Analyse.BOUNDS[name] then
-		return low + math.floor(math.random() * (high - low))
-	end
-
-	return low + math.random() * (high - low)
-end
-
---[[
-    Whether a value read back matches the one written: exactly for most
-    types, and within the precision the wire has for halves, singles
-    and quantised floats
---]]
-
-local function near(node: Type, expected: any, actual: any): boolean
-	local shape: any = primitive(node)
-	local name: string = shape.name
-
-	if name == "f16" then
-		return math.abs(expected - actual) <= math.abs(expected) / 1024 + 2 ^ -24
-	elseif name == "f32" then
-		return math.abs(expected - actual) <= math.abs(expected) / 2 ^ 23
-	elseif LEVELS[name] then
-		local low: number, high: number = bounds(shape)
-		return math.abs(expected - actual) <= (high - low) / LEVELS[name] / 2 + 1e-9
-	elseif name == "buffer" then
-		return buffer.tostring(expected) == buffer.tostring(actual)
-	end
-
-	return expected == actual
-end
+	Tables = {
+		{ "Tables", 1, "x", "Tables.a: expected table" },
+		{ "Tables", 4, { [1] = true }, "Tables.d: expected 3 entries" },
+	},
+}
 
 describe("Emit", function ()
-	local file: Parser.File = compile(fs.readFile(SCHEMA))
-	local text: string = render(file)
-	local byName: { [string]: Event } = {}
+	local files: { [string]: File } = {}
+	local texts: { [string]: string } = {}
 
-	for _, event: Event in events(file) do
-		byName[event.name] = event
+	for _, name: string in SCHEMAS do
+		files[name] = Generated.compile(name, fs.readFile(`tests/Schemas/{name}.volt`))
+		texts[name] = Generated.render(files[name])
+	end
+
+	local function byName(schema: string, name: string): Event
+		for _, event: Event in Generated.events(files[schema]) do
+			if event.name == name then
+				return event
+			end
+		end
+
+		error(`no event {name} in {schema}`)
 	end
 
 	-- Every parameter of an event at its least, as a list the write takes
-	local function least(name: string): { any }
+	local function least(schema: string, name: string): { any }
 		local written: { any } = {}
-		for index: number, field: Field in parameters(byName[name]) do
+		for index: number, field: Field in Generated.parameters(byName(schema, name)) do
 			written[index] = valueOf(field.type, "min")
 		end
 		return written
+	end
+
+	local function fire(module: any, schema: string, name: string, written: { any }): (boolean, any)
+		return pcall(module[name].write, table.unpack(written, 1, #Generated.parameters(byName(schema, name))))
 	end
 
 	local function failure(ok: boolean, message: any, expected: string)
@@ -278,152 +150,243 @@ describe("Emit", function ()
 		expect(tostring(message):find(expected, 1, true) ~= nil).is(true)
 	end
 
-	test("renders the scalar schema as the golden file", function ()
-		if table.find(process.args, "--update") then
-			if not fs.isDir(GOLDEN_DIRECTORY) then
-				fs.writeDir(GOLDEN_DIRECTORY)
-			end
+	for _, schema: string in SCHEMAS do
+		describe(schema, function ()
+			local directory: string = `tests/Golden/{schema}`
+			local golden: string = `{directory}/Emit.luau`
+			local text: string = texts[schema]
 
-			fs.writeFile(GOLDEN, text)
-		end
-
-		expect(fs.isFile(GOLDEN) and fs.readFile(GOLDEN) or "").is(text)
-	end)
-
-	describe("round trips", function ()
-		local module: any, packet: () -> buffer = load(text)
-
-		for _, event: Event in events(file) do
-			test(event.name, function ()
-				local fields: { Field } = parameters(event)
-
-				for round: number = 0, ROUNDS do
-					local ends: string? = round == 0 and "min" or round == 1 and "max" or nil
-					local written: { any } = {}
-
-					for index: number, field: Field in fields do
-						written[index] = valueOf(field.type, ends)
+			test("renders as the golden file", function ()
+				if table.find(process.args, "--update") then
+					if not fs.isDir(directory) then
+						fs.writeDir(directory)
 					end
 
-					module[event.name].write(table.unpack(written, 1, #fields))
+					fs.writeFile(golden, text)
+				end
 
-					local bytes: buffer = packet()
-					local read: { any } = { module[event.name].read(bytes, 0, buffer.len(bytes)) }
+				expect(fs.isFile(golden) and fs.readFile(golden) or "").is(text)
+			end)
 
-					expect(read[1]).is(buffer.len(bytes))
+			describe("round trips", function ()
+				local module: any, packet: () -> (buffer, { any }) = Generated.load(schema, text)
 
-					for index: number, field: Field in fields do
-						local message: string =
-							`{event.name}.{field.name}: wrote {written[index]}, read {read[index + 1]}`
-						assert(near(field.type, written[index], read[index + 1]), message)
-					end
+				for _, event: Event in Generated.events(files[schema]) do
+					test(event.name, function ()
+						local fields: { Field } = Generated.parameters(event)
+
+						for round: number = 0, ROUNDS do
+							local ends: string? = round == 0 and "min" or round == 1 and "max" or nil
+							local written: { any } = {}
+
+							for index: number, field: Field in fields do
+								written[index] = valueOf(field.type, ends)
+							end
+
+							module[event.name].write(table.unpack(written, 1, #fields))
+
+							local bytes: buffer, side: { any } = packet()
+							local read: { any } = { module[event.name].read(bytes, 0, side, 1, buffer.len(bytes)) }
+
+							expect(read[1]).is(buffer.len(bytes))
+							expect(read[2]).is(#side + 1)
+
+							for index: number, field: Field in fields do
+								local message: string =
+									`{event.name}.{field.name}: wrote {written[index]}, read {read[index + 2]}`
+								assert(near(field.type, written[index], read[index + 2]), message)
+							end
+						end
+					end)
 				end
 			end)
-		end
-	end)
 
-	describe("writers refuse", function ()
-		local module: any = load(text)
+			describe("writers refuse", function ()
+				local module: any = Generated.load(schema, text)
 
-		local REFUSALS: { { any } } = {
-			{ "Integers", 1, 0.5, "Integers.a: expected u8" },
-			{ "Integers", 2, 1000, "Integers.b: expected u16(1..999)" },
-			{ "Integers", 6, 2 ^ 53 + 2, "Integers.f: expected u64" },
-			{ "Floats", 1, 0 / 0, "Floats.a: expected f16" },
-			{ "Floats", 3, 2, "Floats.c: expected f64(0..1)" },
-			{ "Flags", 1, 1, "Flags.a: expected boolean" },
-			{ "Bytes", 1, 5, "Bytes.name: expected string" },
-			{ "Bytes", 1, string.rep("x", 33), "Bytes.name: length out of range" },
-			{ "Bytes", 2, "abc", "Bytes.tag: expected 4 bytes" },
-			{ "Bytes", 3, "raw", "Bytes.raw: expected buffer" },
-		}
+				for _, row: { any } in REFUSALS[schema] do
+					test(row[4], function ()
+						local written: { any } = least(schema, row[1])
+						written[row[2]] = row[3]
 
-		for _, row: { any } in REFUSALS do
-			test(row[4], function ()
-				local written: { any } = least(row[1])
-				written[row[2]] = row[3]
-
-				local ok: boolean, message: any = pcall(module[row[1]].write, table.unpack(written, 1, #written))
-				failure(ok, message, row[4])
+						local ok: boolean, message: any = fire(module, schema, row[1], written)
+						failure(ok, message, row[4])
+					end)
+				end
 			end)
-		end
-	end)
+		end)
+	end
 
 	describe("with write validation off", function ()
-		local loose: string = render(compile(`option writeValidation = false\n{fs.readFile(SCHEMA)}`))
-		local module: any = load(loose)
+		local loose: { [string]: any } = {}
+		local checks: { [string]: number } = {}
+
+		-- How many writers in a chunk still refuse a value by its Luau type; readers and union dispatch may ask
+		local function typeChecks(text: string): number
+			local found: number = 0
+			for body: string in text:gmatch("local function write.-\nend\n") do
+				found += body:find('typeof%b() ~= "') and 1 or 0
+			end
+			return found
+		end
+
+		for _, schema: string in SCHEMAS do
+			local source: string = `option writeValidation = false\n{fs.readFile(`tests/Schemas/{schema}.volt`)}`
+			local text: string = Generated.render(Generated.compile(schema, source))
+
+			loose[schema] = Generated.load(schema, text)
+			checks[schema] = typeChecks(text)
+		end
 
 		test("no writer checks a value's type or range", function ()
-			local written: { any } = least("Integers")
+			local written: { any } = least("Numbers", "Integers")
 			written[1] = 0.5
 			written[2] = 1000
 
-			expect((loose:find("typeof", 1, true))).is(nil)
-			expect((pcall(module.Integers.write, table.unpack(written, 1, #written)))).is(true)
+			for _, schema: string in SCHEMAS do
+				expect(checks[schema]).is(0)
+			end
+
+			expect((fire(loose.Numbers, "Numbers", "Integers", written))).is(true)
 		end)
 
 		test("a length outside its bounds is still refused", function ()
-			local written: { any } = least("Bytes")
+			local written: { any } = least("Scalars", "Bytes")
 			written[1] = string.rep("x", 33)
 
-			local ok: boolean, message: any = pcall(module.Bytes.write, table.unpack(written, 1, #written))
+			local ok: boolean, message: any = fire(loose.Scalars, "Scalars", "Bytes", written)
 			failure(ok, message, "Bytes.name: length out of range")
+		end)
+
+		test("a nil instance is still refused", function ()
+			local written: { any } = least("Objects", "Objects")
+			written[1] = nil
+
+			local ok: boolean, message: any = fire(loose.Objects, "Objects", "Objects", written)
+			failure(ok, message, "Objects.a: expected Instance")
+		end)
+
+		test("a value no variant or member can carry is still refused", function ()
+			local written: { any } = least("Enums", "Enums")
+			written[1] = "Green"
+
+			local ok: boolean, message: any = fire(loose.Enums, "Enums", "Enums", written)
+			failure(ok, message, "Team: expected enum { Red, Blue }")
+
+			written = least("Unions", "Unions")
+			written[1] = {}
+			ok, message = fire(loose.Unions, "Unions", "Unions", written)
+			failure(ok, message, "Unions.a: expected u8 | string(0..4) | boolean")
 		end)
 	end)
 
 	describe("readers refuse", function ()
-		local module: any, packet: () -> buffer = load(text)
+		local modules: { [string]: any } = {}
+		local packets: { [string]: () -> (buffer, { any }) } = {}
 
-		-- The packet of an event fired with every parameter at its least
-		local function packetOf(name: string): buffer
-			local written: { any } = least(name)
-			module[name].write(table.unpack(written, 1, #parameters(byName[name])))
-			return packet()
+		for _, schema: string in SCHEMAS do
+			modules[schema], packets[schema] = Generated.load(schema, texts[schema])
 		end
 
-		local function refused(name: string, bytes: buffer, length: number, expected: string)
-			local ok: boolean, message: any = pcall(module[name].read, bytes, 0, length)
+		-- The packet and side array of an event fired with every parameter at its least, or as given
+		local function packetOf(schema: string, name: string, written: { any }?): (buffer, { any })
+			assert(fire(modules[schema], schema, name, written or least(schema, name)))
+			return packets[schema]()
+		end
+
+		local function refused(
+			schema: string,
+			name: string,
+			bytes: buffer,
+			side: { any },
+			length: number,
+			expected: string
+		)
+			local ok: boolean, message: any = pcall(modules[schema][name].read, bytes, 0, side, 1, length)
 			failure(ok, message, expected)
 		end
 
-		test("a block past the packet's end", function ()
-			refused("Value", buffer.create(1), 1, "Value: truncated")
-		end)
+		-- Every byte-level refusal: the schema, the event, the offset, the bytes to write there and the message
+		local BYTES: { { any } } = {
+			{ "Numbers", "Integers", 1, "u16", 1000, "Integers.b: out of range" },
+			{ "Numbers", "Floats", 2, "f32", 0 / 0, "Floats.b: out of range" },
+			{ "Numbers", "Floats", 6, "f64", 2, "Floats.c: out of range" },
+			{ "Scalars", "Bytes", 0, "u8", 40, "Bytes.name: length out of range" },
+			{ "Roblox", "Colours", 3, "u16", 9999, "Colours.b: out of range" },
+			{ "Roblox", "Colours", 5, "f64", 0 / 0, "Colours.c.UnixTimestamp: out of range" },
+			{ "Frames", "Frames", 42, "u8", 24, "Frames.c: out of range" },
+			{ "Objects", "Items", 0, "u16", 65535, "Items.a: out of range" },
+			{ "Objects", "Items", 3, "u16", 65535, "Items.b: out of range" },
+			{ "Enums", "Enums", 0, "u8", 3, "Enums.c: out of range" },
+			{ "Enums", "Enums", 0, "u8", 12, "Enums.d: out of range" },
+			{ "Unions", "Unions", 0, "u8", 3, "Unions.a: out of range" },
+			{ "Lists", "Lists", 1, "u8", 9, "Lists.a: length out of range" },
+			{ "Lists", "Lists", 2, "u8", 21, "Lists.d: length out of range" },
+		}
 
-		test("an integer outside its declared range", function ()
-			local bytes: buffer = packetOf("Integers")
-			buffer.writeu16(bytes, 1, 1000)
-			refused("Integers", bytes, buffer.len(bytes), "Integers.b: out of range")
+		for _, row: { any } in BYTES do
+			test(row[6], function ()
+				local bytes: buffer, side: { any } = packetOf(row[1], row[2]);
+				(buffer :: any)[`write{row[4]}`](bytes, row[3], row[5])
+				refused(row[1], row[2], bytes, side, buffer.len(bytes), row[6])
+			end)
+		end
+
+		test("a block past the packet's end", function ()
+			refused("Scalars", "Value", buffer.create(1), {}, 1, "Value: truncated")
 		end)
 
 		test("a 64-bit integer past what a number holds exactly", function ()
-			local bytes: buffer = packetOf("Integers")
+			local bytes: buffer, side: { any } = packetOf("Numbers", "Integers")
 			buffer.writeu32(bytes, 16, 1)
 			buffer.writeu32(bytes, 20, 2 ^ 21)
-			refused("Integers", bytes, buffer.len(bytes), "Integers.f: out of range")
-		end)
-
-		test("NaN on a float", function ()
-			local bytes: buffer = packetOf("Floats")
-			buffer.writef32(bytes, 2, 0 / 0)
-			refused("Floats", bytes, buffer.len(bytes), "Floats.b: out of range")
-		end)
-
-		test("a float outside its declared range", function ()
-			local bytes: buffer = packetOf("Floats")
-			buffer.writef64(bytes, 6, 2)
-			refused("Floats", bytes, buffer.len(bytes), "Floats.c: out of range")
-		end)
-
-		test("a length past its bound", function ()
-			local bytes: buffer = packetOf("Bytes")
-			buffer.writeu8(bytes, 0, 40)
-			refused("Bytes", bytes, buffer.len(bytes), "Bytes.name: length out of range")
+			refused("Numbers", "Integers", bytes, side, buffer.len(bytes), "Integers.f: out of range")
 		end)
 
 		test("a payload past the packet's end", function ()
-			local bytes: buffer = packetOf("Bytes")
-			refused("Bytes", bytes, buffer.len(bytes) - 1, "Bytes.name: truncated")
+			local bytes: buffer, side: { any } = packetOf("Scalars", "Bytes")
+			refused("Scalars", "Bytes", bytes, side, buffer.len(bytes) - 1, "Bytes.name: truncated")
+		end)
+
+		test("a run of entries past the packet's end", function ()
+			local written: { any } = least("Lists", "Lists")
+			written[1] = table.create(8, 1)
+
+			local bytes: buffer, side: { any } = packetOf("Lists", "Lists", written)
+			refused("Lists", "Lists", bytes, side, 10, "Lists.a: truncated")
+		end)
+
+		test("an empty slot where an instance must be", function ()
+			local bytes: buffer = packetOf("Objects", "Objects")
+			refused("Objects", "Objects", bytes, {}, buffer.len(bytes), "Objects.a: expected Instance")
+		end)
+
+		test("an instance of the wrong class, present or streamed", function ()
+			local bytes: buffer, side: { any } = packetOf("Objects", "Objects")
+			side[2] = Instance.new("Folder")
+			refused("Objects", "Objects", bytes, side, buffer.len(bytes), "Objects.b: expected Instance(BasePart)")
+
+			bytes, side = packetOf("Objects", "Objects")
+			side[3] = Instance.new("Folder")
+			refused("Objects", "Objects", bytes, side, buffer.len(bytes), "Objects.d: expected StreamedInstance(Model)")
+		end)
+
+		test("an unknown whose flag says it is there when its slot is empty", function ()
+			local written: { any } = least("Objects", "Objects")
+			written[5] = 1
+
+			local bytes: buffer, side: { any } = packetOf("Objects", "Objects", written)
+			side[4] = nil
+			refused("Objects", "Objects", bytes, side, buffer.len(bytes), "Objects.e: missing")
+		end)
+
+		test("a key that appears twice", function ()
+			local written: { any } = least("Tables", "Tables")
+			written[1] = { [1] = "", [2] = "" }
+
+			local bytes: buffer, side: { any } = packetOf("Tables", "Tables", written)
+			buffer.writeu8(bytes, 5, buffer.readu8(bytes, 3))
+			refused("Tables", "Tables", bytes, side, buffer.len(bytes), "Tables.a: duplicate key")
 		end)
 	end)
 end)

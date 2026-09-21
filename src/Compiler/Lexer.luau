@@ -7,6 +7,7 @@
 
 --!strict
 local Diagnostics = require("./Diagnostics")
+local Primitives = require("./Config/Primitives")
 local Source = require("./Source")
 
 type Diagnostics = Diagnostics.Diagnostics
@@ -26,33 +27,6 @@ local KEYWORDS: { [string]: boolean } = {
 	set = true,
 
 	["function"] = true,
-}
-
-local PRIMITIVES: { [string]: boolean } = {
-	u8 = true,
-	u16 = true,
-	u24 = true,
-	u32 = true,
-	u48 = true,
-	u64 = true,
-
-	i8 = true,
-	i16 = true,
-	i24 = true,
-	i32 = true,
-	i48 = true,
-	i64 = true,
-	f16 = true,
-	f32 = true,
-	f64 = true,
-
-	q8 = true,
-	q16 = true,
-
-	boolean = true,
-	string = true,
-	buffer = true,
-	unknown = true,
 }
 
 --[[
@@ -120,7 +94,7 @@ function Lexer.scan(source: Source, diagnostics: Diagnostics): { Token }
 		if kind == "string" then
 			value = value:sub(2, -2)
 		elseif kind == "name" then
-			kind = KEYWORDS[value] and "keyword" or PRIMITIVES[value] and "primitive" or "name"
+			kind = KEYWORDS[value] and "keyword" or Primitives[value] and "primitive" or "name"
 		end
 
 		if kind ~= "skip" then

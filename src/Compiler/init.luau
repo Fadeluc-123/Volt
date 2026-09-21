@@ -15,7 +15,9 @@ local Analyse = require("./Compiler/Analyse")
 local Diagnostics = require("./Compiler/Diagnostics")
 local Lexer = require("./Compiler/Lexer")
 local Parser = require("./Compiler/Parser")
+local Print = require("./Compiler/Analyse/Print")
 local Resolve = require("./Compiler/Resolve")
+local Schema = require("./Compiler/Config/Types/Schema")
 local Source = require("./Compiler/Source")
 
 local USAGE: string = "usage: volt <schema.volt> [--check] [--ast] [--quiet]"
@@ -38,7 +40,7 @@ end
 
 local source: Source.Source = Source.new(path :: string, fs.readFile(path :: string))
 local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(source)
-local file: Parser.File = Parser.parse(Lexer.scan(source, diagnostics), diagnostics)
+local file: Schema.File = Parser.parse(Lexer.scan(source, diagnostics), diagnostics)
 
 Resolve.file(file, diagnostics)
 
@@ -49,7 +51,7 @@ if #diagnostics.list > 0 then
 end
 
 if flags.ast then
-	print(Analyse.print(file))
+	print(Print.file(file))
 end
 
 -- Whiteoak TODO: generate and write the three modules once the emitter exists; until then every run is a check

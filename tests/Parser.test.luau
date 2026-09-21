@@ -11,17 +11,18 @@ local fs = require("@lune/fs")
 
 local Suite = require("./Suite")
 local rendered = require("./Rendered")
-local Analyse = require("@volt/Compiler/Analyse")
 local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Lexer = require("@volt/Compiler/Lexer")
 local Parser = require("@volt/Compiler/Parser")
+local Print = require("@volt/Compiler/Analyse/Print")
+local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Source = require("@volt/Compiler/Source")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
 
-type Declaration = Parser.Declaration
+type Declaration = Schema.Declaration
 
 local EXAMPLE: string = fs.readFile("tests/Schemas/Example.volt") -- The design's complete example
 
@@ -108,9 +109,9 @@ local DECLARATIONS: { { string } } = {
     Lexes and parses a fragment, returning the file and its diagnostics
 --]]
 
-local function parse(text: string): (Parser.File, Diagnostics.Diagnostics)
+local function parse(text: string): (Schema.File, Diagnostics.Diagnostics)
 	local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(Source.new("Test.volt", text))
-	local file: Parser.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
+	local file: Schema.File = Parser.parse(Lexer.scan(diagnostics.source, diagnostics), diagnostics)
 
 	return file, diagnostics
 end
@@ -126,7 +127,7 @@ end
 --]]
 
 local function printed(declaration: Declaration): string
-	return Analyse.print({ options = { spans = {} }, declarations = { declaration } })
+	return Print.file({ options = { spans = {} }, declarations = { declaration } })
 end
 
 --[[
@@ -134,7 +135,7 @@ end
 --]]
 
 local function roundTrip(text: string): string
-	local file: Parser.File, diagnostics = parse(text)
+	local file: Schema.File, diagnostics = parse(text)
 
 	expect(diagnostics:render()).is("")
 	expect(#file.declarations).is(1)
@@ -162,7 +163,7 @@ describe("Parser", function ()
 	test("options carry each value kind and a span per key", function ()
 		local text: string =
 			`option clientOutput = "../Net.luau"\noption flush = 2\noption scope = Game\noption casing = pascal\noption writeValidation = false\noption rate = unlimited`
-		local file: Parser.File, diagnostics = parse(text)
+		local file: Schema.File, diagnostics = parse(text)
 		local start: number?, finish: number? = text:find("flush", 1, true)
 
 		expect(diagnostics:render()).is("")
@@ -177,9 +178,9 @@ describe("Parser", function ()
 	end)
 
 	test("ranges carry numbers, with a missing end nil and one number as both ends", function ()
-		local file: Parser.File = parse("type A = q16(-3.2..3.2)\ntype B = u8(..8)\ntype C = string(8)")
+		local file: Schema.File = parse("type A = q16(-3.2..3.2)\ntype B = u8(..8)\ntype C = string(8)")
 
-		local function rangeOf(index: number): Parser.Range
+		local function rangeOf(index: number): Schema.Range
 			return (file.declarations[index] :: any).type.range
 		end
 
@@ -194,7 +195,7 @@ describe("Parser", function ()
 	test("a declaration's span is its name, a type's is its whole expression, a key's is the key", function ()
 		local text: string =
 			"event Input { from: Client, type: Reliable, call: Polling, rate: 8 }\ntype Id = u8(0..8)[]"
-		local file: Parser.File = parse(text)
+		local file: Schema.File = parse(text)
 		local event: any = file.declarations[1]
 		local declaration: any = file.declarations[2]
 
@@ -209,7 +210,7 @@ describe("Parser", function ()
 	end)
 
 	test("the design's complete example parses without a diagnostic", function ()
-		local file: Parser.File, diagnostics = parse(EXAMPLE)
+		local file: Schema.File, diagnostics = parse(EXAMPLE)
 		local namespace: any = file.declarations[6]
 
 		expect(diagnostics:render()).is("")
@@ -233,7 +234,7 @@ describe("Parser", function ()
 		test("V2002 reports a duplicate key, field or variant and keeps the first", function ()
 			local text: string =
 				"event Input { from: Client, from: Server, type: Reliable, call: Polling }\nstruct S { x: u8, x: u8 }\nenum E { A, A }"
-			local file: Parser.File = parse(text)
+			local file: Schema.File = parse(text)
 			local first: string = rendered(text, "from", `error V2002: duplicate key "from" in event Input`, 2)
 			local second: string = rendered(text, "x", `error V2002: duplicate field "x"`, 2)
 			local third: string = rendered(text, "A", `error V2002: duplicate variant "A"`, 2)
@@ -246,7 +247,7 @@ describe("Parser", function ()
 		test("V2003 reports an unknown key, skips its value and keeps parsing the record", function ()
 			local text: string =
 				"option foo = 1\noption flush = 2\nevent Input { form: Client, from: Client, type: Reliable, call: Polling }"
-			local file: Parser.File = parse(text)
+			local file: Schema.File = parse(text)
 			local options: string =
 				"clientOutput, serverOutput, typesOutput, runtime, scope, casing, writeValidation, manualReplication, flush, maxPacket, maxPacketsPerSecond, unreliableBudget, queue, rate, functionRate, timeout, yield, promise"
 			local first: string =
@@ -319,7 +320,7 @@ describe("Parser", function ()
 
 		test("V2009 reports an option after a declaration and still reads it", function ()
 			local text: string = "type A = u8\noption flush = 2"
-			local file: Parser.File = parse(text)
+			local file: Schema.File = parse(text)
 
 			expect(report(text)).is(
 				rendered(text, "option", `error V2009: option "flush" comes after a declaration; options come first`)
@@ -332,7 +333,7 @@ describe("Parser", function ()
 		test("resumes at the next declaration so every error is reported", function ()
 			local text: string =
 				"type A = |\nevent B { from: Client, type: Reliable, call: Polling }\ntype C = u8 |\ntype D = u8"
-			local file: Parser.File, diagnostics = parse(text)
+			local file: Schema.File, diagnostics = parse(text)
 
 			expect(diagnostics.errors).is(2)
 			expect(#file.declarations).is(2)
@@ -342,7 +343,7 @@ describe("Parser", function ()
 
 		test("resumes inside a namespace and still closes it", function ()
 			local text: string = "namespace N { type A = , type B = u8 }\ntype C = u8"
-			local file: Parser.File, diagnostics = parse(text)
+			local file: Schema.File, diagnostics = parse(text)
 
 			expect(diagnostics.errors).is(1)
 			expect(printed(file.declarations[1])).is("namespace N {\n\ttype B = u8\n}")
@@ -352,7 +353,7 @@ describe("Parser", function ()
 		test("a missing closing brace loses only its own declaration", function ()
 			local text: string =
 				"event A { from: Client, type: Reliable, call: Polling\nevent B { from: Client, type: Reliable, call: Polling }"
-			local file: Parser.File, diagnostics = parse(text)
+			local file: Schema.File, diagnostics = parse(text)
 
 			expect(diagnostics.errors).is(1)
 			expect(printed(file.declarations[1])).is("event B { from: Client, type: Reliable, call: Polling }")
