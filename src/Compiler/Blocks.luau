@@ -21,8 +21,10 @@ export type Block = {
 	side: Side,
 	path: string,
 	out: string,
+	first: string?, -- What a message's writer calls for its first bytes, which begins the message; nil takes them from allocate
 	allocate: string,
 	slot: string,
+	refuse: string,
 	reserve: (self: Block, bytes: number) -> number,
 	at: (self: Block, index: number) -> string,
 	flags: (self: Block, bits: number) -> (),
@@ -115,6 +117,7 @@ function Blocks.new(side: Side, path: string, parent: Block?, region: Region?): 
 		out = region and region.out or "packet", -- The buffer the fixed bytes are read from, or written to once allocated
 		allocate = parent and parent.allocate or "allocate", -- What the write side calls for its bytes
 		slot = parent and parent.slot or "slot", -- What the write side calls to store a side-array value
+		refuse = parent and parent.refuse or "refuse", -- What the write side calls to refuse a value and undo the message
 		_parent = parent,
 		_indent = parent and (parent :: any)._indent + 1 or 1,
 		_offset = region and region.offset or "cursor", -- Where the fixed bytes start
@@ -328,7 +331,7 @@ function Blocks:done(final: string?): string
 
 	-- A region's bytes were taken or checked by the parent, so only a block of its own opens with a line
 	if bytes > 0 and not self._region and self.side == "write" then
-		self:line(`local {self._offset}: number, {self.out}: buffer = {self.allocate}({bytes})`)
+		self:line(`local {self._offset}: number, {self.out}: buffer = {self.first or self.allocate}({bytes})`)
 		table.insert(statements, table.remove(self._body) :: string)
 	elseif bytes > 0 and not self._region then
 		self:line(`if cursor + {bytes} > length then\n\terror("{self.path}: truncated")\nend`)

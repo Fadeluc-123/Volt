@@ -2,12 +2,16 @@
     Proves a send grows its buffer and keeps what was written, flushes
     exactly the bytes and slots written and nothing else, splits an
     unreliable packet between messages to fit the budget with none
-    straddling, and copies a broadcast into every target it should reach
+    straddling, copies a broadcast into every target it should reach,
+    undoes a refused message, drops one past the cap, and counts
 --]]
 
 --!strict
 local Suite = require("./Suite")
+local Config = require("@volt/Config/Runtime")
+local Limits = require("@volt/Limits")
 local Send = require("@volt/Send")
+local Types = require("@volt/Config/Types/Runtime")
 
 local describe = Suite.describe
 local test = Suite.test
@@ -15,22 +19,34 @@ local expect = Suite.expect
 
 type Send = Send.Send
 type State = Send.State
+type Stats = Types.Stats
 
 type Fired = { target: any, packet: buffer, side: { any }? }
 
--- A send that records what it fires
-local function recorded(budget: number?): (Send, { Fired })
-	local fired: { Fired } = {}
-	local send: Send = Send.new(function (target: any, packet: buffer, side: { any }?)
-		table.insert(fired, { target = target, packet = packet, side = side })
-	end, budget)
+local MAX_OUTGOING: number = Config.maxOutgoing
 
-	return send, fired
+-- A send that records what it fires and whom it dropped a message for, counting into a total
+local function recorded(budget: number?): (Send, { Fired }, Stats, { any })
+	local fired: { Fired } = {}
+	local dropped: { any } = {}
+	local total: Stats = Limits.fresh()
+	local send: Send = Send.new(
+		function (target: any, packet: buffer, side: { any }?)
+			table.insert(fired, { target = target, packet = packet, side = side })
+		end,
+		total,
+		function (target: any)
+			table.insert(dropped, target)
+		end,
+		budget
+	)
+
+	return send, fired, total, dropped
 end
 
 -- Writes one message of a count of bytes all holding a value, with a slot when given, and marks it
 local function message(send: Send, count: number, value: number, slot: any?)
-	local offset: number, out: buffer = send.allocate(count)
+	local offset: number, out: buffer = send.begin(count)
 
 	buffer.fill(out, offset, value, count)
 
@@ -53,7 +69,7 @@ end
 describe("Send", function ()
 	test("grows the buffer past its first size and keeps every byte written", function ()
 		local send: Send, fired: { Fired } = recorded()
-		local state: State = send:add("a")
+		local state: State = send:add("a", Limits.fresh())
 
 		send.current = state
 		message(send, 50, 1)
@@ -72,7 +88,7 @@ describe("Send", function ()
 
 	test("flushes exactly what was written with its slots, then starts the state over", function ()
 		local send: Send, fired: { Fired } = recorded()
-		local state: State = send:add("a")
+		local state: State = send:add("a", Limits.fresh())
 
 		send.current = state
 		message(send, 5, 9, "first")
@@ -94,7 +110,7 @@ describe("Send", function ()
 	test("fires no side array when nothing took a slot", function ()
 		local send: Send, fired: { Fired } = recorded()
 
-		send.current = send:add("a")
+		send.current = send:add("a", Limits.fresh())
 		message(send, 3, 0)
 		send:flush()
 
@@ -104,7 +120,7 @@ describe("Send", function ()
 	test("splits an unreliable flush between messages to fit the budget, each slot with its message", function ()
 		local send: Send, fired: { Fired } = recorded(10)
 
-		send.current = send:add("a")
+		send.current = send:add("a", Limits.fresh())
 		message(send, 4, 1, "one")
 		message(send, 4, 2)
 		message(send, 4, 3, "three")
@@ -118,7 +134,7 @@ describe("Send", function ()
 	test("never lets a message straddle two fires", function ()
 		local send: Send, fired: { Fired } = recorded(10)
 
-		send.current = send:add("a")
+		send.current = send:add("a", Limits.fresh())
 		message(send, 6, 1)
 		message(send, 6, 2)
 		message(send, 6, 3)
@@ -130,7 +146,8 @@ describe("Send", function ()
 
 	test("copies a broadcast into every target, all but one, a list or a set, and skips one who left", function ()
 		local send: Send, fired: { Fired } = recorded(10)
-		local a: State, b: State, c: State = send:add("a"), send:add("b"), send:add("c")
+		local a: State, b: State, c: State =
+			send:add("a", Limits.fresh()), send:add("b", Limits.fresh()), send:add("c", Limits.fresh())
 
 		send.current = send.scratch
 		message(send, 3, 7, "slot")
@@ -162,11 +179,77 @@ describe("Send", function ()
 	test("sends nothing more to a target that was removed", function ()
 		local send: Send, fired: { Fired } = recorded()
 
-		send.current = send:add("a")
+		send.current = send:add("a", Limits.fresh())
 		message(send, 3, 0)
 		send:remove("a")
 		send:flush()
 
 		expect(#fired).is(0)
+	end)
+
+	test("a refusal discards the message so far, bytes and slots alike, and raises it", function ()
+		local send: Send, fired: { Fired } = recorded()
+		local state: State = send:add("a", Limits.fresh())
+
+		send.current = state
+		message(send, 3, 1, "kept")
+		send.begin(4)
+		send.slot("lost")
+
+		local ok: boolean, reason: any = pcall(send.refuse, "Ping.x: expected u8")
+
+		expect(ok).is(false)
+		expect(reason).is("Ping.x: expected u8")
+		expect(`{state.cursor},{state.sideCursor}`).is("3,2")
+
+		message(send, 2, 2)
+		send:flush()
+
+		expect(buffer.len(fired[1].packet)).is(5)
+		expect(buffer.readu8(fired[1].packet, 3)).is(2)
+		expect(table.concat(fired[1].side :: any, ",")).is("kept")
+	end)
+
+	test(
+		"drops the message that takes a target past the cap, at the next message and at flush, and reports it",
+		function ()
+			local send: Send, fired: { Fired }, total: Stats, dropped: { any } = recorded()
+			local state: State = send:add("a", Limits.fresh())
+
+			send.current = state
+			message(send, 3, 1)
+			message(send, MAX_OUTGOING, 2)
+			message(send, 3, 3)
+
+			expect(table.concat(dropped, ",")).is("a")
+			expect(state.cursor).is(6)
+
+			message(send, MAX_OUTGOING, 4)
+			send:flush()
+
+			expect(#dropped).is(2)
+			expect(buffer.len(fired[1].packet)).is(6)
+			expect(total.messagesOut).is(2)
+		end
+	)
+
+	test("counts packets, bytes and messages out for the target and in total, a broadcast once per target", function ()
+		local send: Send, _, total: Stats = recorded()
+		local mine: Stats = Limits.fresh()
+		local other: Stats = Limits.fresh()
+
+		send.current = send:add("a", mine)
+		send:add("b", other)
+		message(send, 3, 1)
+		message(send, 4, 2)
+
+		send.current = send.scratch
+		message(send, 5, 3)
+		send:broadcast()
+		send:flush()
+
+		expect(`{mine.messagesOut} {mine.packetsOut} {mine.bytesOut}`).is("3 1 12")
+		expect(`{other.messagesOut} {other.packetsOut} {other.bytesOut}`).is("1 1 5")
+		expect(`{total.messagesOut} {total.packetsOut} {total.bytesOut}`).is("4 2 17")
 	end)
 end)

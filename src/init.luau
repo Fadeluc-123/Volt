@@ -10,6 +10,7 @@ local Runtime = {} :: any
 Runtime.__index = Runtime
 
 local Calls = require("@self/Calls")
+local Limits = require("@self/Limits")
 local Mock = require("@self/Mock")
 local Receive = require("@self/Receive")
 local Remotes = require("@self/Remotes")
@@ -18,11 +19,12 @@ local Types = require("@self/Config/Types/Runtime")
 
 local SERVER: string = "server" -- The one target a client's sends go to
 
+export type Failure = Types.Failure
 export type Mock = Mock.Mock
 export type Schema = Types.Schema
 export type Spawn = Types.Spawn
+export type Stats = Types.Stats
 export type Transport = Types.Transport
-export type Failure = (player: any, kind: string, detail: string) -> ()
 
 export type Runtime = {
 	reliable: Send.Send,
@@ -35,7 +37,7 @@ export type Runtime = {
 	invoke: (self: Runtime, id: number, write: (slot: number, ...any) -> (), ...any) -> ...any,
 	handle: (self: Runtime, id: number, handler: (...any) -> ...any) -> () -> (),
 	reply: (self: Runtime, id: number, slot: number, cursor: number, sideCursor: number, ...any) -> (number, number),
-	
+
 	call: (
 		self: Runtime,
 		id: number,
@@ -45,7 +47,7 @@ export type Runtime = {
 		sideCursor: number,
 		...any
 	) -> (number, number),
-	
+
 	refused: (
 		self: Runtime,
 		id: number,
@@ -60,23 +62,26 @@ export type Runtime = {
 	flush: (self: Runtime) -> (),
 	fail: (self: Runtime, player: any, kind: string, detail: string) -> (),
 	onFailure: (self: Runtime, handler: Failure) -> (),
+	stats: (self: Runtime, player: any) -> Stats,
 }
 
+type Bucket = Types.Bucket
 type State = Send.State
+
+-- What the server keeps per player: their send states, counters and rate buckets, whether they have handshaken
+type Player = {
+	reliable: State,
+	unreliable: State,
+	stats: Stats,
+	packets: Bucket,
+	buckets: { [number]: Bucket },
+	handshaken: boolean,
+	warned: { [string]: number },
+}
 
 local Volt = {
 	version = "0.1.0", -- Shared with the compiler; a schema from another major or minor is refused at start
 }
-
--- The failure handler a runtime starts with: a warning per failure, except a fire at a player who left
-local function report(player: any, kind: string, detail: string)
-	if kind == "departed" then
-		return
-	end
-
-	local from: string = player and ` from {player.Name}` or ""
-	warn(`Volt: {kind} failure{from}: {detail}`)
-end
 
 --[[
     Starts a runtime for a generated module's schema table over the real
@@ -97,21 +102,34 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local options: { [string]: any } = schema.options
 	local server: boolean = schema.side == "server"
 	local live: Transport = transport or Remotes.open(schema.scope, server)
+	local stats: Stats = Limits.fresh()
 
 	local self = setmetatable({
-		reliable = Send.new(live.reliable),
-		unreliable = Send.new(live.unreliable, options.unreliableBudget),
 		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
 		_messages = schema.messages,
 		_idBytes = schema.idBytes,
 		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
+		_hash = schema.hash,
+		_maxPacket = options.maxPacket,
+		_maxPackets = options.maxPacketsPerSecond,
 		_spawn = live.spawn,
 		_inert = live.inert == true, -- Outside a running game, where a call would never be answered
-		_players = {} :: { [any]: { reliable: State, unreliable: State } },
+		_now = 0, -- The clock when the last packet arrived, which the buckets its messages spend from refill to
+		_players = {} :: { [any]: Player },
 		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
-		_failure = report :: Failure,
+		_failure = nil :: Failure?, -- The game's failure handler, once it has replaced the one the runtime starts with
+		_stats = stats,
+		_warned = {} :: { [string]: number }, -- When the runtime's own handler last warned of each kind on the client
 	}, Runtime)
 
+	-- A message a target's frame has no room for is dropped and reported; the client's one target is nobody to name
+	local function dropped(target: any)
+		self:fail(server and target or nil, "outgoing", "over maxOutgoing, a message was dropped")
+	end
+
+	self.reliable = Send.new(live.reliable, stats, dropped)
+	self.unreliable = Send.new(live.unreliable, stats, dropped, options.unreliableBudget)
+	
 	self:channels(schema.messages)
 	self:functions(schema.messages)
 
@@ -133,8 +151,10 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 			self:_leave(player)
 		end)
 	else
-		self.reliable.current = self.reliable:add(SERVER)
-		self.unreliable.current = self.unreliable:add(SERVER)
+		self.reliable.current = self.reliable:add(SERVER, Limits.fresh())
+		self.unreliable.current = self.unreliable:add(SERVER, Limits.fresh())
+		
+		self:handshake(schema.hash)
 	end
 
 	live.receive(function (player: any, packet: buffer, side: { any }?)
@@ -175,7 +195,7 @@ function Runtime:target(player: any): boolean
 		return true
 	end
 
-	local states = self._players[player]
+	local states: Player? = self._players[player]
 	if not states then
 		self:fail(player, "departed", "fired at a player who has left")
 		return false
@@ -194,22 +214,23 @@ function Runtime:flush()
 	self.unreliable:flush()
 end
 
-function Runtime:fail(player: any, kind: string, detail: string)
-	self._failure(player, kind, detail)
-end
-
--- Replaces the failure handler for every kind; the one a runtime starts with warns
-function Runtime:onFailure(handler: Failure)
-	self._failure = handler
-end
-
--- States for a player who joined; one already known keeps what they have
+-- States for a player who joined, with their packet bucket full on arrival; one already known keeps what they have
 function Runtime:_join(player: any)
 	if self._players[player] then
 		return
 	end
 
-	self._players[player] = { reliable = self.reliable:add(player), unreliable = self.unreliable:add(player) }
+	local stats: Stats = Limits.fresh()
+
+	self._players[player] = {
+		reliable = self.reliable:add(player, stats),
+		unreliable = self.unreliable:add(player, stats),
+		stats = stats,
+		packets = { tokens = self._maxPackets, last = os.clock() },
+		buckets = {}, -- One per event and function the player has sent, by id
+		handshaken = false,
+		warned = {}, -- When the runtime's own handler last warned of each kind about this player
+	}
 end
 
 -- Frees a player's states, so nothing is sent to or kept for a player who left
@@ -219,8 +240,8 @@ function Runtime:_leave(player: any)
 	self.unreliable:remove(player)
 end
 
--- The receive side and the calls are the methods of one sibling each, and a name defined twice is a bug
-for _, part in { Calls, Receive } do
+-- The receive side, the calls and the limits are the methods of one sibling each, and a name defined twice is a bug
+for _, part in { Calls, Limits, Receive } do
 	for name: string, method in part do
 		assert(Runtime[name] == nil, `Runtime.{name} is defined twice`)
 		Runtime[name] = method

@@ -1,4 +1,4 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 -- Every enum by the name its items report, so an untyped item finds its way back
 local ENUMS: { [string]: Enum } = {}
@@ -33,24 +33,24 @@ for _, item: EnumItem in Enum.Material:GetEnumItems() do
 end
 
 local function writeObjects(a: Instance, b: BasePart, c: Instance?, d: Model, e: any, f: any?)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 
 	if typeof(a) ~= "Instance" then
-		error("Objects.a: expected Instance")
+		refuseReliable("Objects.a: expected Instance")
 	end
 
 	slotReliable(a)
 
 	if typeof(b) ~= "Instance" or not b:IsA("BasePart") then
-		error("Objects.b: expected Instance(BasePart)")
+		refuseReliable("Objects.b: expected Instance(BasePart)")
 	end
 
 	slotReliable(b)
 	flags += c ~= nil and 1 or 0
 
 	if typeof(d) ~= "Instance" or not d:IsA("Model") then
-		error("Objects.d: expected StreamedInstance(Model)")
+		refuseReliable("Objects.d: expected StreamedInstance(Model)")
 	end
 
 	slotReliable(d)
@@ -70,7 +70,7 @@ local function writeObjects(a: Instance, b: BasePart, c: Instance?, d: Model, e:
 
 	if c ~= nil then
 		if typeof(c) ~= "Instance" then
-			error("Objects.c: expected Instance")
+			refuseReliable("Objects.c: expected Instance")
 		end
 
 		slotReliable(c)
@@ -144,22 +144,22 @@ local function readObjects(packet: buffer, cursor: number, side: { any }, sideCu
 end
 
 local function writeItems(a: Enum.Material, b: EnumItem)
-	local offset: number, out: buffer = allocateReliable(5)
+	local offset: number, out: buffer = beginReliable(5)
 
 	if typeof(a) ~= "EnumItem" or a.EnumType ~= Enum.Material then
-		error("Items.a: expected Enum.Material")
+		refuseReliable("Items.a: expected Enum.Material")
 	end
 
 	buffer.writeu16(out, offset, a.Value)
 
 	if typeof(b) ~= "EnumItem" then
-		error("Items.b: expected EnumItem")
+		refuseReliable("Items.b: expected EnumItem")
 	end
 
 	local bName: string = tostring(b.EnumType)
 
 	if #bName < 1 or #bName > 255 then
-		error("Items.b.EnumType: length out of range")
+		refuseReliable("Items.b.EnumType: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 2, #bName - 1)

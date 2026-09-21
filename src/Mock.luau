@@ -2,7 +2,7 @@
     The in-memory transport pair a test drives instead of the remotes: a
     server side, a client side per joined player, packets copied at fire
     time as the engine copies them and delivered on step, one Heartbeat
-    per step, and a player list with join and leave
+    per step, and a player list with join, leave and a kick that leaves
 --]]
 
 --!strict
@@ -15,7 +15,12 @@ type Handler = Types.Handler
 type Spawn = Types.Spawn
 type Transport = Types.Transport
 
-export type Player = { Name: string, UserId: number }
+export type Player = {
+	Name: string,
+	UserId: number,
+	Kick: (self: Player, message: string) -> (),
+	kicked: string?, -- The message the player was kicked with, once they have been
+}
 
 export type Mock = {
 	server: Transport,
@@ -97,7 +102,17 @@ end
 function Mock:join(name: string): (Player, Transport)
 	self._joined += 1
 
-	local player: Player = { Name = name, UserId = self._joined }
+	local player: Player = {
+		Name = name,
+		UserId = self._joined,
+		kicked = nil,
+
+		-- Kicked as the engine does it: the message kept, and the player gone
+		Kick = function (who: Player, message: string)
+			who.kicked = message
+			self:leave(who)
+		end,
+	}
 
 	table.insert(self.players, player)
 	self._present[player] = true

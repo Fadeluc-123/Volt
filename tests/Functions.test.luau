@@ -170,6 +170,22 @@ describe("Functions", function ()
 			expect((harness.failures[1].detail:find("Echo: ", 1, true))).is(1)
 		end)
 
+		test("a return the function cannot carry refuses the call with the refusal and is a handler failure", function ()
+			local harness: Harness = setup()
+
+			harness.server.Echo.on(function (): any
+				return "x"
+			end)
+
+			local box: Box = call(harness.client.Echo.invoke, 1)
+			roundTrip(harness.mock)
+
+			expect(box.line).is("false Echo: expected u8")
+			expect(#harness.failures).is(1)
+			expect(harness.failures[1].kind).is("handler")
+			expect(harness.failures[1].detail).is("Echo: expected u8")
+		end)
+
 		test("a promise rejects with the reason and resolves with the returns", function ()
 			local harness: Harness = setup()
 			local rejected = harness.client.Inventory.Transfer.invoke(1, 2, 3)

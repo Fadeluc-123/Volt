@@ -92,7 +92,9 @@ describe("Targets", function ()
 		local pascal: string = select(2, Generated.modules("Events", `option casing = pascal\n{SCHEMA}`))
 		local snake: string = select(2, Generated.modules("Events", `option casing = snake\n{SCHEMA}`))
 
-		for _, name: string in { "Fire", "FireAll", "FireList", "FireExcept", "FireSet", "On", "Iter", "OnFailure" } do
+		for _, name: string in
+			{ "Fire", "FireAll", "FireList", "FireExcept", "FireSet", "On", "Iter", "OnFailure", "Stats" }
+		do
 			expect(pascal:find(`{name} = function`, 1, true) ~= nil).is(true)
 		end
 

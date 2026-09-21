@@ -13,8 +13,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
 local runtime: Volt.Runtime
-local allocateReliable: (number) -> (number, buffer)
-local allocateUnreliable: (number) -> (number, buffer)
+local beginReliable: (number) -> (number, buffer)
+local refuseReliable: (string) -> ()
+local beginUnreliable: (number) -> (number, buffer)
+local refuseUnreliable: (string) -> ()
 local markUnreliable: () -> ()
 
 local function readInput(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
@@ -84,38 +86,38 @@ local function readPing(player: Player?, packet: buffer, cursor: number, _, side
 end
 
 local function writeDamage(value: any)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 1)
 
 	if typeof(value) ~= "table" then
-		error("Damage: expected table")
+		refuseReliable("Damage: expected table")
 	end
 
 	if typeof(value.target) ~= "number" or value.target % 1 ~= 0 or value.target < 0 or value.target > 65535 then
-		error("Damage.target: expected u16")
+		refuseReliable("Damage.target: expected u16")
 	end
 
 	buffer.writeu16(out, offset + 1, value.target)
 
 	if typeof(value.amount) ~= "number" or value.amount % 1 ~= 0 or value.amount < 0 or value.amount > 255 then
-		error("Damage.amount: expected u8")
+		refuseReliable("Damage.amount: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 3, value.amount)
 end
 
 local function writeSpray(x: number, y: number)
-	local offset: number, out: buffer = allocateUnreliable(3)
+	local offset: number, out: buffer = beginUnreliable(3)
 	buffer.writeu8(out, offset, 2)
 
 	if typeof(x) ~= "number" or x % 1 ~= 0 or x < 0 or x > 255 then
-		error("Spray.x: expected u8")
+		refuseUnreliable("Spray.x: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, x)
 
 	if typeof(y) ~= "number" or y % 1 ~= 0 or y < 0 or y > 255 then
-		error("Spray.y: expected u8")
+		refuseUnreliable("Spray.y: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 2, y)
@@ -123,11 +125,11 @@ local function writeSpray(x: number, y: number)
 end
 
 local function writeSync(value: number)
-	local offset: number, out: buffer = allocateReliable(2)
+	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 3)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
-		error("Sync: expected u8")
+		refuseReliable("Sync: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, value)
@@ -145,7 +147,7 @@ local function readSync(player: Player?, packet: buffer, cursor: number, _, side
 end
 
 local function writeMatch_Start()
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	buffer.writeu8(out, offset, 4)
 end
 
@@ -180,8 +182,10 @@ runtime = Volt.start({
 	},
 })
 
-allocateReliable = runtime.reliable.allocate
-allocateUnreliable = runtime.unreliable.allocate
+beginReliable = runtime.reliable.begin
+refuseReliable = runtime.reliable.refuse
+beginUnreliable = runtime.unreliable.begin
+refuseUnreliable = runtime.unreliable.refuse
 markUnreliable = runtime.unreliable.mark
 
 local net = table.freeze({
@@ -375,6 +379,10 @@ local net = table.freeze({
 
 	onFailure = function (handler: Volt.Failure)
 		runtime:onFailure(handler)
+	end,
+
+	stats = function (player: Player?): Volt.Stats
+		return runtime:stats(player)
 	end,
 })
 

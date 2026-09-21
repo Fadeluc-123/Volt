@@ -13,24 +13,27 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
 local runtime: Volt.Runtime
+local beginReliable: (number) -> (number, buffer)
 local allocateReliable: (number) -> (number, buffer)
 local slotReliable: (any) -> ()
-local allocateUnreliable: (number) -> (number, buffer)
+local refuseReliable: (string) -> ()
+local beginUnreliable: (number) -> (number, buffer)
+local refuseUnreliable: (string) -> ()
 local markUnreliable: () -> ()
 
 local function writeInput(dir: number, jump: boolean)
-	local offset: number, out: buffer = allocateUnreliable(3)
+	local offset: number, out: buffer = beginUnreliable(3)
 	buffer.writeu8(out, offset, 1)
 	local flags: number = 0
 
 	if typeof(dir) ~= "number" or dir % 1 ~= 0 or dir < 0 or dir > 8 then
-		error("Input.dir: expected u8(0..8)")
+		refuseUnreliable("Input.dir: expected u8(0..8)")
 	end
 
 	buffer.writeu8(out, offset + 2, dir)
 
 	if typeof(jump) ~= "boolean" then
-		error("Input.jump: expected boolean")
+		refuseUnreliable("Input.jump: expected boolean")
 	end
 
 	flags += jump and 1 or 0
@@ -39,15 +42,15 @@ local function writeInput(dir: number, jump: boolean)
 end
 
 local function writeChat(value: string)
-	local offset: number, out: buffer = allocateReliable(2)
+	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 2)
 
 	if typeof(value) ~= "string" then
-		error("Chat: expected string")
+		refuseReliable("Chat: expected string")
 	end
 
 	if #value > 64 then
-		error("Chat: length out of range")
+		refuseReliable("Chat: length out of range")
 	end
 
 	buffer.writeu8(out, offset + 1, #value)
@@ -56,27 +59,27 @@ local function writeChat(value: string)
 end
 
 local function writeReady()
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	buffer.writeu8(out, offset, 3)
 end
 
 local function writeGrab(value: Instance)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	buffer.writeu8(out, offset, 4)
 
 	if typeof(value) ~= "Instance" then
-		error("Grab: expected Instance")
+		refuseReliable("Grab: expected Instance")
 	end
 
 	slotReliable(value)
 end
 
 local function writePing(value: number)
-	local offset: number, out: buffer = allocateReliable(5)
+	local offset: number, out: buffer = beginReliable(5)
 	buffer.writeu8(out, offset, 5)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 4294967295 then
-		error("Ping: expected u32")
+		refuseReliable("Ping: expected u32")
 	end
 
 	buffer.writeu32(out, offset + 1, value)
@@ -108,11 +111,11 @@ local function readSpray(player: Player?, packet: buffer, cursor: number, _, sid
 end
 
 local function writeSync(value: number)
-	local offset: number, out: buffer = allocateReliable(2)
+	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 6)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
-		error("Sync: expected u8")
+		refuseReliable("Sync: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, value)
@@ -164,9 +167,12 @@ runtime = Volt.start({
 	},
 })
 
+beginReliable = runtime.reliable.begin
 allocateReliable = runtime.reliable.allocate
 slotReliable = runtime.reliable.slot
-allocateUnreliable = runtime.unreliable.allocate
+refuseReliable = runtime.reliable.refuse
+beginUnreliable = runtime.unreliable.begin
+refuseUnreliable = runtime.unreliable.refuse
 markUnreliable = runtime.unreliable.mark
 
 local net = table.freeze({
@@ -236,6 +242,10 @@ local net = table.freeze({
 
 	onFailure = function (handler: Volt.Failure)
 		runtime:onFailure(handler)
+	end,
+
+	stats = function (player: Player?): Volt.Stats
+		return runtime:stats(player)
 	end,
 })
 

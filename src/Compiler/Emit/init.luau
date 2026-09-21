@@ -132,16 +132,23 @@ function Emit:shared(target: TypeDeclaration): string
 end
 
 --[[
-    A reference to a shared named type: the write side hands its value,
-    allocator and slot store to the pair, the read side takes the value
+    A reference to a shared named type: the write side hands the pair
+    what it writes through, then its value; the read side takes the value
     and the advanced cursors back, both after the block's own bytes
 --]]
 
 function Emit:call(target: TypeDeclaration, write: Block, read: Block, value: string, hint: string): string
 	local name: string = self:shared(target)
 	local result: string = read:name(hint)
+	local passed: { string } = {}
 
-	write:tail(`write{name}({write.allocate}, {write.slot}, {value})`)
+	for _, parameter: Parameter in Contract.write do
+		table.insert(passed, (write :: any)[parameter.name])
+	end
+
+	table.insert(passed, value)
+	write:tail(`write{name}({table.concat(passed, ", ")})`)
+	
 	read:line(`local {result}`)
 	read:tail(`cursor, sideCursor, {result} = read{name}(packet, cursor, side, sideCursor, length)`)
 
@@ -199,6 +206,13 @@ function Emit:shape(write: Block, value: string, luauType: string, path: string)
 	if self._validate and not self._known then
 		Expressions.refuse(write, `typeof({value}) ~= "{luauType}"`, `{path}: expected {luauType}`)
 	end
+end
+
+-- Sets whether writers check their values and returns what it was, so a walk can be checked whatever the option says
+function Emit:validating(on: boolean): boolean
+	local was: boolean = self._validate
+	self._validate = on
+	return was
 end
 
 --[[

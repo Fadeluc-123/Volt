@@ -18,6 +18,15 @@ local expect = Suite.expect
 type Runtime = Volt.Runtime
 type Schema = Volt.Schema
 
+-- The options the runtime reads, at the compiler's defaults
+local OPTIONS: { [string]: any } = {
+	flush = 1,
+	manualReplication = false,
+	maxPacket = 8192,
+	maxPacketsPerSecond = 240,
+	unreliableBudget = 900
+}
+
 -- A schema table with no messages on one side, with the options the runtime reads
 local function schema(side: string, options: { [string]: any }?, version: string?): Schema
 	return {
@@ -26,7 +35,7 @@ local function schema(side: string, options: { [string]: any }?, version: string
 		scope = "Test",
 		side = side,
 		idBytes = 1,
-		options = options or { flush = 1, manualReplication = false, unreliableBudget = 900 },
+		options = options or OPTIONS,
 		messages = {},
 		outgoing = {},
 	}
@@ -81,7 +90,9 @@ describe("Volt", function ()
 		local mock = Volt.mock(task.spawn)
 		local alice, client = mock:join("Alice")
 		local _, other = mock:join("Bob")
-		local options: { [string]: any } = { flush = 2, manualReplication = false, unreliableBudget = 900 }
+		local options: { [string]: any } = table.clone(OPTIONS)
+		options.flush = 2
+
 		local runtime: Runtime = Volt.start(schema("server", options), mock.server)
 		local got: { number } = {}
 		local others: number = 0
@@ -108,7 +119,9 @@ describe("Volt", function ()
 	test("leaves flushing to the game under manualReplication", function ()
 		local mock = Volt.mock(task.spawn)
 		local alice, client = mock:join("Alice")
-		local options: { [string]: any } = { flush = 1, manualReplication = true, unreliableBudget = 900 }
+		local options: { [string]: any } = table.clone(OPTIONS)
+		options.manualReplication = true
+
 		local runtime: Runtime = Volt.start(schema("server", options), mock.server)
 		local got: number = 0
 
@@ -130,25 +143,31 @@ describe("Volt", function ()
 		expect(got).is(1)
 	end)
 
-	test("sends a client's bytes to the server as that player, one packet per reliability", function ()
-		local mock = Volt.mock(task.spawn)
-		local alice, client = mock:join("Alice")
-		local runtime: Runtime = Volt.start(schema("client"), client)
-		local from: any = nil
-		local sizes: { number } = {}
+	test(
+		"sends a client's bytes to the server as that player, one packet per reliability, the handshake first",
+		function ()
+			local mock = Volt.mock(task.spawn)
+			local alice, client = mock:join("Alice")
+			local runtime: Runtime = Volt.start(schema("client"), client)
+			local from: any = nil
+			local first: buffer? = nil
+			local sizes: { number } = {}
 
-		mock.server.receive(function (player: any, packet: buffer)
-			from = player
-			table.insert(sizes, buffer.len(packet))
-		end)
+			mock.server.receive(function (player: any, packet: buffer)
+				from = player
+				first = first or packet
+				table.insert(sizes, buffer.len(packet))
+			end)
 
-		runtime.reliable.allocate(2)
-		runtime.unreliable.allocate(4)
+			runtime.reliable.allocate(2)
+			runtime.unreliable.allocate(4)
 
-		mock:step()
-		mock:step()
+			mock:step()
+			mock:step()
 
-		expect(from).is(alice)
-		expect(table.concat(sizes, ",")).is("2,4")
-	end)
+			expect(from).is(alice)
+			expect(table.concat(sizes, ",")).is("7,4")
+			expect(buffer.readu8(assert(first, "nothing reached the server"), 0)).is(0)
+		end
+	)
 end)

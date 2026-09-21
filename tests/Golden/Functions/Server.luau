@@ -13,7 +13,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
 local runtime: Volt.Runtime
+local beginReliable: (number) -> (number, buffer)
 local allocateReliable: (number) -> (number, buffer)
+local refuseReliable: (string) -> ()
 
 local function readEcho(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
@@ -28,7 +30,7 @@ local function readEcho(player: Player?, packet: buffer, cursor: number, _, side
 end
 
 local function writeEcho(slot: number, status: number, value: number)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 1)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
@@ -37,7 +39,7 @@ local function writeEcho(slot: number, status: number, value: number)
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
 		if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
-			error("Echo: expected u8")
+			refuseReliable("Echo: expected u8")
 		end
 
 		buffer.writeu8(out_2, offset_2, value)
@@ -56,7 +58,7 @@ local function readPing(player: Player?, packet: buffer, cursor: number, _, side
 end
 
 local function writePing(slot: number, status: number)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 2)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
@@ -86,7 +88,7 @@ local function readDivide(player: Player?, packet: buffer, cursor: number, _, si
 end
 
 local function writeDivide(slot: number, status: number, ok: boolean, quotient: number?)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 3)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
@@ -96,7 +98,7 @@ local function writeDivide(slot: number, status: number, ok: boolean, quotient: 
 		local flags: number = 0
 
 		if typeof(ok) ~= "boolean" then
-			error("Divide.ok: expected boolean")
+			refuseReliable("Divide.ok: expected boolean")
 		end
 
 		flags += ok and 1 or 0
@@ -107,7 +109,7 @@ local function writeDivide(slot: number, status: number, ok: boolean, quotient: 
 			local offset_3: number, out_3: buffer = allocateReliable(8)
 
 			if typeof(quotient) ~= "number" or quotient ~= quotient then
-				error("Divide.quotient: expected f64")
+				refuseReliable("Divide.quotient: expected f64")
 			end
 
 			buffer.writef64(out_3, offset_3, quotient)
@@ -130,7 +132,7 @@ local function readInventory_Transfer(player: Player?, packet: buffer, cursor: n
 end
 
 local function writeInventory_Transfer(slot: number, status: number, ok: boolean, reason: string?)
-	local offset: number, out: buffer = allocateReliable(4)
+	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 4)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
@@ -140,7 +142,7 @@ local function writeInventory_Transfer(slot: number, status: number, ok: boolean
 		local flags: number = 0
 
 		if typeof(ok) ~= "boolean" then
-			error("Inventory.Transfer.ok: expected boolean")
+			refuseReliable("Inventory.Transfer.ok: expected boolean")
 		end
 
 		flags += ok and 1 or 0
@@ -151,11 +153,11 @@ local function writeInventory_Transfer(slot: number, status: number, ok: boolean
 			local offset_3: number, out_3: buffer = allocateReliable(1)
 
 			if typeof(reason) ~= "string" then
-				error("Inventory.Transfer.reason: expected string")
+				refuseReliable("Inventory.Transfer.reason: expected string")
 			end
 
 			if #reason > 64 then
-				error("Inventory.Transfer.reason: length out of range")
+				refuseReliable("Inventory.Transfer.reason: length out of range")
 			end
 
 			buffer.writeu8(out_3, offset_3, #reason)
@@ -194,7 +196,9 @@ runtime = Volt.start({
 	},
 })
 
+beginReliable = runtime.reliable.begin
 allocateReliable = runtime.reliable.allocate
+refuseReliable = runtime.reliable.refuse
 
 local net = table.freeze({
 	Echo = table.freeze({
@@ -229,6 +233,10 @@ local net = table.freeze({
 
 	onFailure = function (handler: Volt.Failure)
 		runtime:onFailure(handler)
+	end,
+
+	stats = function (player: Player?): Volt.Stats
+		return runtime:stats(player)
 	end,
 })
 

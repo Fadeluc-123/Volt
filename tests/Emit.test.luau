@@ -208,6 +208,20 @@ describe("Emit", function ()
 		end)
 	end
 
+	describe("a refusal", function ()
+		test("leaves nothing of the message behind, neither bytes nor slots", function ()
+			local module: any, packet: () -> (buffer, { any }) = Generated.load("Objects", texts.Objects)
+			local written: { any } = least("Objects", "Objects")
+
+			written[2] = Instance.new("Folder")
+			expect((fire(module, "Objects", "Objects", written))).is(false)
+
+			local bytes: buffer, side: { any } = packet()
+			expect(buffer.len(bytes)).is(0)
+			expect(#side).is(0)
+		end)
+	end)
+
 	describe("with write validation off", function ()
 		local loose: { [string]: any } = {}
 		local checks: { [string]: number } = {}

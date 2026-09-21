@@ -1,29 +1,29 @@
-local allocateReliable = ...
+local beginReliable, allocateReliable, refuseReliable = ...
 
 local function writeFlags(a: boolean, b: number, c: boolean, d: boolean)
-	local offset: number, out: buffer = allocateReliable(2)
+	local offset: number, out: buffer = beginReliable(2)
 	local flags: number = 0
 
 	if typeof(a) ~= "boolean" then
-		error("Flags.a: expected boolean")
+		refuseReliable("Flags.a: expected boolean")
 	end
 
 	flags += a and 1 or 0
 
 	if typeof(b) ~= "number" or b % 1 ~= 0 or b < 0 or b > 255 then
-		error("Flags.b: expected u8")
+		refuseReliable("Flags.b: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, b)
 
 	if typeof(c) ~= "boolean" then
-		error("Flags.c: expected boolean")
+		refuseReliable("Flags.c: expected boolean")
 	end
 
 	flags += c and 2 or 0
 
 	if typeof(d) ~= "boolean" then
-		error("Flags.d: expected boolean")
+		refuseReliable("Flags.d: expected boolean")
 	end
 
 	flags += d and 4 or 0
@@ -43,60 +43,60 @@ local function readFlags(packet: buffer, cursor: number, _, sideCursor: number, 
 end
 
 local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer, free: string, health: number)
-	local offset: number, out: buffer = allocateReliable(12)
+	local offset: number, out: buffer = beginReliable(12)
 
 	if typeof(name) ~= "string" then
-		error("Bytes.name: expected string")
+		refuseReliable("Bytes.name: expected string")
 	end
 
 	if #name < 1 or #name > 32 then
-		error("Bytes.name: length out of range")
+		refuseReliable("Bytes.name: length out of range")
 	end
 
 	buffer.writeu8(out, offset, #name - 1)
 
 	if typeof(tag) ~= "string" then
-		error("Bytes.tag: expected string")
+		refuseReliable("Bytes.tag: expected string")
 	end
 
 	if #tag ~= 4 then
-		error("Bytes.tag: expected 4 bytes")
+		refuseReliable("Bytes.tag: expected 4 bytes")
 	end
 
 	buffer.writestring(out, offset + 1, tag)
 
 	if typeof(raw) ~= "buffer" then
-		error("Bytes.raw: expected buffer")
+		refuseReliable("Bytes.raw: expected buffer")
 	end
 
 	if buffer.len(raw) > 1024 then
-		error("Bytes.raw: length out of range")
+		refuseReliable("Bytes.raw: length out of range")
 	end
 
 	buffer.writeu16(out, offset + 5, buffer.len(raw))
 
 	if typeof(fixed) ~= "buffer" then
-		error("Bytes.fixed: expected buffer")
+		refuseReliable("Bytes.fixed: expected buffer")
 	end
 
 	if buffer.len(fixed) ~= 2 then
-		error("Bytes.fixed: expected 2 bytes")
+		refuseReliable("Bytes.fixed: expected 2 bytes")
 	end
 
 	buffer.copy(out, offset + 7, fixed)
 
 	if typeof(free) ~= "string" then
-		error("Bytes.free: expected string")
+		refuseReliable("Bytes.free: expected string")
 	end
 
 	if #free > 65535 then
-		error("Bytes.free: length out of range")
+		refuseReliable("Bytes.free: length out of range")
 	end
 
 	buffer.writeu16(out, offset + 9, #free)
 
 	if typeof(health) ~= "number" or health % 1 ~= 0 or health < 0 or health > 100 then
-		error("Bytes.health: expected u8(0..100)")
+		refuseReliable("Bytes.health: expected u8(0..100)")
 	end
 
 	buffer.writeu8(out, offset + 11, health)
@@ -165,10 +165,10 @@ local function readBytes(packet: buffer, cursor: number, _, sideCursor: number, 
 end
 
 local function writeValue(value: number)
-	local offset: number, out: buffer = allocateReliable(2)
+	local offset: number, out: buffer = beginReliable(2)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 65535 then
-		error("Value: expected u16")
+		refuseReliable("Value: expected u16")
 	end
 
 	buffer.writeu16(out, offset, value)

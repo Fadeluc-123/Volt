@@ -1,4 +1,4 @@
-local allocateReliable, slotReliable = ...
+local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 local TEAM: { string } = { "Red", "Blue" }
 
@@ -8,13 +8,13 @@ local ENUMS_C: { string } = { "Move", "Stop", "Say" }
 
 local ENUMS_D: { string } = { "Red", "Blue", "Green" }
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
 	local valueIndex: number? = table.find(TEAM, value)
 
 	if not valueIndex then
-		error("Team: expected enum { Red, Blue }")
+		refuse("Team: expected enum { Red, Blue }")
 	end
 
 	flags += valueIndex - 1
@@ -39,46 +39,46 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 end
 
 local function writeEnums(a: any, b: any, c: any, d: any)
-	local offset: number, out: buffer = allocateReliable(1)
+	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 	local bIndex: number? = table.find(ENUMS_B, b)
 
 	if not bIndex then
-		error("Enums.b: expected enum { X }")
+		refuseReliable("Enums.b: expected enum { X }")
 	end
 
 	if typeof(c) ~= "table" then
-		error("Enums.c: expected table")
+		refuseReliable("Enums.c: expected table")
 	end
 
 	local cIndex: number? = table.find(ENUMS_C, c.kind)
 
 	if not cIndex then
-		error("Enums.c: expected enum \"kind\" { Move { dx: i8, dy: i8 }, Stop, Say { text: string(0..16) } }")
+		refuseReliable("Enums.c: expected enum \"kind\" { Move { dx: i8, dy: i8 }, Stop, Say { text: string(0..16) } }")
 	end
 
 	flags += cIndex - 1
 	local dIndex: number? = table.find(ENUMS_D, d)
 
 	if not dIndex then
-		error("Enums.d: expected enum { Red, Blue, Green }")
+		refuseReliable("Enums.d: expected enum { Red, Blue, Green }")
 	end
 
 	flags += (dIndex - 1) * 4
 	buffer.writeu8(out, offset, flags)
-	writeTeam(allocateReliable, slotReliable, a)
+	writeTeam(allocateReliable, slotReliable, refuseReliable, a)
 
 	if cIndex == 1 then
 		local offset_2: number, out_2: buffer = allocateReliable(2)
 
 		if typeof(c.dx) ~= "number" or c.dx % 1 ~= 0 or c.dx < -128 or c.dx > 127 then
-			error("Enums.c.dx: expected i8")
+			refuseReliable("Enums.c.dx: expected i8")
 		end
 
 		buffer.writei8(out_2, offset_2, c.dx)
 
 		if typeof(c.dy) ~= "number" or c.dy % 1 ~= 0 or c.dy < -128 or c.dy > 127 then
-			error("Enums.c.dy: expected i8")
+			refuseReliable("Enums.c.dy: expected i8")
 		end
 
 		buffer.writei8(out_2, offset_2 + 1, c.dy)
@@ -86,11 +86,11 @@ local function writeEnums(a: any, b: any, c: any, d: any)
 		local offset_4: number, out_4: buffer = allocateReliable(1)
 
 		if typeof(c.text) ~= "string" then
-			error("Enums.c.text: expected string")
+			refuseReliable("Enums.c.text: expected string")
 		end
 
 		if #c.text > 16 then
-			error("Enums.c.text: length out of range")
+			refuseReliable("Enums.c.text: length out of range")
 		end
 
 		buffer.writeu8(out_4, offset_4, #c.text)

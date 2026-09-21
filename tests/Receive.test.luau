@@ -10,6 +10,7 @@
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
+local handshake = require("./Handshake")
 local Volt = require("@volt")
 
 local describe = Suite.describe
@@ -75,7 +76,13 @@ local function setup(side: string, mode: string, depth: number?, idBytes: number
 		scope = "Test",
 		side = side,
 		idBytes = idBytes or 1,
-		options = { flush = 1, manualReplication = false, unreliableBudget = 900 },
+		options = {
+			flush = 1,
+			manualReplication = false,
+			maxPacket = 8192,
+			maxPacketsPerSecond = 240,
+			unreliableBudget = 900,
+		},
 		messages = { [PING] = { name = "Ping", kind = "event", mode = mode, queue = depth or 4, read = read } },
 		outgoing = {},
 	}, side == "server" and mock.server or client)
@@ -83,6 +90,12 @@ local function setup(side: string, mode: string, depth: number?, idBytes: number
 	runtime:onFailure(function (_, kind: string, detail: string)
 		table.insert(failures, { kind = kind, detail = detail })
 	end)
+
+	-- The server reads nothing from a player until their handshake, which a generated client sends on its own
+	if side == "server" then
+		client.reliable(nil, handshake(0))
+		mock:step()
+	end
 
 	return {
 		runtime = runtime,

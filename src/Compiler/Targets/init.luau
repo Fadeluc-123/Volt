@@ -36,7 +36,7 @@ local VERSION: string = Contract.version
 local SENDS: { Send } = {}
 
 for _, reliability: string in { "Reliable", "Unreliable" } do
-	for _, parameter: Parameter in Contract.write do
+	for _, parameter: Parameter in { Contract.begin, table.unpack(Contract.write) } do
 		table.insert(SENDS, {
 			name = `{parameter.name}{reliability}`,
 			type = parameter.type,
