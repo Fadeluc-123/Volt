@@ -10,6 +10,8 @@
 local fs = require("@lune/fs")
 
 local Suite = require("./Suite")
+local rendered = require("./Rendered")
+local Analyse = require("@volt/Compiler/Analyse")
 local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Lexer = require("@volt/Compiler/Lexer")
 local Parser = require("@volt/Compiler/Parser")
@@ -20,10 +22,7 @@ local test = Suite.test
 local expect = Suite.expect
 
 type Declaration = Parser.Declaration
-type Type = Parser.Type
 
-local EVENT_KEYS: { string } = { "from", "type", "call", "data", "queue", "rate" }
-local FUNCTION_KEYS: { string } = { "data", "return", "yield", "timeout", "rate" }
 local EXAMPLE: string = fs.readFile("tests/Schemas/Example.volt") -- The design's complete example
 
 -- Every type form, each of which must print back exactly as written
@@ -101,6 +100,7 @@ local DECLARATIONS: { { string } } = {
 	{ "function Ping {}" },
 	{
 		"namespace Combat { event Hit { from: Client, type: Reliable, call: SingleSync } namespace Inner { type Id = u8 } }",
+		"namespace Combat {\n\tevent Hit { from: Client, type: Reliable, call: SingleSync }\n\tnamespace Inner {\n\t\ttype Id = u8\n\t}\n}",
 	},
 }
 
@@ -121,139 +121,12 @@ local function report(text: string): string
 end
 
 --[[
-    The three lines a diagnostic renders as when it points at the nth
-    occurrence of a needle in the text
+    Prints one parsed declaration back as schema source through the
+    compiler's own printer, which annotates nothing before resolution
 --]]
 
-local function rendered(text: string, needle: string, message: string, nth: number?): string
-	local source: Source.Source = Source.new("Test.volt", text)
-	local start: number = 0
-
-	for _ = 1, nth or 1 do
-		start = source.text:find(needle, start + 1, true) :: number
-	end
-
-	local line: number, column: number = source:position(start)
-	local excerpt: string = source:lineText(line)
-	local lead: string = excerpt:sub(1, column - 1):gsub("[^\t]", " ")
-	local carets: string = string.rep("^", #needle)
-
-	return `Test.volt:{line}:{column}: {message}\n{string.format("%5d | %s", line, excerpt)}\n      | {lead}{carets}`
-end
-
-local function formatRange(range: Parser.Range?, open: string, close: string): string
-	if not range then
-		return ""
-	end
-
-	local min: string = range.min and tostring(range.min) or ""
-	local max: string = range.max and tostring(range.max) or ""
-
-	return range.min == range.max and `{open}{min}{close}` or `{open}{min}..{max}{close}`
-end
-
-local formatFields: ({ Parser.Field }) -> string
-
---[[
-    Prints a type node back as schema source
---]]
-
-local function formatType(node: Type): string
-	if node.kind == "primitive" then
-		return `{node.name}{formatRange(node.range, "(", ")")}`
-	elseif node.kind == "roblox" then
-		local generics: { string } = {}
-		if node.generics then
-			for _, generic: Type in node.generics do
-				table.insert(generics, formatType(generic))
-			end
-		end
-
-		local item: string = node.item and `.{node.item}` or ""
-		local class: string = node.class and `({node.class})` or ""
-		local arguments: string = #generics > 0 and `<{table.concat(generics, ", ")}>` or ""
-
-		return `{node.name}{item}{class}{arguments}`
-	elseif node.kind == "struct" then
-		return `struct \{ {formatFields(node.fields)} }`
-	elseif node.kind == "enum" then
-		local variants: { string } = {}
-		for _, variant: Parser.Variant in node.variants do
-			table.insert(
-				variants,
-				variant.fields and `{variant.name} \{ {formatFields(variant.fields)} }` or variant.name
-			)
-		end
-
-		local tag: string = node.tag and `"{node.tag}" ` or ""
-		return `enum {tag}\{ {table.concat(variants, ", ")} }`
-	elseif node.kind == "set" then
-		return `set<{formatType(node.element)}>{formatRange(node.range, "(", ")")}`
-	elseif node.kind == "map" then
-		return `\{ [{formatType(node.key)}]: {formatType(node.value)} }{formatRange(node.range, "(", ")")}`
-	elseif node.kind == "array" then
-		return `{formatType(node.element)}{node.range and formatRange(node.range, "[", "]") or "[]"}`
-	elseif node.kind == "optional" then
-		return `{formatType(node.inner)}?`
-	elseif node.kind == "union" then
-		local members: { string } = {}
-		for _, member: Type in node.members do
-			table.insert(members, formatType(member))
-		end
-
-		return table.concat(members, " | ")
-	end
-
-	return node.name
-end
-
-function formatFields(fields: { Parser.Field }): string
-	local parts: { string } = {}
-	for _, field: Parser.Field in fields do
-		table.insert(parts, `{field.name}: {formatType(field.type)}`)
-	end
-	return table.concat(parts, ", ")
-end
-
---[[
-    Prints a record value: a parameter pack or a type
---]]
-
-local function formatValue(value: any): string
-	if typeof(value) ~= "table" then
-		return tostring(value)
-	end
-	return value.kind == "pack" and `({formatFields(value.parameters)})` or formatType(value)
-end
-
---[[
-    Prints a declaration back as schema source, with record keys in shape
-    order and struct and enum declarations in their type form
---]]
-
-local function formatDeclaration(node: Declaration): string
-	if node.kind == "type" then
-		return `{node.export and "export " or ""}type {node.name} = {formatType(node.type)}`
-	elseif node.kind == "namespace" then
-		local inner: { string } = {}
-		for _, declaration: Declaration in node.declarations do
-			table.insert(inner, formatDeclaration(declaration))
-		end
-
-		return `namespace {node.name} \{ {table.concat(inner, " ")} }`
-	end
-
-	local entries: { string } = {}
-	for _, key: string in node.kind == "event" and EVENT_KEYS or FUNCTION_KEYS do
-		local value: any = (node :: any)[key]
-
-		if value ~= nil then
-			table.insert(entries, `{key}: {formatValue(value)}`)
-		end
-	end
-
-	return #entries == 0 and `{node.kind} {node.name} \{}`
-		or `{node.kind} {node.name} \{ {table.concat(entries, ", ")} }`
+local function printed(declaration: Declaration): string
+	return Analyse.print({ options = { spans = {} }, declarations = { declaration } })
 end
 
 --[[
@@ -266,7 +139,7 @@ local function roundTrip(text: string): string
 	expect(diagnostics:render()).is("")
 	expect(#file.declarations).is(1)
 
-	return formatDeclaration(file.declarations[1])
+	return printed(file.declarations[1])
 end
 
 describe("Parser", function ()
@@ -463,10 +336,8 @@ describe("Parser", function ()
 
 			expect(diagnostics.errors).is(2)
 			expect(#file.declarations).is(2)
-			expect(formatDeclaration(file.declarations[1])).is(
-				"event B { from: Client, type: Reliable, call: Polling }"
-			)
-			expect(formatDeclaration(file.declarations[2])).is("type D = u8")
+			expect(printed(file.declarations[1])).is("event B { from: Client, type: Reliable, call: Polling }")
+			expect(printed(file.declarations[2])).is("type D = u8")
 		end)
 
 		test("resumes inside a namespace and still closes it", function ()
@@ -474,8 +345,8 @@ describe("Parser", function ()
 			local file: Parser.File, diagnostics = parse(text)
 
 			expect(diagnostics.errors).is(1)
-			expect(formatDeclaration(file.declarations[1])).is("namespace N { type B = u8 }")
-			expect(formatDeclaration(file.declarations[2])).is("type C = u8")
+			expect(printed(file.declarations[1])).is("namespace N {\n\ttype B = u8\n}")
+			expect(printed(file.declarations[2])).is("type C = u8")
 		end)
 
 		test("a missing closing brace loses only its own declaration", function ()
@@ -484,9 +355,7 @@ describe("Parser", function ()
 			local file: Parser.File, diagnostics = parse(text)
 
 			expect(diagnostics.errors).is(1)
-			expect(formatDeclaration(file.declarations[1])).is(
-				"event B { from: Client, type: Reliable, call: Polling }"
-			)
+			expect(printed(file.declarations[1])).is("event B { from: Client, type: Reliable, call: Polling }")
 		end)
 	end)
 end)

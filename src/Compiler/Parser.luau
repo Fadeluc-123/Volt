@@ -41,13 +41,20 @@ export type Type =
 	| { kind: "array", element: Type, range: Range?, start: number, finish: number }
 	| { kind: "optional", inner: Type, start: number, finish: number }
 	| { kind: "union", members: { Type }, start: number, finish: number }
-	| { kind: "reference", name: string, start: number, finish: number }
+	| { kind: "reference", name: string, target: TypeDeclaration?, start: number, finish: number }
+
+--[[
+	Resolution fills path, target, references and the ids; the parser leaves
+	them nil
+--]]
 
 export type TypeDeclaration = {
 	kind: "type",
 	name: string,
 	export: boolean,
 	type: Type,
+	path: string?,
+	references: number?,
 	start: number,
 	finish: number,
 }
@@ -62,6 +69,9 @@ export type Event = {
 	queue: number?,
 	rate: (number | string)?,
 	spans: { [string]: Span },
+	path: string?,
+	toServer: number?,
+	toClient: number?,
 	start: number,
 	finish: number,
 }
@@ -75,6 +85,9 @@ export type Function = {
 	timeout: number?,
 	rate: (number | string)?,
 	spans: { [string]: Span },
+	path: string?,
+	toServer: number?,
+	toClient: number?,
 	start: number,
 	finish: number,
 }
@@ -83,6 +96,7 @@ export type Namespace = {
 	kind: "namespace",
 	name: string,
 	declarations: { Declaration },
+	path: string?,
 	start: number,
 	finish: number,
 }
@@ -113,7 +127,7 @@ export type Options = {
 
 export type File = { options: Options, declarations: { Declaration } }
 
-type Spec = { key: string, kind: string?, values: { string }?, required: boolean? }
+export type Spec = { key: string, kind: string?, values: { string }?, required: boolean? }
 
 local DECLARATIONS: { [string]: boolean } = {
 	option = true,
@@ -212,6 +226,11 @@ local FUNCTION: { Spec } = {
 	{ key = "timeout", kind = "number" },
 	{ key = "rate", kind = "number", values = RATE },
 }
+
+-- Later stages print and default keys in the order the shapes list them
+Parser.OPTIONS = OPTIONS
+Parser.EVENT = EVENT
+Parser.FUNCTION = FUNCTION
 
 -- Thrown to abandon a declaration after its error is reported; nothing else is ever thrown on purpose
 local ABANDONED: { nil } = {}
@@ -982,6 +1001,43 @@ end
 function Parser:fail(code: string, message: string, span: Span): never
 	self._diagnostics:error(code, message, span)
 	error(ABANDONED, 0)
+end
+
+--[[
+    The type nodes directly inside a node, so a pass over the tree can
+    recurse without knowing every shape
+--]]
+
+function Parser.children(node: Type | Pack): { Type }
+	local list: { Type } = {}
+
+	if node.kind == "struct" then
+		for _, field: Field in node.fields do
+			table.insert(list, field.type)
+		end
+	elseif node.kind == "pack" then
+		for _, field: Field in node.parameters do
+			table.insert(list, field.type)
+		end
+	elseif node.kind == "enum" then
+		for _, variant: Variant in node.variants do
+			for _, field: Field in (variant.fields or {}) :: { Field } do
+				table.insert(list, field.type)
+			end
+		end
+	elseif node.kind == "map" then
+		return { node.key, node.value }
+	elseif node.kind == "array" or node.kind == "set" then
+		return { node.element }
+	elseif node.kind == "optional" then
+		return { node.inner }
+	elseif node.kind == "union" then
+		return node.members
+	elseif node.kind == "roblox" then
+		return node.generics or {}
+	end
+
+	return list
 end
 
 return Parser
