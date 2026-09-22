@@ -1,5 +1,7 @@
 local beginReliable, allocateReliable, refuseReliable = ...
 
+export type Health = number
+
 local function writeFlags(a: boolean, b: number, c: boolean, d: boolean)
 	local offset: number, out: buffer = beginReliable(2)
 	local flags: number = 0
@@ -30,7 +32,7 @@ local function writeFlags(a: boolean, b: number, c: boolean, d: boolean)
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readFlags(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readFlags(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 2 > length then
 		error("Flags: truncated")
 	end
@@ -42,7 +44,7 @@ local function readFlags(packet: buffer, cursor: number, _, sideCursor: number, 
 	return cursor, sideCursor, bit32.btest(flags, 1), b, bit32.btest(flags, 2), bit32.btest(flags, 4)
 end
 
-local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer, free: string, health: number)
+local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer, free: string, health: Health)
 	local offset: number, out: buffer = beginReliable(12)
 
 	if typeof(name) ~= "string" then
@@ -108,7 +110,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 	buffer.writestring(freeOut, freeOffset, free)
 end
 
-local function readBytes(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readBytes(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 12 > length then
 		error("Bytes: truncated")
 	end
@@ -174,7 +176,7 @@ local function writeValue(value: number)
 	buffer.writeu16(out, offset, value)
 end
 
-local function readValue(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readValue(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 2 > length then
 		error("Value: truncated")
 	end
@@ -188,7 +190,7 @@ end
 local function writeEmpty()
 end
 
-local function readEmpty(_, cursor: number, _, sideCursor: number, _)
+local function readEmpty(_: buffer, cursor: number, _: { any }, sideCursor: number, _: number)
 	return cursor, sideCursor
 end
 

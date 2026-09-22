@@ -1,6 +1,9 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
+export type Stack = { item: string, quantity: number, properties: any? }
+export type Save = { version: number, stacks: { Stack } }
+
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
@@ -76,7 +79,7 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 	return cursor, sideCursor, value
 end
 
-local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
+local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(3)
 
 	if typeof(value) ~= "table" then
@@ -135,7 +138,7 @@ local function readSave(packet: buffer, cursor: number, side: { any }, sideCurso
 	return cursor, sideCursor, value
 end
 
-local function writeRecords(a: any, b: any, c: any, d: any)
+local function writeRecords(a: { x: number, y: string, z: boolean }, b: {}, c: Stack, d: Save)
 	local offset: number, out: buffer = beginReliable(3)
 	local flags: number = 0
 

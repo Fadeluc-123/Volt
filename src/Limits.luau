@@ -14,6 +14,8 @@ local Types = require("./Config/Types/Runtime")
 
 type Bucket = Types.Bucket
 type Failure = Types.Failure
+type Limit = Types.Limit
+type Message = Types.Message
 type Stats = Types.Stats
 
 local WARN_SECONDS: number = Config.warnSeconds
@@ -21,9 +23,9 @@ local WARN_SECONDS: number = Config.warnSeconds
 local HANDSHAKE_ID: number = 0 -- The one message id no schema uses, which opens a session
 local HANDSHAKE_BYTES: number = 5 -- That id as one byte, then the schema hash as a u32
 
--- Takes one token from a bucket refilled at the rate a second, or finds none to take
-local function take(bucket: Bucket, rate: number, now: number): boolean
-	local tokens: number = math.min(rate, bucket.tokens + (now - bucket.last) * rate)
+-- Takes one token from a bucket refilled at the rate a second and holding the burst at most, or finds none to take
+local function take(bucket: Bucket, rate: number, burst: number, now: number): boolean
+	local tokens: number = math.min(burst, bucket.tokens + (now - bucket.last) * rate)
 
 	bucket.last = now
 
@@ -50,8 +52,21 @@ function Limits.fresh(): Stats
 		packetsOut = 0,
 		bytesOut = 0,
 		messagesOut = 0,
-		failures = {}
+		rejected = 0,
+		failures = {},
 	}
+end
+
+-- The limit of every incoming message that has one, by id, which the wrapper may change while the game runs
+function Limits:limits(messages: { [number]: Message })
+	local limits: { [number]: Limit } = {}
+	for id: number, message: Message in messages do
+		local rate: number? = message.rate
+		if rate then
+			limits[id] = { rate = rate, burst = rate }
+		end
+	end
+	self._limits = limits
 end
 
 --[[
@@ -79,7 +94,7 @@ function Limits:admit(player: any, packet: buffer): number?
 	local state = self._players[player]
 
 	self._now = now
-	
+
 	self:_count(player, "packetsIn", 1)
 	self:_count(player, "bytesIn", length)
 
@@ -98,7 +113,7 @@ function Limits:admit(player: any, packet: buffer): number?
 		return nil
 	end
 
-	if not take(state.packets, self._maxPackets, now) then
+	if not take(state.packets, self._maxPackets, self._maxPackets, now) then
 		self:fail(player, "rate", `over {self._maxPackets} packets a second`)
 		return nil
 	end
@@ -133,7 +148,7 @@ end
     the packet goes on without it
 --]]
 
-function Limits:allow(player: any, id: number, name: string, rate: number): boolean
+function Limits:allow(player: any, id: number, name: string, limit: Limit): boolean
 	local state = self._players[player]
 	if not state then
 		return false
@@ -144,15 +159,15 @@ function Limits:allow(player: any, id: number, name: string, rate: number): bool
 	local now: number = self._now
 
 	if not bucket then
-		bucket = { tokens = rate, last = now }
+		bucket = { tokens = limit.burst, last = now }
 		buckets[id] = bucket
 	end
 
-	if take(bucket :: Bucket, rate, now) then
+	if take(bucket :: Bucket, limit.rate, limit.burst, now) then
 		return true
 	end
 
-	self:fail(player, "rate", `{name}: over {rate} a second`)
+	self:fail(player, "rate", `{name}: over {limit.rate} a second`)
 	return false
 end
 

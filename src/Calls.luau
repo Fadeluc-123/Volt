@@ -12,6 +12,7 @@ local Calls = {} :: any
 local Config = require("./Config/Runtime")
 local Types = require("./Config/Types/Runtime")
 
+type Limit = Types.Limit
 type Message = Types.Message
 
 -- A call in flight: when it fails, and what settles it, gone once it has been settled
@@ -189,8 +190,10 @@ end
 --[[
     Runs a call from a player: the handler on a thread of its own, since
     most yield, with its returns as the reply; a call past the function's
-    rate or with no handler is refused at once. Returns the cursors, so a
-    reader's tail is this one call
+    rate or with no handler is refused at once, and one a hook vetoes is
+    dropped, so its caller waits out the timeout, since a veto that must
+    answer is the handler's to make. Returns the cursors, so a reader's
+    tail is this one call
 --]]
 
 function Calls:call(
@@ -202,11 +205,13 @@ function Calls:call(
 	...: any
 ): (number, number)
 	local message: Message = self._messages[id]
-	local rate: number? = message.rate
+	local limit: Limit? = self._limits[id]
 	local handler = self._handlers[id]
 
-	if rate and not self:allow(player, id, message.name, rate) then
+	if limit and not self:allow(player, id, message.name, limit) then
 		self:_reply(id, player, slot, STATUS.limited, "rate limited")
+	elseif self._hooked and not self:guard(id, player, ...) then
+		return cursor, sideCursor
 	elseif handler then
 		self._spawn(self._serve, self, id, player, slot, handler, ...)
 	else

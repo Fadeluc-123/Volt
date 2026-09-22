@@ -16,10 +16,12 @@ local Receive = require("@self/Receive")
 local Remotes = require("@self/Remotes")
 local Send = require("@self/Send")
 local Types = require("@self/Config/Types/Runtime")
+local Wrapper = require("@self/Wrapper")
 
 local SERVER: string = "server" -- The one target a client's sends go to
 
 export type Failure = Types.Failure
+export type Hook = Types.Hook
 export type Mock = Mock.Mock
 export type Schema = Types.Schema
 export type Spawn = Types.Spawn
@@ -30,7 +32,14 @@ export type Runtime = {
 	reliable: Send.Send,
 	unreliable: Send.Send,
 	frame: number,
+	before: { [number]: Hook }, -- The hook before a send, by the id of the message sent
+	beforeSend: (name: string, hook: Hook?) -> (),
+	afterReceive: (name: string?, hook: Hook?) -> (),
+	rate: (name: string, perSecond: number, burst: number?) -> (),
 	target: (self: Runtime, player: any) -> boolean,
+	broadcast: (self: Runtime, id: number, targets: { [any]: any }?, except: any?, write: (...any) -> (), ...any) -> (),
+	encode: (self: Runtime, write: (...any) -> (), value: any) -> (buffer, { any }?),
+	decode: (self: Runtime, read: (...any) -> (number, number, any), packet: buffer, side: { any }?) -> any,
 	deliver: (self: Runtime, id: number, player: any, cursor: number, sideCursor: number, ...any) -> (number, number),
 	on: (self: Runtime, id: number, listener: (...any) -> ()) -> () -> (),
 	iter: (self: Runtime, id: number) -> () -> ...any,
@@ -107,6 +116,8 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local self = setmetatable({
 		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
 		_messages = schema.messages,
+		_outgoing = schema.outgoing,
+		_server = server,
 		_idBytes = schema.idBytes,
 		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
 		_hash = schema.hash,
@@ -129,9 +140,11 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 
 	self.reliable = Send.new(live.reliable, stats, dropped)
 	self.unreliable = Send.new(live.unreliable, stats, dropped, options.unreliableBudget)
-	
+
 	self:channels(schema.messages)
 	self:functions(schema.messages)
+	self:limits(schema.messages)
+	self:hooks()
 
 	if server then
 		local players, added, removing = live.players, live.playerAdded, live.playerRemoving
@@ -153,7 +166,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	else
 		self.reliable.current = self.reliable:add(SERVER, Limits.fresh())
 		self.unreliable.current = self.unreliable:add(SERVER, Limits.fresh())
-		
+
 		self:handshake(schema.hash)
 	end
 
@@ -207,6 +220,26 @@ function Runtime:target(player: any): boolean
 	return true
 end
 
+--[[
+    Writes a message once, to the scratch states, and copies it to every
+    target, or to those listed or set, or to all but one, unless the hook
+    before its send vetoes it. Every broadcast variant of the generated
+    API is this one call with the message's writer and its arguments
+--]]
+
+function Runtime:broadcast(id: number, targets: { [any]: any }?, except: any?, write: (...any) -> (), ...: any)
+	local hook: Hook? = self.before[id]
+	if hook and not hook(targets, ...) then
+		return
+	end
+
+	self:target(nil)
+	write(...)
+
+	local send: Send.Send = self._outgoing[id].reliable and self.reliable or self.unreliable
+	send:broadcast(targets, except)
+end
+
 -- Fails the calls past their deadline, then sends every target's accumulated bytes; the Heartbeat does this every flush-th frame
 function Runtime:flush()
 	self:_sweep()
@@ -240,8 +273,8 @@ function Runtime:_leave(player: any)
 	self.unreliable:remove(player)
 end
 
--- The receive side, the calls and the limits are the methods of one sibling each, and a name defined twice is a bug
-for _, part in { Calls, Limits, Receive } do
+-- The receive side, the calls, the limits and the wrapper's hooks are the methods of one sibling each, and a name defined twice is a bug
+for _, part in { Calls, Limits, Receive, Wrapper } do
 	for name: string, method in part do
 		assert(Runtime[name] == nil, `Runtime.{name} is defined twice`)
 		Runtime[name] = method

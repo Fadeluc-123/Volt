@@ -1,8 +1,8 @@
 --[[
     Proves the volt command checks a schema and exits with the right code,
     prints the resolved declarations on --ast, prints nothing but the
-    diagnostics on --quiet, and writes both modules beside the schema
-    unless it only checks
+    diagnostics on --quiet, and writes both modules and the types beside
+    the schema unless it only checks
 --]]
 
 --!strict
@@ -16,7 +16,7 @@ local test = Suite.test
 local expect = Suite.expect
 
 local EXAMPLE: string = "tests/Schemas/Example.volt"
-local EVENTS: string = "tests/Schemas/Events.volt"
+local EXPORTS: string = "tests/Schemas/Exports.volt" -- The one test schema that asks for a types module
 
 local function volt(...: string): process.ExecResult
 	return process.exec("lune", { "run", "src/Compiler", ... })
@@ -40,18 +40,19 @@ describe("Compiler", function ()
 		expect((result.stdout:find("schema hash", 1, true))).is(nil)
 	end)
 
-	test("writes both modules beside the schema unless it only checks", function ()
+	test("writes both modules and the types beside the schema unless it only checks", function ()
 		local directory: string = `{process.env.TEMP or process.env.TMPDIR or "/tmp"}/VoltCompilerTest`
 		local schema: string = `{directory}/Cli.volt`
 
 		fs.writeDir(directory)
-		fs.writeFile(schema, fs.readFile(EVENTS))
+		fs.writeFile(schema, fs.readFile(EXPORTS))
 
 		local result: process.ExecResult = volt(schema, "--quiet")
 
 		expect(result.code).is(0)
 		expect(fs.readFile(`{directory}/Client.luau`):find("The client module Volt", 1, true) ~= nil).is(true)
 		expect(fs.readFile(`{directory}/Server.luau`):find("The server module Volt", 1, true) ~= nil).is(true)
+		expect(fs.readFile(`{directory}/Types.luau`):find("The types module Volt", 1, true) ~= nil).is(true)
 
 		fs.removeDir(directory)
 	end)

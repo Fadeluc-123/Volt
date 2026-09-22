@@ -3,7 +3,8 @@
     exactly the bytes and slots written and nothing else, splits an
     unreliable packet between messages to fit the budget with none
     straddling, copies a broadcast into every target it should reach,
-    undoes a refused message, drops one past the cap, and counts
+    takes the scratch state as one packet, undoes a refused message,
+    drops one past the cap, and counts
 --]]
 
 --!strict
@@ -184,6 +185,30 @@ describe("Send", function ()
 		send:remove("a")
 		send:flush()
 
+		expect(#fired).is(0)
+	end)
+
+	test("takes the scratch state's bytes and slots as one packet, counting nothing, and leaves it empty", function ()
+		local send: Send, fired: { Fired }, total: Stats = recorded()
+
+		send.current = send.scratch
+		send.allocate(3)
+		send.slot("kept")
+
+		local packet: buffer, side: { any }? = send:take()
+
+		expect(buffer.len(packet)).is(3)
+		expect(table.concat(side :: any, ",")).is("kept")
+		expect(`{send.scratch.cursor},{send.scratch.sideCursor}`).is("0,1")
+		expect(total.messagesOut).is(0)
+
+		send.allocate(1)
+
+		local _, none: { any }? = send:take()
+
+		expect(none).is(nil)
+
+		send:flush()
 		expect(#fired).is(0)
 	end)
 

@@ -12,14 +12,31 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
+export type ServerEvent<A...> = {
+	fire: (player: Player, A...) -> (),
+	fireAll: (A...) -> (),
+	fireList: (players: { Player }, A...) -> (),
+	fireExcept: (player: Player, A...) -> (),
+	fireSet: (players: { [Player]: true }, A...) -> (),
+}
+
+export type ServerListener<A...> = {
+	on: (listener: (player: Player, A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, Player, A...),
+}
+
+export type ServerFunction<A..., R...> = { on: (handler: (player: Player, A...) -> R...) -> () -> () }
+
+export type Exported<T> = {
+	write: (value: T) -> (buffer, { any }?),
+	read: (packet: buffer, side: { any }?) -> T,
+}
+
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
-local refuseReliable: (string) -> ()
-local beginUnreliable: (number) -> (number, buffer)
-local refuseUnreliable: (string) -> ()
-local markUnreliable: () -> ()
+local refuseReliable: (string) -> never
 
-local function readInput(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readInput(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 2 > length then
 		error("Input: truncated")
 	end
@@ -36,7 +53,7 @@ local function readInput(player: Player?, packet: buffer, cursor: number, _, sid
 	return runtime:deliver(1, player, cursor, sideCursor, dir, bit32.btest(flags, 1))
 end
 
-local function readChat(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readChat(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Chat: truncated")
 	end
@@ -59,11 +76,11 @@ local function readChat(player: Player?, packet: buffer, cursor: number, _, side
 	return runtime:deliver(2, player, cursor, sideCursor, value)
 end
 
-local function readReady(player: Player?, _, cursor: number, _, sideCursor: number, _): (number, number)
+local function readReady(player: Player?, _: buffer, cursor: number, _: { any }, sideCursor: number, _: number): (number, number)
 	return runtime:deliver(3, player, cursor, sideCursor)
 end
 
-local function readGrab(player: Player?, _, cursor: number, side: { any }, sideCursor: number, _): (number, number)
+local function readGrab(player: Player?, _: buffer, cursor: number, side: { any }, sideCursor: number, _: number): (number, number)
 	local value: Instance? = side[sideCursor]
 	sideCursor += 1
 
@@ -74,7 +91,7 @@ local function readGrab(player: Player?, _, cursor: number, side: { any }, sideC
 	return runtime:deliver(4, player, cursor, sideCursor, value)
 end
 
-local function readPing(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readPing(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 4 > length then
 		error("Ping: truncated")
 	end
@@ -85,48 +102,9 @@ local function readPing(player: Player?, packet: buffer, cursor: number, _, side
 	return runtime:deliver(5, player, cursor, sideCursor, value)
 end
 
-local function writeDamage(value: any)
-	local offset: number, out: buffer = beginReliable(4)
-	buffer.writeu8(out, offset, 1)
-
-	if typeof(value) ~= "table" then
-		refuseReliable("Damage: expected table")
-	end
-
-	if typeof(value.target) ~= "number" or value.target % 1 ~= 0 or value.target < 0 or value.target > 65535 then
-		refuseReliable("Damage.target: expected u16")
-	end
-
-	buffer.writeu16(out, offset + 1, value.target)
-
-	if typeof(value.amount) ~= "number" or value.amount % 1 ~= 0 or value.amount < 0 or value.amount > 255 then
-		refuseReliable("Damage.amount: expected u8")
-	end
-
-	buffer.writeu8(out, offset + 3, value.amount)
-end
-
-local function writeSpray(x: number, y: number)
-	local offset: number, out: buffer = beginUnreliable(3)
-	buffer.writeu8(out, offset, 2)
-
-	if typeof(x) ~= "number" or x % 1 ~= 0 or x < 0 or x > 255 then
-		refuseUnreliable("Spray.x: expected u8")
-	end
-
-	buffer.writeu8(out, offset + 1, x)
-
-	if typeof(y) ~= "number" or y % 1 ~= 0 or y < 0 or y > 255 then
-		refuseUnreliable("Spray.y: expected u8")
-	end
-
-	buffer.writeu8(out, offset + 2, y)
-	markUnreliable()
-end
-
 local function writeSync(value: number)
 	local offset: number, out: buffer = beginReliable(2)
-	buffer.writeu8(out, offset, 3)
+	buffer.writeu8(out, offset, 1)
 
 	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
 		refuseReliable("Sync: expected u8")
@@ -135,7 +113,7 @@ local function writeSync(value: number)
 	buffer.writeu8(out, offset + 1, value)
 end
 
-local function readSync(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readSync(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Sync: truncated")
 	end
@@ -146,14 +124,9 @@ local function readSync(player: Player?, packet: buffer, cursor: number, _, side
 	return runtime:deliver(6, player, cursor, sideCursor, value)
 end
 
-local function writeMatch_Start()
-	local offset: number, out: buffer = beginReliable(1)
-	buffer.writeu8(out, offset, 4)
-end
-
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x4692C530,
+	hash = 0x88701285,
 	scope = "Events",
 	side = "server",
 	idBytes = 1,
@@ -175,20 +148,16 @@ runtime = Volt.start({
 	},
 
 	outgoing = {
-		[1] = { name = "Damage", reliable = true, minBytes = 4, maxBytes = 4 },
-		[2] = { name = "Spray", reliable = false, minBytes = 3, maxBytes = 3 },
-		[3] = { name = "Sync", reliable = true, minBytes = 2, maxBytes = 2 },
-		[4] = { name = "Match.Start", reliable = true, minBytes = 1, maxBytes = 1 },
+		[1] = { name = "Sync", kind = "event", reliable = true, minBytes = 2, maxBytes = 2 },
 	},
 })
 
 beginReliable = runtime.reliable.begin
 refuseReliable = runtime.reliable.refuse
-beginUnreliable = runtime.unreliable.begin
-refuseUnreliable = runtime.unreliable.refuse
-markUnreliable = runtime.unreliable.mark
 
-local net = table.freeze({
+local before: { [number]: Volt.Hook } = runtime.before
+
+local net = {
 	Input = table.freeze({
 		on = function (listener: (player: Player, dir: number, jump: boolean) -> ()): () -> ()
 			return runtime:on(1, listener)
@@ -235,99 +204,27 @@ local net = table.freeze({
 		end,
 	}),
 
-	Damage = table.freeze({
-		fire = function (player: Player, value: any)
-			if runtime:target(player) then
-				writeDamage(value)
-			end
-		end,
-
-		fireAll = function (value: any)
-			runtime:target(nil)
-			writeDamage(value)
-			runtime.reliable:broadcast()
-		end,
-
-		fireList = function (players: { Player }, value: any)
-			runtime:target(nil)
-			writeDamage(value)
-			runtime.reliable:broadcast(players)
-		end,
-
-		fireExcept = function (player: Player, value: any)
-			runtime:target(nil)
-			writeDamage(value)
-			runtime.reliable:broadcast(nil, player)
-		end,
-
-		fireSet = function (players: { [Player]: true }, value: any)
-			runtime:target(nil)
-			writeDamage(value)
-			runtime.reliable:broadcast(players)
-		end,
-	}),
-
-	Spray = table.freeze({
-		fire = function (player: Player, x: number, y: number)
-			if runtime:target(player) then
-				writeSpray(x, y)
-			end
-		end,
-
-		fireAll = function (x: number, y: number)
-			runtime:target(nil)
-			writeSpray(x, y)
-			runtime.unreliable:broadcast()
-		end,
-
-		fireList = function (players: { Player }, x: number, y: number)
-			runtime:target(nil)
-			writeSpray(x, y)
-			runtime.unreliable:broadcast(players)
-		end,
-
-		fireExcept = function (player: Player, x: number, y: number)
-			runtime:target(nil)
-			writeSpray(x, y)
-			runtime.unreliable:broadcast(nil, player)
-		end,
-
-		fireSet = function (players: { [Player]: true }, x: number, y: number)
-			runtime:target(nil)
-			writeSpray(x, y)
-			runtime.unreliable:broadcast(players)
-		end,
-	}),
-
 	Sync = table.freeze({
 		fire = function (player: Player, value: number)
-			if runtime:target(player) then
+			if (before[1] == nil or before[1](player, value)) and runtime:target(player) then
 				writeSync(value)
 			end
 		end,
 
 		fireAll = function (value: number)
-			runtime:target(nil)
-			writeSync(value)
-			runtime.reliable:broadcast()
+			runtime:broadcast(1, nil, nil, writeSync, value)
 		end,
 
 		fireList = function (players: { Player }, value: number)
-			runtime:target(nil)
-			writeSync(value)
-			runtime.reliable:broadcast(players)
+			runtime:broadcast(1, players, nil, writeSync, value)
 		end,
 
 		fireExcept = function (player: Player, value: number)
-			runtime:target(nil)
-			writeSync(value)
-			runtime.reliable:broadcast(nil, player)
+			runtime:broadcast(1, nil, player, writeSync, value)
 		end,
 
 		fireSet = function (players: { [Player]: true }, value: number)
-			runtime:target(nil)
-			writeSync(value)
-			runtime.reliable:broadcast(players)
+			runtime:broadcast(1, players, nil, writeSync, value)
 		end,
 
 		on = function (listener: (player: Player, value: number) -> ()): () -> ()
@@ -339,39 +236,12 @@ local net = table.freeze({
 		end,
 	}),
 
-	Match = table.freeze({
-		Start = table.freeze({
-			fire = function (player: Player)
-				if runtime:target(player) then
-					writeMatch_Start()
-				end
-			end,
-
-			fireAll = function ()
-				runtime:target(nil)
-				writeMatch_Start()
-				runtime.reliable:broadcast()
-			end,
-
-			fireList = function (players: { Player })
-				runtime:target(nil)
-				writeMatch_Start()
-				runtime.reliable:broadcast(players)
-			end,
-
-			fireExcept = function (player: Player)
-				runtime:target(nil)
-				writeMatch_Start()
-				runtime.reliable:broadcast(nil, player)
-			end,
-
-			fireSet = function (players: { [Player]: true })
-				runtime:target(nil)
-				writeMatch_Start()
-				runtime.reliable:broadcast(players)
-			end,
-		}),
+	hooks = table.freeze({
+		beforeSend = runtime.beforeSend,
+		afterReceive = runtime.afterReceive,
 	}),
+
+	rate = runtime.rate,
 
 	flush = function ()
 		runtime:flush()
@@ -384,6 +254,18 @@ local net = table.freeze({
 	stats = function (player: Player?): Volt.Stats
 		return runtime:stats(player)
 	end,
+}
+
+net.events = table.freeze({
+	["Input"] = net.Input,
+	["Chat"] = net.Chat,
+	["Ready"] = net.Ready,
+	["Grab"] = net.Grab,
+	["Ping"] = net.Ping,
+	["Sync"] = net.Sync,
 })
 
-return net
+net.functions = table.freeze({})
+net.exports = table.freeze({})
+
+return table.freeze(net)

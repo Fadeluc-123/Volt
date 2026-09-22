@@ -37,13 +37,14 @@ export type Send = {
 	begin: (bytes: number) -> (number, buffer),
 	allocate: (bytes: number) -> (number, buffer),
 	slot: (value: any) -> (),
-	refuse: (message: string) -> (),
+	refuse: (message: string) -> never,
 	mark: () -> (),
 	current: State,
 	scratch: State,
 	add: (self: Send, target: any, stats: Stats) -> State,
 	remove: (self: Send, target: any) -> (),
 	broadcast: (self: Send, targets: { [any]: any }?, except: any?) -> (),
+	take: (self: Send) -> (buffer, { any }?),
 	flush: (self: Send) -> (),
 }
 
@@ -151,7 +152,7 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget
 	end
 
 	-- Refuses the value a writer is on: the message so far is discarded, and the refusal reaches whoever fired
-	local function refuse(message: string)
+	local function refuse(message: string): never
 		rollback(self.current, total)
 		error(message, 0)
 	end
@@ -244,6 +245,23 @@ function Send:_copy(state: State?)
 end
 
 --[[
+    The scratch state's bytes and slots as one exact packet, for a value
+    serialised on its own rather than sent; the state is empty again after
+--]]
+
+function Send:take(): (buffer, { any }?)
+	local scratch: State = self.scratch
+	local bytes: number = scratch.cursor
+	local packet: buffer = buffer.create(bytes)
+	local side: { any }? = scratch.sideCursor > 1 and table.move(scratch.side, 1, scratch.sideCursor - 1, 1, {}) or nil
+
+	buffer.copy(packet, 0, scratch.out, 0, bytes)
+	reset(scratch)
+
+	return packet, side
+end
+
+--[[
     Fires every target's bytes as exact packets, then empties the
     states for the next frame. A run of whole messages goes in one
     packet while it fits the budget, so an unreliable fire never carries
@@ -295,13 +313,13 @@ function Send:_packet(target: any, state: State, from: number, to: number, sideF
 	local total: Stats = self._total
 
 	buffer.copy(packet, 0, state.out, from, bytes)
-	
+
 	stats.packetsOut += 1
 	stats.bytesOut += bytes
-	
+
 	total.packetsOut += 1
 	total.bytesOut += bytes
-	
+
 	self._fire(target, packet, side)
 end
 

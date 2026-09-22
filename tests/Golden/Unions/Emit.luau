@@ -1,8 +1,11 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
+export type Stack = { item: string, quantity: number, properties: any? }
+export type Team = "Red" | "Blue"
+
 local TEAM: { string } = { "Red", "Blue" }
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
@@ -78,12 +81,12 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 	return cursor, sideCursor, value
 end
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
-	local valueIndex: number? = table.find(TEAM, value)
+	local valueIndex: number = table.find(TEAM, value) or 0
 
-	if not valueIndex then
+	if valueIndex == 0 then
 		refuse("Team: expected enum { Red, Blue }")
 	end
 
@@ -91,7 +94,7 @@ local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (str
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
@@ -108,26 +111,26 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 	return cursor, sideCursor, value
 end
 
-local function writeUnions(a: any, b: any, c: any)
+local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: Color3 | { number } | Team)
 	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
-	local aMember: number? = typeof(a) == "number" and 0 or typeof(a) == "string" and 1 or typeof(a) == "boolean" and 2 or nil
+	local aMember: number = typeof(a) == "number" and 0 or typeof(a) == "string" and 1 or typeof(a) == "boolean" and 2 or -1
 
-	if not aMember then
+	if aMember < 0 then
 		refuseReliable("Unions.a: expected u8 | string(0..4) | boolean")
 	end
 
 	flags += aMember
-	local bMember: number? = typeof(b) == "Vector3" and 0 or typeof(b) == "table" and 1 or nil
+	local bMember: number = typeof(b) == "Vector3" and 0 or typeof(b) == "table" and 1 or -1
 
-	if not bMember then
+	if bMember < 0 then
 		refuseReliable("Unions.b: expected Vector3 | Stack")
 	end
 
 	flags += bMember * 4
-	local cMember: number? = typeof(c) == "Color3" and 0 or typeof(c) == "table" and 1 or typeof(c) == "string" and 2 or nil
+	local cMember: number = typeof(c) == "Color3" and 0 or typeof(c) == "table" and 1 or typeof(c) == "string" and 2 or -1
 
-	if not cMember then
+	if cMember < 0 then
 		refuseReliable("Unions.c: expected Color3 | u8[0..3] | Team")
 	end
 

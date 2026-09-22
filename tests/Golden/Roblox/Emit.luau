@@ -86,7 +86,7 @@ local function writeVectors(a: Vector3, b: Vector3, c: Vector2, d: Vector3)
 	buffer.writeu8(out, offset + 22, d.Z)
 end
 
-local function readVectors(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readVectors(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 23 > length then
 		error("Vectors: truncated")
 	end
@@ -179,7 +179,7 @@ local function writeColours(a: Color3, b: BrickColor, c: DateTime, d: DateTime)
 	buffer.writef64(out, offset + 13, d.UnixTimestampMillis)
 end
 
-local function readColours(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readColours(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 21 > length then
 		error("Colours: truncated")
 	end

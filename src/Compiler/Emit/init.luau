@@ -46,14 +46,15 @@ end
 
 --[[
     A parameter list for a generated function, with each parameter the
-    body never reaches for named _, so a linter has nothing to say
+    body never reaches for named _, so a linter has nothing to say, and
+    typed all the same, so the function fits the contract's type exactly
 --]]
 
 function Emit.parameters(body: string, list: { Parameter }): string
 	local parts: { string } = {}
 	for _, parameter: Parameter in list do
 		local used: boolean = body:find(`%f[%w_]{parameter.name}%f[^%w_]`) ~= nil
-		table.insert(parts, used and `{parameter.name}: {parameter.type}` or "_")
+		table.insert(parts, `{used and parameter.name or "_"}: {parameter.type}`)
 	end
 	return table.concat(parts, ", ")
 end
@@ -148,7 +149,7 @@ function Emit:call(target: TypeDeclaration, write: Block, read: Block, value: st
 
 	table.insert(passed, value)
 	write:tail(`write{name}({table.concat(passed, ", ")})`)
-	
+
 	read:line(`local {result}`)
 	read:tail(`cursor, sideCursor, {result} = read{name}(packet, cursor, side, sideCursor, length)`)
 

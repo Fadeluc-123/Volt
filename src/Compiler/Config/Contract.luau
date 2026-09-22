@@ -17,7 +17,7 @@ local Contract = {
 	write = {
 		{ name = "allocate", type = "(number) -> (number, buffer)" },
 		{ name = "slot", type = "(any) -> ()" },
-		{ name = "refuse", type = "(string) -> ()" },
+		{ name = "refuse", type = "(string) -> never" }, -- Never returns, so a refused branch is known to end there
 	} :: { Parameter },
 
 	read = {

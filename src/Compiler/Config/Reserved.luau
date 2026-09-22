@@ -31,6 +31,7 @@ local Reserved = {
 		"allocateReliable",
 		"allocateUnreliable",
 		"axisAngle",
+		"before",
 		"begin",
 		"beginReliable",
 		"beginUnreliable",
@@ -66,7 +67,7 @@ local Reserved = {
 		"writef16",
 	} :: { string },
 
-	api = { "flush", "onFailure", "stats" } :: { string }, -- In camel casing; the schema's casing is applied before a name is checked
+	api = { "events", "exports", "flush", "functions", "hooks", "onFailure", "rate", "stats" } :: { string }, -- In camel casing; the schema's casing is applied before a name is checked
 }
 
 for word: string in LUAU_WORDS:gmatch("%a+") do

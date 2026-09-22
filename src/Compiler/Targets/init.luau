@@ -1,9 +1,9 @@
 --[[
-    Assembles the client and server modules from a resolved schema: the
-    entry point that refuses a name the API owns, the shell of a module
-    (header, requires, send locals and the schema table) and the assembly
-    of every piece in reading order. The API tables and the walk of each
-    message are the methods of one sibling file each
+    Assembles the client, server and types modules from a resolved schema:
+    the entry point that refuses a name the API owns, the shell of a
+    module (header, requires, types, send locals and the schema table) and
+    the assembly of every piece in reading order. The API tables and the
+    walk of each message are the methods of one sibling file each
 --]]
 
 --!strict
@@ -21,6 +21,7 @@ local Messages = require("./Targets/Messages")
 local Reserved = require("./Config/Reserved")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
+local Types = require("./Targets/Types")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
@@ -58,32 +59,20 @@ local function rows(list: { [number]: string }, count: number): string
 	return #lines == 0 and "{}" or `\{\n{table.concat(lines, "\n")}\n\t}`
 end
 
--- A method name in the casing the schema asks for; the names are written in camel
-function Targets.cased(name: string, casing: string): string
-	if casing == "pascal" then
-		return (name:gsub("^%l", string.upper))
-	elseif casing == "snake" then
-		return (name:gsub("%u", function (letter: string)
-			return `_{letter:lower()}`
-		end))
-	end
-	return name
-end
-
 --[[
-    Both modules of a file, the client's then the server's. A top-level
-    declaration that would take the place of one of the API's own members
-    is refused first, in the casing the schema asks for
+    The three modules of a file: the client's, the server's and the types.
+    A top-level declaration that would take the place of one of the API's
+    own members is refused first, in the casing the schema asks for
 --]]
 
-function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string)
+function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string, string)
 	local casing: string = file.options.casing :: string
 	local path: string = diagnostics.source.path
 	local name: string = path:match("([^/\\]+)$") or path
 
 	for _, declaration: Declaration in file.declarations do
 		for _, own: string in Reserved.api do
-			if declaration.name == Targets.cased(own, casing) then
+			if declaration.name == Types.cased(own, casing) then
 				local message: string =
 					`"{declaration.name}" is a member of the generated API and cannot be a top-level name`
 				diagnostics:error("V4001", message, declaration)
@@ -91,7 +80,10 @@ function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (s
 		end
 	end
 
-	return Targets.new(file, "client"):render(hash, name), Targets.new(file, "server"):render(hash, name)
+	local client: string = Targets.new(file, "client"):render(hash, name)
+	local server: string = Targets.new(file, "server"):render(hash, name)
+
+	return client, server, Types.module(file, name)
 end
 
 function Targets.new(file: File, side: string)
@@ -107,6 +99,7 @@ function Targets.new(file: File, side: string)
 		_functions = {} :: { string }, -- A writer per message sent and a reader per message heard, in declaration order
 		_messages = {} :: { [number]: string }, -- The schema row of every message heard, by id
 		_outgoing = {} :: { [number]: string }, -- The schema row of every message sent, by id
+		_registry = { events = {}, functions = {}, exports = {} } :: { [string]: { string } }, -- Every entry's full name, by kind
 	}, Targets)
 
 	self:count(file.declarations)
@@ -117,13 +110,18 @@ end
 --[[
     The module text: the API first, since walking the events is what
     emits the functions and the rows, then every piece in the order the
-    file reads
+    file reads. The named types are spelled out here whatever the schema
+    asks, so every signature resolves; the handle types too, unless a
+    types module carries them
 --]]
 
 function Targets:render(hash: number, name: string): string
 	local emitter = self._emitter
+	local file: File = self._file
 	local api: string = self:api()
+	local registry: string = self:registry()
 	local body: string = table.concat(self._functions, "\n")
+	local named: { string } = Types.named(file.declarations, {})
 	local declared: { string } = { "local runtime: Volt.Runtime" }
 	local assigned: { string } = {}
 	local helpers: { string } = {}
@@ -141,7 +139,19 @@ function Targets:render(hash: number, name: string): string
 
 	table.sort(helpers)
 
-	local parts: { string } = { self:header(name), `{table.concat(declared, "\n")}\n` }
+	local parts: { string } = { self:header(name) }
+
+	if #named > 0 then
+		table.insert(parts, `{table.concat(named, "\n")}\n`)
+	end
+
+	if not file.options.typesOutput then
+		for _, handle: string in Types.handles(self._side, self._casing) do
+			table.insert(parts, `{handle}\n`)
+		end
+	end
+
+	table.insert(parts, `{table.concat(declared, "\n")}\n`)
 
 	for _, helper: string in helpers do
 		table.insert(parts, Helpers[helper])
@@ -158,8 +168,14 @@ function Targets:render(hash: number, name: string): string
 		table.insert(parts, `{table.concat(assigned, "\n")}\n`)
 	end
 
-	table.insert(parts, `local net = table.freeze(\{\n{Blocks.indent(1, api)}\n})\n`)
-	table.insert(parts, "return net\n")
+	-- The hooks before a send are read by the fires alone, which are built below, so the table is taken here
+	if api:find("before[", 1, true) then
+		table.insert(parts, "local before: { [number]: Volt.Hook } = runtime.before\n")
+	end
+
+	table.insert(parts, `local net = \{\n{Blocks.indent(1, api)}\n}\n`)
+	table.insert(parts, `{registry}\n`)
+	table.insert(parts, "return table.freeze(net)\n")
 
 	return table.concat(parts, "\n")
 end
@@ -254,7 +270,7 @@ function Targets:start(hash: number): string
 end
 
 function Targets:method(name: string): string
-	return Targets.cased(name, self._casing)
+	return Types.cased(name, self._casing)
 end
 
 -- The last id given in each direction, functions included, since a function's ids count towards the width

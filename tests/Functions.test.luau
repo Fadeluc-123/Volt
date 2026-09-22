@@ -36,9 +36,9 @@ type Harness = {
 type Box = { line: string }
 
 local SCHEMA: string = fs.readFile("tests/Schemas/Functions.volt")
-local CLIENT: string, SERVER: string = Generated.modules("Functions", SCHEMA)
+local CLIENT: string, SERVER: string, TYPES: string = Generated.modules("Functions", SCHEMA)
 local SIDES: { { name: string, text: string } } =
-	{ { name = "Client", text = CLIENT }, { name = "Server", text = SERVER } }
+	{ { name = "Client", text = CLIENT }, { name = "Server", text = SERVER }, { name = "Types", text = TYPES } }
 
 local function setup(): Harness
 	local mock: Mock = Volt.mock(task.spawn)

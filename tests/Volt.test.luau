@@ -24,7 +24,7 @@ local OPTIONS: { [string]: any } = {
 	manualReplication = false,
 	maxPacket = 8192,
 	maxPacketsPerSecond = 240,
-	unreliableBudget = 900
+	unreliableBudget = 900,
 }
 
 -- A schema table with no messages on one side, with the options the runtime reads

@@ -1,6 +1,8 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
-local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> (), value: any)
+export type Stack = { item: string, quantity: number, properties: any? }
+
+local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
@@ -76,7 +78,7 @@ local function readStack(packet: buffer, cursor: number, side: { any }, sideCurs
 	return cursor, sideCursor, value
 end
 
-local function writeLists(a: any, b: any, c: any, d: any, e: any, f: any)
+local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boolean }, e: { Stack }, f: { number })
 	local offset: number, out: buffer = beginReliable(6)
 	local flags: number = 0
 
