@@ -197,7 +197,7 @@ local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
 	buffer.writeu8(out, offset + 57, math.round((math.clamp(dAxis.Z * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
 end
 
-local function readFrames(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readFrames(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 58 > length then
 		error("Frames: truncated")
 	end

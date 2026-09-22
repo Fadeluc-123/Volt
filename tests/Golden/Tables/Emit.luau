@@ -1,13 +1,15 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
+export type Team = "Red" | "Blue"
+
 local TEAM: { string } = { "Red", "Blue" }
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
-	local valueIndex: number? = table.find(TEAM, value)
+	local valueIndex: number = table.find(TEAM, value) or 0
 
-	if not valueIndex then
+	if valueIndex == 0 then
 		refuse("Team: expected enum { Red, Blue }")
 	end
 
@@ -15,7 +17,7 @@ local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (str
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
@@ -32,7 +34,7 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 	return cursor, sideCursor, value
 end
 
-local function writeTables(a: any, b: any, c: any, d: any)
+local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { [Team]: number }, d: { [number]: true })
 	local offset: number, out: buffer = beginReliable(3)
 
 	if typeof(a) ~= "table" then

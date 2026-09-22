@@ -2,8 +2,8 @@
     The volt command: reads a schema, runs it through the lexer, parser,
     resolver, analyser and generator, prints every diagnostic, exits
     non-zero on an error and otherwise writes the client and server
-    modules beside the schema. --check writes nothing, --ast prints the
-    resolved declarations and --quiet keeps the summary line off
+    modules beside the schema, and the types module when asked. --check
+    writes nothing, --ast prints the declarations, --quiet drops the summary
 --]]
 
 --!strict
@@ -47,11 +47,11 @@ local file: Schema.File = Parser.parse(Lexer.scan(source, diagnostics), diagnost
 Resolve.file(file, diagnostics)
 
 local hash: number = Analyse.file(file, diagnostics)
-local client: string, server: string = "", ""
+local client: string, server: string, types: string = "", "", ""
 
 -- The generator walks a tree in which every lookup succeeds, so it runs only when the stages before it are clean
 if diagnostics.errors == 0 then
-	client, server = Targets.modules(file, diagnostics, hash)
+	client, server, types = Targets.modules(file, diagnostics, hash)
 end
 
 if #diagnostics.list > 0 then
@@ -66,12 +66,16 @@ if diagnostics.errors > 0 then
 	process.exit(1)
 end
 
--- Whiteoak TODO: the types module is written here once it is generated
 if not flags.check then
 	local directory: string = (path :: string):match("^(.*[/\\])") or ""
+	local options: Schema.Options = file.options
 
-	fs.writeFile(`{directory}{file.options.clientOutput}`, client)
-	fs.writeFile(`{directory}{file.options.serverOutput}`, server)
+	fs.writeFile(`{directory}{options.clientOutput}`, client)
+	fs.writeFile(`{directory}{options.serverOutput}`, server)
+
+	if options.typesOutput then
+		fs.writeFile(`{directory}{options.typesOutput}`, types)
+	end
 end
 
 if not flags.quiet then

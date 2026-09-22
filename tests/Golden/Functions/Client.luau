@@ -13,9 +13,25 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Volt = require(ReplicatedStorage.Packages.Volt)
 local Promise = require(ReplicatedStorage.Packages.Promise)
 
+export type ClientEvent<A...> = { fire: (A...) -> () }
+
+export type ClientListener<A...> = {
+	on: (listener: (A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, A...),
+}
+
+export type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
+
+export type ClientPromise<A...> = { invoke: (A...) -> any }
+
+export type Exported<T> = {
+	write: (value: T) -> (buffer, { any }?),
+	read: (packet: buffer, side: { any }?) -> T,
+}
+
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
-local refuseReliable: (string) -> ()
+local refuseReliable: (string) -> never
 
 local function writeEcho(slot: number, value: number)
 	local offset: number, out: buffer = beginReliable(4)
@@ -29,7 +45,7 @@ local function writeEcho(slot: number, value: number)
 	buffer.writeu8(out, offset + 3, value)
 end
 
-local function readEcho(_, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readEcho(_: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Echo: truncated")
 	end
@@ -58,7 +74,7 @@ local function writePing(slot: number)
 	buffer.writeu16(out, offset + 1, slot)
 end
 
-local function readPing(_, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readPing(_: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Ping: truncated")
 	end
@@ -92,7 +108,7 @@ local function writeDivide(slot: number, dividend: number, divisor: number)
 	buffer.writef64(out, offset + 11, divisor)
 end
 
-local function readDivide(_, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readDivide(_: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Divide: truncated")
 	end
@@ -155,7 +171,7 @@ local function writeInventory_Transfer(slot: number, source: number, destination
 	buffer.writeu16(out, offset + 5, quantity)
 end
 
-local function readInventory_Transfer(_, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readInventory_Transfer(_: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Inventory.Transfer: truncated")
 	end
@@ -224,31 +240,31 @@ runtime = Volt.start({
 	},
 
 	outgoing = {
-		[1] = { name = "Echo", reliable = true, minBytes = 4, maxBytes = 4 },
-		[2] = { name = "Ping", reliable = true, minBytes = 3, maxBytes = 3 },
-		[3] = { name = "Divide", reliable = true, minBytes = 19, maxBytes = 19 },
-		[4] = { name = "Inventory.Transfer", reliable = true, minBytes = 7, maxBytes = 7 },
+		[1] = { name = "Echo", kind = "call", reliable = true, minBytes = 4, maxBytes = 4 },
+		[2] = { name = "Ping", kind = "call", reliable = true, minBytes = 3, maxBytes = 3 },
+		[3] = { name = "Divide", kind = "call", reliable = true, minBytes = 19, maxBytes = 19 },
+		[4] = { name = "Inventory.Transfer", kind = "call", reliable = true, minBytes = 7, maxBytes = 7 },
 	},
 })
 
 beginReliable = runtime.reliable.begin
 refuseReliable = runtime.reliable.refuse
 
-local net = table.freeze({
+local net = {
 	Echo = table.freeze({
-		invoke = function (value: number)
+		invoke = function (value: number): (boolean, number)
 			return runtime:invoke(1, writeEcho, value)
 		end,
 	}),
 
 	Ping = table.freeze({
-		invoke = function ()
+		invoke = function (): (boolean)
 			return runtime:invoke(2, writePing)
 		end,
 	}),
 
 	Divide = table.freeze({
-		invoke = function (dividend: number, divisor: number)
+		invoke = function (dividend: number, divisor: number): (boolean, boolean, number?)
 			return runtime:invoke(3, writeDivide, dividend, divisor)
 		end,
 	}),
@@ -261,6 +277,13 @@ local net = table.freeze({
 		}),
 	}),
 
+	hooks = table.freeze({
+		beforeSend = runtime.beforeSend,
+		afterReceive = runtime.afterReceive,
+	}),
+
+	rate = runtime.rate,
+
 	flush = function ()
 		runtime:flush()
 	end,
@@ -272,6 +295,17 @@ local net = table.freeze({
 	stats = function (player: Player?): Volt.Stats
 		return runtime:stats(player)
 	end,
+}
+
+net.events = table.freeze({})
+
+net.functions = table.freeze({
+	["Echo"] = net.Echo,
+	["Ping"] = net.Ping,
+	["Divide"] = net.Divide,
+	["Inventory.Transfer"] = net.Inventory.Transfer,
 })
 
-return net
+net.exports = table.freeze({})
+
+return table.freeze(net)

@@ -125,7 +125,7 @@ local function writeIntegers(a: number, b: number, c: number, d: number, e: numb
 	buffer.writeu32(out, offset + 44, 2147483648 + l // 4294967296)
 end
 
-local function readIntegers(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readIntegers(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 48 > length then
 		error("Integers: truncated")
 	end
@@ -205,7 +205,7 @@ local function writeFloats(a: number, b: number, c: number, d: number, e: number
 	buffer.writeu16(out, offset + 15, math.round((math.clamp(e, -3.2, 3.2) + 3.2) / 6.4 * 65535))
 end
 
-local function readFloats(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readFloats(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 17 > length then
 		error("Floats: truncated")
 	end

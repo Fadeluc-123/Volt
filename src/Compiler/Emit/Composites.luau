@@ -164,9 +164,10 @@ function Composites:enum(node: Type, write: Block, read: Block, value: string, h
 	local result: string = read:name(hint)
 	local store: (string) -> (), fetch: string = self:tag(#variants, write, read)
 
-	write:line(`local {index}: number? = table.find({names}, {tag and `{value}.{tag}` or value})`)
+	-- A name the enum lacks finds no index, which is 0 here so the local is a number the checker can follow
+	write:line(`local {index}: number = table.find({names}, {tag and `{value}.{tag}` or value}) or 0`)
 
-	refuse(write, `not {index}`, `{path}: expected {printed}`)
+	refuse(write, `{index} == 0`, `{path}: expected {printed}`)
 	store(`{index} - 1`)
 
 	if not tag then
@@ -267,9 +268,10 @@ function Composites:union(node: Type, write: Block, read: Block, value: string, 
 		table.insert(terms, `{test} and {position - 1}`)
 	end
 
-	write:line(`local {index}: number? = {table.concat(terms, " or ")} or nil`)
+	-- A value matching no member takes -1, so the local is a number the checker can follow
+	write:line(`local {index}: number = {table.concat(terms, " or ")} or -1`)
 
-	refuse(write, `not {index}`, `{path}: expected {Print.type(node)}`)
+	refuse(write, `{index} < 0`, `{path}: expected {Print.type(node)}`)
 	store(index)
 
 	read:line(`local {which}: number = {fetch}`)

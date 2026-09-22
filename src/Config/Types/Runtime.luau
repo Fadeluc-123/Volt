@@ -2,7 +2,8 @@
     Types shared across the runtime: the transport a runtime drives,
     which the real remotes and the mock both provide, the schema table a
     generated module hands to Volt.start and the messages in it, the
-    failure handler, the counters, and the bucket a rate is kept in
+    failure handler, the hooks, the counters, and the limit and bucket a
+    rate is kept in
 --]]
 
 --!strict
@@ -10,6 +11,8 @@ export type Fire = (target: any, packet: buffer, side: { any }?) -> ()
 export type Handler = (player: any, packet: buffer, side: { any }?) -> ()
 export type Spawn = (callback: (...any) -> (), ...any) -> ...any
 export type Failure = (player: any, kind: string, detail: string) -> ()
+export type Hook = (target: any, ...any) -> boolean -- Before a send with its target, or after a receive with the player; false vetoes
+export type Limit = { rate: number, burst: number } -- What a player is allowed a second, and the most they may save up
 export type Reader = (
 	player: any,
 	packet: buffer,
@@ -45,6 +48,7 @@ export type Message = {
 
 export type Outgoing = {
 	name: string,
+	kind: string, -- event, call or reply
 	reliable: boolean,
 	minBytes: number,
 	maxBytes: number,
@@ -69,6 +73,7 @@ export type Stats = {
 	packetsOut: number,
 	bytesOut: number,
 	messagesOut: number,
+	rejected: number, -- Messages a hook vetoed
 	failures: { [string]: number }, -- By kind, from the first time it happens
 }
 

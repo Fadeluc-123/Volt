@@ -12,13 +12,29 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
+export type ClientEvent<A...> = { fire: (A...) -> () }
+
+export type ClientListener<A...> = {
+	on: (listener: (A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, A...),
+}
+
+export type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
+
+export type ClientPromise<A...> = { invoke: (A...) -> any }
+
+export type Exported<T> = {
+	write: (value: T) -> (buffer, { any }?),
+	read: (packet: buffer, side: { any }?) -> T,
+}
+
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
 local allocateReliable: (number) -> (number, buffer)
 local slotReliable: (any) -> ()
-local refuseReliable: (string) -> ()
+local refuseReliable: (string) -> never
 local beginUnreliable: (number) -> (number, buffer)
-local refuseUnreliable: (string) -> ()
+local refuseUnreliable: (string) -> never
 local markUnreliable: () -> ()
 
 local function writeInput(dir: number, jump: boolean)
@@ -85,31 +101,6 @@ local function writePing(value: number)
 	buffer.writeu32(out, offset + 1, value)
 end
 
-local function readDamage(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
-	if cursor + 3 > length then
-		error("Damage: truncated")
-	end
-
-	local target: number = buffer.readu16(packet, cursor)
-	local amount: number = buffer.readu8(packet, cursor + 2)
-	cursor += 3
-	local value = { target = target, amount = amount }
-
-	return runtime:deliver(1, player, cursor, sideCursor, value)
-end
-
-local function readSpray(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
-	if cursor + 2 > length then
-		error("Spray: truncated")
-	end
-
-	local x: number = buffer.readu8(packet, cursor)
-	local y: number = buffer.readu8(packet, cursor + 1)
-	cursor += 2
-
-	return runtime:deliver(2, player, cursor, sideCursor, x, y)
-end
-
 local function writeSync(value: number)
 	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 6)
@@ -121,7 +112,7 @@ local function writeSync(value: number)
 	buffer.writeu8(out, offset + 1, value)
 end
 
-local function readSync(player: Player?, packet: buffer, cursor: number, _, sideCursor: number, length: number): (number, number)
+local function readSync(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Sync: truncated")
 	end
@@ -129,16 +120,12 @@ local function readSync(player: Player?, packet: buffer, cursor: number, _, side
 	local value: number = buffer.readu8(packet, cursor)
 	cursor += 1
 
-	return runtime:deliver(3, player, cursor, sideCursor, value)
-end
-
-local function readMatch_Start(player: Player?, _, cursor: number, _, sideCursor: number, _): (number, number)
-	return runtime:deliver(4, player, cursor, sideCursor)
+	return runtime:deliver(1, player, cursor, sideCursor, value)
 end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x4692C530,
+	hash = 0x88701285,
 	scope = "Events",
 	side = "client",
 	idBytes = 1,
@@ -151,19 +138,16 @@ runtime = Volt.start({
 	},
 
 	messages = {
-		[1] = { name = "Damage", kind = "event", mode = "SingleSync", queue = 64, read = readDamage },
-		[2] = { name = "Spray", kind = "event", mode = "ManyAsync", queue = 64, read = readSpray },
-		[3] = { name = "Sync", kind = "event", mode = "SingleSync", queue = 64, read = readSync },
-		[4] = { name = "Match.Start", kind = "event", mode = "Polling", queue = 64, read = readMatch_Start },
+		[1] = { name = "Sync", kind = "event", mode = "SingleSync", queue = 64, read = readSync },
 	},
 
 	outgoing = {
-		[1] = { name = "Input", reliable = false, minBytes = 3, maxBytes = 3 },
-		[2] = { name = "Chat", reliable = true, minBytes = 2, maxBytes = 66 },
-		[3] = { name = "Ready", reliable = true, minBytes = 1, maxBytes = 1 },
-		[4] = { name = "Grab", reliable = true, minBytes = 1, maxBytes = 1 },
-		[5] = { name = "Ping", reliable = true, minBytes = 5, maxBytes = 5 },
-		[6] = { name = "Sync", reliable = true, minBytes = 2, maxBytes = 2 },
+		[1] = { name = "Input", kind = "event", reliable = false, minBytes = 3, maxBytes = 3 },
+		[2] = { name = "Chat", kind = "event", reliable = true, minBytes = 2, maxBytes = 66 },
+		[3] = { name = "Ready", kind = "event", reliable = true, minBytes = 1, maxBytes = 1 },
+		[4] = { name = "Grab", kind = "event", reliable = true, minBytes = 1, maxBytes = 1 },
+		[5] = { name = "Ping", kind = "event", reliable = true, minBytes = 5, maxBytes = 5 },
+		[6] = { name = "Sync", kind = "event", reliable = true, minBytes = 2, maxBytes = 2 },
 	},
 })
 
@@ -175,66 +159,71 @@ beginUnreliable = runtime.unreliable.begin
 refuseUnreliable = runtime.unreliable.refuse
 markUnreliable = runtime.unreliable.mark
 
-local net = table.freeze({
+local before: { [number]: Volt.Hook } = runtime.before
+
+local net = {
 	Input = table.freeze({
-		fire = writeInput,
+		fire = function (dir: number, jump: boolean)
+			if before[1] == nil or before[1](nil, dir, jump) then
+				writeInput(dir, jump)
+			end
+		end,
 	}),
 
 	Chat = table.freeze({
-		fire = writeChat,
+		fire = function (value: string)
+			if before[2] == nil or before[2](nil, value) then
+				writeChat(value)
+			end
+		end,
 	}),
 
 	Ready = table.freeze({
-		fire = writeReady,
+		fire = function ()
+			if before[3] == nil or before[3](nil) then
+				writeReady()
+			end
+		end,
 	}),
 
 	Grab = table.freeze({
-		fire = writeGrab,
+		fire = function (value: Instance)
+			if before[4] == nil or before[4](nil, value) then
+				writeGrab(value)
+			end
+		end,
 	}),
 
 	Ping = table.freeze({
-		fire = writePing,
-	}),
-
-	Damage = table.freeze({
-		on = function (listener: (value: any) -> ()): () -> ()
-			return runtime:on(1, listener)
-		end,
-
-		iter = function (): () -> (number, any)
-			return runtime:iter(1)
-		end,
-	}),
-
-	Spray = table.freeze({
-		on = function (listener: (x: number, y: number) -> ()): () -> ()
-			return runtime:on(2, listener)
-		end,
-
-		iter = function (): () -> (number, number, number)
-			return runtime:iter(2)
+		fire = function (value: number)
+			if before[5] == nil or before[5](nil, value) then
+				writePing(value)
+			end
 		end,
 	}),
 
 	Sync = table.freeze({
-		fire = writeSync,
+		fire = function (value: number)
+			if before[6] == nil or before[6](nil, value) then
+				writeSync(value)
+			end
+		end,
 
 		on = function (listener: (value: number) -> ()): () -> ()
-			return runtime:on(3, listener)
+			return runtime:on(1, listener)
 		end,
 
 		iter = function (): () -> (number, number)
-			return runtime:iter(3)
+			return runtime:iter(1)
 		end,
 	}),
 
-	Match = table.freeze({
-		Start = table.freeze({
-			iter = function (): () -> (number)
-				return runtime:iter(4)
-			end,
-		}),
+	hooks = table.freeze({
+		beforeSend = runtime.beforeSend,
+		afterReceive = runtime.afterReceive,
 	}),
+
+	rate = runtime.rate,
 
 	flush = function ()
 		runtime:flush()
@@ -247,6 +236,18 @@ local net = table.freeze({
 	stats = function (player: Player?): Volt.Stats
 		return runtime:stats(player)
 	end,
+}
+
+net.events = table.freeze({
+	["Input"] = net.Input,
+	["Chat"] = net.Chat,
+	["Ready"] = net.Ready,
+	["Grab"] = net.Grab,
+	["Ping"] = net.Ping,
+	["Sync"] = net.Sync,
 })
 
-return net
+net.functions = table.freeze({})
+net.exports = table.freeze({})
+
+return table.freeze(net)

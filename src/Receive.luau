@@ -10,6 +10,7 @@ local Receive = {} :: any
 
 local Types = require("./Config/Types/Runtime")
 
+type Limit = Types.Limit
 type Message = Types.Message
 type Stats = Types.Stats
 
@@ -20,7 +21,6 @@ type Channel = {
 	kind: string, -- sync, async or polling
 	single: boolean, -- Whether one listener is the most the event allows
 	depth: number, -- How many messages the queue holds before the oldest is dropped
-	rate: number?, -- What the server allows a player a second, when the event is limited
 	listeners: { (...any) -> () },
 	queue: { Entry },
 	head: number,
@@ -107,7 +107,6 @@ function Receive:channels(messages: { [number]: Message })
 				kind = mode == "Polling" and "polling" or mode:find("Async") and "async" or "sync",
 				single = mode:sub(1, 6) == "Single",
 				depth = message.queue :: number,
-				rate = message.rate,
 				listeners = {},
 				queue = {},
 				head = 1,
@@ -145,19 +144,23 @@ end
 
 --[[
     Hands a decoded message to its listeners by the event's call mode,
-    unless the player is past the event's rate, when it is dropped here,
-    decoded, so the packet goes on: inline for a sync mode, on a new
-    thread for an async mode, and into the queue for a polled event or
-    one no listener has claimed yet. Returns the cursors, so a reader's
-    tail is this one call
+    unless the player is past the event's rate or a hook vetoes it, when
+    it is dropped here, decoded, so the packet goes on: inline for a sync
+    mode, on a new thread for an async mode, and into the queue for a
+    polled event or one no listener has claimed yet. Returns the cursors,
+    so a reader's tail is this one call
 --]]
 
 function Receive:deliver(id: number, player: any, cursor: number, sideCursor: number, ...: any): (number, number)
 	local channel: Channel = self._channels[id]
-	local rate: number? = channel.rate
+	local limit: Limit? = self._limits[id]
 	local listeners = channel.listeners
 
-	if rate and not self:allow(player, id, channel.name, rate) then
+	if limit and not self:allow(player, id, channel.name, limit) then
+		return cursor, sideCursor
+	end
+
+	if self._hooked and not self:guard(id, player, ...) then
 		return cursor, sideCursor
 	end
 

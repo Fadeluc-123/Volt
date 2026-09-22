@@ -32,7 +32,7 @@ for _, item: EnumItem in Enum.Material:GetEnumItems() do
 	MATERIAL[item.Value] = item
 end
 
-local function writeObjects(a: Instance, b: BasePart, c: Instance?, d: Model, e: any, f: any?)
+local function writeObjects(a: Instance, b: BasePart, c: Instance?, d: Model?, e: any, f: any?)
 	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 
@@ -168,7 +168,7 @@ local function writeItems(a: Enum.Material, b: EnumItem)
 	buffer.writestring(bNameOut, bNameOffset, bName)
 end
 
-local function readItems(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readItems(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 5 > length then
 		error("Items: truncated")
 	end

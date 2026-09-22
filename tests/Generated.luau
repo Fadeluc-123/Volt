@@ -26,6 +26,7 @@ local Resolve = require("@volt/Compiler/Resolve")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Source = require("@volt/Compiler/Source")
 local Targets = require("@volt/Compiler/Targets")
+local Types = require("@volt/Compiler/Targets/Types")
 
 type Block = Blocks.Block
 type Diagnostics = Diagnostics.Diagnostics
@@ -57,14 +58,14 @@ function Generated.compile(name: string, text: string): (File, number, Diagnosti
 	return file, hash, diagnostics
 end
 
--- Both assembled modules of a schema text, the client's then the server's
-function Generated.modules(name: string, text: string): (string, string)
+-- The assembled modules of a schema text: the client's, the server's and the types
+function Generated.modules(name: string, text: string): (string, string, string)
 	local file: File, hash: number, diagnostics: Diagnostics = Generated.compile(name, text)
-	local client: string, server: string = Targets.modules(file, diagnostics, hash)
+	local client: string, server: string, types: string = Targets.modules(file, diagnostics, hash)
 
 	assert(diagnostics.errors == 0, diagnostics:render())
 
-	return client, server
+	return client, server, types
 end
 
 function Generated.events(file: File): { Event }
@@ -80,9 +81,9 @@ end
 --[[
     Renders every event of a file as a write function over the calls a
     writer makes and a read function over a bare buffer and side array,
-    with the helpers, constants and shared pairs they need above them and
-    a table of the pairs at the end, so the text is one loadable chunk
-    and one golden file
+    with the named types, helpers, constants and shared pairs they need
+    above them and a table of the pairs at the end, so the text is one
+    loadable chunk and one golden file
 --]]
 
 function Generated.render(file: File): string
@@ -90,6 +91,7 @@ function Generated.render(file: File): string
 	local parts: { string } = {}
 	local exports: { string } = {}
 	local functions: { string } = {}
+	local named: { string } = Types.named(file.declarations, {})
 
 	-- An exported type has its pair whether or not a message refers to it
 	for _, declaration in file.declarations do
@@ -115,7 +117,7 @@ function Generated.render(file: File): string
 
 		local typed: { string } = {}
 		for index: number, field: Field in Messages.parameters(event.data) do
-			typed[index] = `{names[index]}: {Messages.luauType(field.type)}`
+			typed[index] = `{names[index]}: {Types.annotation(field.type)}`
 		end
 
 		local results: string = #values == 0 and "" or `, {table.concat(values, ", ")}`
@@ -145,6 +147,10 @@ function Generated.render(file: File): string
 	end
 
 	table.insert(parts, `local {table.concat(taken, ", ")} = ...\n`)
+
+	if #named > 0 then
+		table.insert(parts, `{table.concat(named, "\n")}\n`)
+	end
 
 	for _, name: string in helpers do
 		table.insert(parts, Helpers[name])
@@ -222,7 +228,7 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 		beginReliable = begin,
 		allocateReliable = allocate,
 		slotReliable = slot,
-		refuseReliable = refuse
+		refuseReliable = refuse,
 	}
 
 	for taken: string in (text:match("^local (.-) = %.%.%.") :: string):gmatch("[%w_]+") do

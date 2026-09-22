@@ -11,9 +11,9 @@ local Messages = {} :: any
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
 local Emit = require("../Emit")
-local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local Types = require("./Types")
 local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
@@ -23,9 +23,10 @@ type Function = Schema.Function
 type Pack = Schema.Pack
 type Type = Schema.Type
 
--- What an event's API entry is built from once it is walked: its id on this side, its writer's signature and its listener's
+-- What an event's API entry is built from once it is walked: its ids on this side, its writer's signature and its listener's
 export type Walked = {
-	id: number?,
+	id: number?, -- Heard as
+	out: number?, -- Sent as
 	label: string,
 	typed: string,
 	arguments: string,
@@ -33,12 +34,13 @@ export type Walked = {
 	iterator: string,
 }
 
--- What a function's API entry is built from once it is walked: this side's id, the call's signature and the handler's
+-- What a function's API entry is built from once it is walked: this side's id, the call's signature, what it returns and the handler's
 export type Exchanged = {
 	id: number,
 	label: string,
 	typed: string,
 	arguments: string,
+	result: string, -- What invoke is annotated as returning: the error tuple, or nothing said for a promise
 	handler: string,
 }
 
@@ -84,32 +86,10 @@ end
 local function typed(names: { string }, data: (Type | Pack)?): ({ string }, { string })
 	local annotated: { string }, types: { string } = {}, {}
 	for index: number, field: Field in Messages.parameters(data) do
-		types[index] = Messages.luauType(field.type)
+		types[index] = Types.annotation(field.type)
 		annotated[index] = `{names[index]}: {types[index]}`
 	end
 	return annotated, types
-end
-
---[[
-    The Luau type a value of a schema type is annotated as where one name
-    says it
---]]
-
-function Messages.luauType(node: Type): string
-	local shape: any = Sizes.resolved(node)
-	if shape.kind == "primitive" then
-		local name: string = shape.name
-		local direct: boolean = name == "boolean" or name == "string" or name == "buffer"
-
-		return direct and name or name == "unknown" and "any" or "number"
-	elseif shape.kind == "roblox" then
-		return shape.name == "Enum" and `Enum.{shape.item}` or shape.class or Roblox[shape.name].class
-	elseif shape.kind == "optional" then
-		return `{Messages.luauType(shape.inner)}?`
-	end
-
-	-- Whiteoak TODO: any for a struct, list, enum or union until the types module names them
-	return "any"
 end
 
 -- The fields a pack of data carries: a pack's parameters, or the one value
@@ -172,7 +152,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 			`local function write{label}({table.concat(annotated, ", ")})\n{write:done()}end\n`
 		)
 		self._outgoing[outId] =
-			`\{ name = "{path}", reliable = {reliable}, minBytes = {width + least}, maxBytes = {width + most} }`
+			`\{ name = "{path}", kind = "event", reliable = {reliable}, minBytes = {width + least}, maxBytes = {width + most} }`
 	end
 
 	if inId then
@@ -198,6 +178,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 
 	return {
 		id = inId,
+		out = outId,
 		label = label,
 		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),
@@ -229,7 +210,7 @@ function Messages:exchange(declaration: Function): Exchanged
 
 	sends(callWrite, true)
 	sends(replyWrite, true)
-	
+
 	identify(callWrite, width, callId)
 	frame(callWrite, callRead, "slot", SLOT_BYTES)
 
@@ -282,7 +263,8 @@ function Messages:exchange(declaration: Function): Exchanged
 		table.insert(self._functions, `local function read{label}({taken}): (number, number)\n{body}end\n`)
 		table.insert(self._functions, `local function write{label}({given})\n{replyWrite:done()}end\n`)
 		self._messages[callId] = `\{ name = "{path}", kind = "call"{rate}, read = read{label}, reply = write{label} }`
-		self._outgoing[replyId] = `\{ name = "{path}", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
+		self._outgoing[replyId] =
+			`\{ name = "{path}", kind = "reply", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
 	else
 		local body: string =
 			replyRead:done(`return runtime:refused({replyId}, slot, packet, cursor, sideCursor, length)`)
@@ -298,11 +280,14 @@ function Messages:exchange(declaration: Function): Exchanged
 		table.insert(self._functions, `local function read{label}({taken}): (number, number)\n{body}end\n`)
 		self._messages[replyId] =
 			`\{ name = "{path}", kind = "reply", timeout = {declaration.timeout}{promise}, read = read{label} }`
-		self._outgoing[callId] = `\{ name = "{path}", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
+		self._outgoing[callId] =
+			`\{ name = "{path}", kind = "call", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
 	end
 
-	-- A server handler takes the player before the arguments
+	-- A server handler takes the player before the arguments; a call that yields answers with the error tuple
 	local heard: { string } = table.clone(annotated)
+	local tuple: { string } = { "boolean", table.unpack(returnTypes) }
+
 	table.insert(heard, 1, "player: Player")
 
 	return {
@@ -310,6 +295,7 @@ function Messages:exchange(declaration: Function): Exchanged
 		label = label,
 		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),
+		result = declaration.yield == "Promise" and "" or `: ({table.concat(tuple, ", ")})`,
 		handler = `({table.concat(heard, ", ")}) -> ({table.concat(returnTypes, ", ")})`,
 	}
 end

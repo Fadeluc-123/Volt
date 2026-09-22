@@ -1,13 +1,16 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
+export type Reference = string
+export type Team = "Red" | "Blue"
+
 local TEAM: { string } = { "Red", "Blue" }
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
-	local valueIndex: number? = table.find(TEAM, value)
+	local valueIndex: number = table.find(TEAM, value) or 0
 
-	if not valueIndex then
+	if valueIndex == 0 then
 		refuse("Team: expected enum { Red, Blue }")
 	end
 
@@ -15,7 +18,7 @@ local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (str
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
@@ -32,7 +35,7 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 	return cursor, sideCursor, value
 end
 
-local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: string?)
+local function writeOptionals(a: number?, b: string?, c: { n: number }?, d: boolean?, e: Reference?)
 	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 	flags += a ~= nil and 1 or 0
@@ -111,7 +114,7 @@ local function writeOptionals(a: number?, b: string?, c: any?, d: boolean?, e: s
 	end
 end
 
-local function readOptionals(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readOptionals(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 1 > length then
 		error("Optionals: truncated")
 	end
@@ -202,7 +205,7 @@ local function readOptionals(packet: buffer, cursor: number, _, sideCursor: numb
 	return cursor, sideCursor, a, b, c, d, e
 end
 
-local function writeNested(value: any)
+local function writeNested(value: { grid: { { number } }, slots: { { id: number, tag: Team? } }? })
 	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
 

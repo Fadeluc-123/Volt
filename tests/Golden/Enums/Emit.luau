@@ -1,5 +1,7 @@
 local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
+export type Team = "Red" | "Blue"
+
 local TEAM: { string } = { "Red", "Blue" }
 
 local ENUMS_B: { string } = { "X" }
@@ -8,12 +10,12 @@ local ENUMS_C: { string } = { "Move", "Stop", "Say" }
 
 local ENUMS_D: { string } = { "Red", "Blue", "Green" }
 
-local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (string) -> (), value: any)
+local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
-	local valueIndex: number? = table.find(TEAM, value)
+	local valueIndex: number = table.find(TEAM, value) or 0
 
-	if not valueIndex then
+	if valueIndex == 0 then
 		refuse("Team: expected enum { Red, Blue }")
 	end
 
@@ -21,7 +23,7 @@ local function writeTeam(allocate: (number) -> (number, buffer), _, refuse: (str
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
@@ -38,12 +40,12 @@ local function readTeam(packet: buffer, cursor: number, _, sideCursor: number, l
 	return cursor, sideCursor, value
 end
 
-local function writeEnums(a: any, b: any, c: any, d: any)
+local function writeEnums(a: Team, b: "X", c: { kind: "Move", dx: number, dy: number } | { kind: "Stop" } | { kind: "Say", text: string }, d: Team | "Green")
 	local offset: number, out: buffer = beginReliable(1)
 	local flags: number = 0
-	local bIndex: number? = table.find(ENUMS_B, b)
+	local bIndex: number = table.find(ENUMS_B, b) or 0
 
-	if not bIndex then
+	if bIndex == 0 then
 		refuseReliable("Enums.b: expected enum { X }")
 	end
 
@@ -51,16 +53,16 @@ local function writeEnums(a: any, b: any, c: any, d: any)
 		refuseReliable("Enums.c: expected table")
 	end
 
-	local cIndex: number? = table.find(ENUMS_C, c.kind)
+	local cIndex: number = table.find(ENUMS_C, c.kind) or 0
 
-	if not cIndex then
+	if cIndex == 0 then
 		refuseReliable("Enums.c: expected enum \"kind\" { Move { dx: i8, dy: i8 }, Stop, Say { text: string(0..16) } }")
 	end
 
 	flags += cIndex - 1
-	local dIndex: number? = table.find(ENUMS_D, d)
+	local dIndex: number = table.find(ENUMS_D, d) or 0
 
-	if not dIndex then
+	if dIndex == 0 then
 		refuseReliable("Enums.d: expected enum { Red, Blue, Green }")
 	end
 

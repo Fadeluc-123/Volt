@@ -1,9 +1,10 @@
 --[[
-    Proves the assembled modules: each side of the Events schema renders
-    as its golden file, and over the mock the generated API carries every
-    call mode, every fire variant, a two-way event, an instance in the
-    side array and unreliable fires batched to the budget; casing renames
-    the methods and a name the API owns is refused
+    Proves the assembled modules: each side of the Events and Broadcasts
+    schemas and their types render as their golden files, and over the
+    mock the generated API carries every call mode, every fire variant, a
+    two-way event, an instance in the side array and unreliable fires
+    batched to the budget; casing renames the members, a name the API
+    owns is refused
 --]]
 
 --!strict
@@ -32,27 +33,43 @@ type Harness = {
 	clients: { alice: any, bob: any }, -- Each player's client module
 }
 
+-- The three modules of one schema, with the schema text they came from
+type Modules = { schema: string, client: string, server: string, types: string }
+
 local Instance = Environment.Instance
 
-local SCHEMA: string = fs.readFile("tests/Schemas/Events.volt")
-local CLIENT: string, SERVER: string = Generated.modules("Events", SCHEMA)
-local SIDES: { { name: string, text: string } } =
-	{ { name = "Client", text = CLIENT }, { name = "Server", text = SERVER } }
+local SCHEMAS: { string } = { "Events", "Broadcasts" } -- The client-fired forms and the two-way event, then the server-fired forms
+local SIDES: { string } = { "Client", "Server", "Types" }
 local SPRAYS: number = 400 -- Unreliable fires of three bytes in one frame, more than one packet of the budget holds
 local BUDGET: number = 900 -- The schema's unreliable budget, which every packet must fit
 
-local function setup(): Harness
+local MODULES: { [string]: Modules } = {}
+
+for _, name: string in SCHEMAS do
+	local schema: string = fs.readFile(`tests/Schemas/{name}.volt`)
+	local client: string, server: string, types: string = Generated.modules(name, schema)
+
+	MODULES[name] = {
+		schema = schema,
+		client = client,
+		server = server,
+		types = types,
+	}
+end
+
+local function setup(name: string): Harness
+	local modules: Modules = MODULES[name]
 	local mock: Mock = Volt.mock(task.spawn)
 	local alice, aliceTransport = mock:join("Alice")
 	local bob, bobTransport = mock:join("Bob")
 
 	return {
 		mock = mock,
-		server = Generated.module("Server", SERVER, mock.server),
+		server = Generated.module("Server", modules.server, mock.server),
 		players = { alice = alice, bob = bob },
 		clients = {
-			alice = Generated.module("Client", CLIENT, aliceTransport),
-			bob = Generated.module("Client", CLIENT, bobTransport),
+			alice = Generated.module("Client", modules.client, aliceTransport),
+			bob = Generated.module("Client", modules.client, bobTransport),
 		},
 	}
 end
@@ -64,20 +81,23 @@ local function exchange(mock: Mock)
 end
 
 describe("Targets", function ()
-	for _, side in SIDES do
-		test(`renders the {side.name:lower()} module as its golden file`, function ()
-			expect(golden("tests/Golden/Events", side.name, side.text)).is(side.text)
-		end)
+	for _, name: string in SCHEMAS do
+		for _, side: string in SIDES do
+			test(`renders the {name} {side:lower()} module as its golden file`, function ()
+				local text: string = (MODULES[name] :: any)[side:lower()]
+				expect(golden(`tests/Golden/{name}`, side, text)).is(text)
+			end)
+		end
 	end
 
 	test("stamps the schema table with the runtime's version", function ()
 		expect(Contract.version).is(Volt.version)
-		expect(SERVER:find(`version = "{Volt.version}"`, 1, true) ~= nil).is(true)
+		expect(MODULES.Events.server:find(`version = "{Volt.version}"`, 1, true) ~= nil).is(true)
 	end)
 
 	test("refuses a top-level name the API owns, in the schema's casing", function ()
 		local text: string =
-			`option casing = pascal\n{SCHEMA}\nevent OnFailure \{ from: Client, type: Reliable, call: SingleSync }`
+			`option casing = pascal\n{MODULES.Events.schema}\nevent OnFailure \{ from: Client, type: Reliable, call: SingleSync }`
 		local file, hash, diagnostics = Generated.compile("Bad", text)
 
 		Targets.modules(file, diagnostics, hash)
@@ -88,24 +108,31 @@ describe("Targets", function ()
 		)
 	end)
 
-	test("renames every method in the casing asked for", function ()
-		local pascal: string = select(2, Generated.modules("Events", `option casing = pascal\n{SCHEMA}`))
-		local snake: string = select(2, Generated.modules("Events", `option casing = snake\n{SCHEMA}`))
+	test("renames every member in the casing asked for, the handle types with them", function ()
+		local schema: string = MODULES.Broadcasts.schema
+		local client: string, pascal: string, pascalTypes: string =
+			Generated.modules("Broadcasts", `option casing = pascal\n{schema}`)
+		local snake: string = select(2, Generated.modules("Broadcasts", `option casing = snake\n{schema}`))
+		local both: string = `{client}{pascal}` -- The server fires, the client hears
 
 		for _, name: string in
 			{ "Fire", "FireAll", "FireList", "FireExcept", "FireSet", "On", "Iter", "OnFailure", "Stats" }
 		do
-			expect(pascal:find(`{name} = function`, 1, true) ~= nil).is(true)
+			expect(both:find(`{name} = function`, 1, true) ~= nil).is(true)
 		end
 
 		for _, name: string in { "fire_all", "fire_list", "fire_except", "fire_set", "on_failure" } do
 			expect(snake:find(`{name} = function`, 1, true) ~= nil).is(true)
 		end
+
+		expect(pascal:find("BeforeSend = runtime.beforeSend", 1, true) ~= nil).is(true)
+		expect(pascal:find("net.Events = table.freeze", 1, true) ~= nil).is(true)
+		expect(pascalTypes:find("\tFireAll: (A...) -> (),", 1, true) ~= nil).is(true)
 	end)
 
 	describe("over the mock", function ()
 		test("a client fire reaches a sync listener with the player first", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local heard: { string } = {}
 
 			harness.server.Input.on(function (player: any, dir: number, jump: boolean)
@@ -120,7 +147,7 @@ describe("Targets", function ()
 		end)
 
 		test("an async listener hears a single value on a thread of its own", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local heard: string? = nil
 			local thread: thread? = nil
 
@@ -137,7 +164,7 @@ describe("Targets", function ()
 		end)
 
 		test("many sync listeners hear an empty event in connection order", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local heard: { string } = {}
 
 			harness.server.Ready.on(function (player: any)
@@ -154,7 +181,7 @@ describe("Targets", function ()
 		end)
 
 		test("an instance crosses in the side array", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local folder = Instance.new("Folder")
 			local heard: any = nil
 
@@ -169,7 +196,7 @@ describe("Targets", function ()
 		end)
 
 		test("a polled event drains through iter with the index and the player, and has no on", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local rows: { string } = {}
 
 			harness.clients.alice.Ping.fire(7)
@@ -185,7 +212,7 @@ describe("Targets", function ()
 		end)
 
 		test("fire reaches one player and each broadcast the players it names", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Broadcasts")
 			local players = harness.players
 			local heard: { [string]: { number } } = { Alice = {}, Bob = {} }
 
@@ -208,7 +235,7 @@ describe("Targets", function ()
 		end)
 
 		test("a namespaced empty event polls on the client without a player", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Broadcasts")
 			local rows: { string } = {}
 
 			harness.server.Match.Start.fireAll()
@@ -222,7 +249,7 @@ describe("Targets", function ()
 		end)
 
 		test("a fire at a player who left is a counted no-op", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Broadcasts")
 			local departed: number = 0
 
 			harness.server.onFailure(function (_, kind: string)
@@ -250,8 +277,8 @@ describe("Targets", function ()
 			end
 
 			local alice, transport = mock:join("Alice")
-			local serverNet = Generated.module("Server", SERVER, mock.server)
-			local aliceNet = Generated.module("Client", CLIENT, transport)
+			local serverNet = Generated.module("Server", MODULES.Broadcasts.server, mock.server)
+			local aliceNet = Generated.module("Client", MODULES.Broadcasts.client, transport)
 			local heard: number = 0
 
 			aliceNet.Spray.on(function ()
@@ -273,7 +300,7 @@ describe("Targets", function ()
 		end)
 
 		test("a two-way event carries both ways", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local serverHeard: string? = nil
 			local clientHeard: number? = nil
 
@@ -293,7 +320,7 @@ describe("Targets", function ()
 		end)
 
 		test("flush sends what was fired before the Heartbeat would", function ()
-			local harness: Harness = setup()
+			local harness: Harness = setup("Events")
 			local heard: number? = nil
 
 			harness.server.Sync.on(function (_, value: number)
