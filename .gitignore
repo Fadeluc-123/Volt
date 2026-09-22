@@ -20,3 +20,6 @@ sourcemap.json
 build/
 place/Client.luau
 place/Server.luau
+
+# The benchmark: the modules every library compiles and the variants derived from the definitions
+benchmark/Generated/

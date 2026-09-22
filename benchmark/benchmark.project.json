@@ -1,0 +1,33 @@
+{
+	"name": "Benchmark",
+	"tree": {
+		"$className": "DataModel",
+		"Players": {
+			"$properties": { "CharacterAutoLoads": false }
+		},
+		"ReplicatedStorage": {
+			"Packages": {
+				"$className": "Folder",
+				"Volt": { "$path": "../default.project.json" }
+			},
+			"Benchmark": {
+				"$className": "Folder",
+				"Benches": { "$path": "Benches.luau" },
+				"Modes": { "$path": "Modes.luau" },
+				"Generated": { "$path": "Generated" },
+				"Sample": { "$className": "RemoteFunction" },
+				"Done": { "$className": "RemoteEvent" }
+			}
+		},
+		"ServerScriptService": {
+			"Bench": { "$path": "Bench.server.luau" }
+		},
+		"StarterPlayer": {
+			"$className": "StarterPlayer",
+			"StarterPlayerScripts": {
+				"$className": "StarterPlayerScripts",
+				"Bench": { "$path": "Bench.client.luau" }
+			}
+		}
+	}
+}

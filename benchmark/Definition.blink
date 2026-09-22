@@ -1,0 +1,27 @@
+option ClientOutput = "Generated/Blink/Client.luau"
+option ServerOutput = "Generated/Blink/Server.luau"
+
+-- The two payloads of Blink's published benchmark, then a mixed struct and a small unreliable input
+struct Entity { id: u8, x: u8, y: u8, z: u8, orientation: u8, animation: u8 }
+struct Snapshot { position: vector, yaw: f32, health: u8, name: string(0..32), target: u16? }
+struct Controls { dir: u8, jump: boolean }
+
+event Entities {
+	From: Client, Type: Reliable, Call: SingleSync,
+	Data: Entity[0..1000],
+}
+
+event Booleans {
+	From: Client, Type: Reliable, Call: SingleSync,
+	Data: boolean[0..1000],
+}
+
+event Snapshots {
+	From: Client, Type: Reliable, Call: SingleSync,
+	Data: Snapshot[0..64],
+}
+
+event Input {
+	From: Client, Type: Unreliable, Call: SingleSync,
+	Data: Controls,
+}
