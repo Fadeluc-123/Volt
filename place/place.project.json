@@ -1,0 +1,24 @@
+{
+	"name": "Smoke",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"Packages": {
+				"$className": "Folder",
+				"Volt": { "$path": "../default.project.json" }
+			},
+			"Net": { "$path": "Client.luau" }
+		},
+		"ServerScriptService": {
+			"Net": { "$path": "Server.luau" },
+			"Smoke": { "$path": "Smoke.server.luau" }
+		},
+		"StarterPlayer": {
+			"$className": "StarterPlayer",
+			"StarterPlayerScripts": {
+				"$className": "StarterPlayerScripts",
+				"Smoke": { "$path": "Smoke.client.luau" }
+			}
+		}
+	}
+}

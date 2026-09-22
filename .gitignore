@@ -15,3 +15,8 @@ Definitions/
 Packages/
 sourcemap.json
 *.rbxl*
+
+# Build products: the bundled compiler with its binaries, and the modules the smoke place is built from
+build/
+place/Client.luau
+place/Server.luau
