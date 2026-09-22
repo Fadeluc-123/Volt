@@ -1,6 +1,6 @@
 {
 	"name": "Volt",
-	"globIgnorePaths": ["src/Compiler/**"],
+	"globIgnorePaths": ["src/Compiler", "src/Compiler/**"],
 	"tree": {
 		"$path": "src"
 	}
