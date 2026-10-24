@@ -1,4 +1,4 @@
-local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
+local beginReliable, trimReliable, slotReliable, refuseReliable = ...
 
 -- Every enum by the name its items report, so an untyped item finds its way back
 local ENUMS: { [string]: Enum } = {}
@@ -144,7 +144,7 @@ local function readObjects(packet: buffer, cursor: number, side: { any }, sideCu
 end
 
 local function writeItems(a: Enum.Material, b: EnumItem)
-	local offset: number, out: buffer = beginReliable(5)
+	local offset: number, out: buffer = beginReliable(260)
 
 	if typeof(a) ~= "EnumItem" or a.EnumType ~= Enum.Material then
 		refuseReliable("Items.a: expected Enum.Material")
@@ -164,8 +164,10 @@ local function writeItems(a: Enum.Material, b: EnumItem)
 
 	buffer.writeu8(out, offset + 2, #bName - 1)
 	buffer.writeu16(out, offset + 3, b.Value)
-	local bNameOffset: number, bNameOut: buffer = allocateReliable(#bName)
-	buffer.writestring(bNameOut, bNameOffset, bName)
+	offset += 5
+	buffer.writestring(out, offset, bName)
+	offset += #bName
+	trimReliable(offset)
 end
 
 local function readItems(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)

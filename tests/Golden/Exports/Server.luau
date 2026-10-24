@@ -23,50 +23,55 @@ local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> 
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuse("Save: expected table")
 	end
 
-	if typeof(value.version) ~= "number" or value.version % 1 ~= 0 or value.version < 0 or value.version > 65535 then
+	local version = value.version
+
+	if type(version) ~= "number" or bit32.band(version, 65535) ~= version then
 		refuse("Save.version: expected u16")
 	end
 
-	buffer.writeu16(out, offset + 1, value.version)
+	buffer.writeu16(out, offset + 1, version)
+	local names = value.names
 
-	if typeof(value.names) ~= "table" then
+	if type(names) ~= "table" then
 		refuse("Save.names: expected table")
 	end
 
-	if #value.names > 4 then
+	if #names > 4 then
 		refuse("Save.names: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 3, #value.names)
-	flags += value.owner ~= nil and 1 or 0
+	buffer.writeu8(out, offset + 3, #names)
+	local owner = value.owner
+	flags += owner ~= nil and 1 or 0
 	buffer.writeu8(out, offset, flags)
 
-	for index = 1, #value.names do
+	for index = 1, #names do
 		local offset_2: number, out_2: buffer = allocate(1)
+		local namesEntry = names[index]
 
-		if typeof(value.names[index]) ~= "string" then
+		if type(namesEntry) ~= "string" then
 			refuse("Save.names[]: expected string")
 		end
 
-		if #value.names[index] > 16 then
+		if #namesEntry > 16 then
 			refuse("Save.names[]: length out of range")
 		end
 
-		buffer.writeu8(out_2, offset_2, #value.names[index])
-		local namesEntryOffset: number, namesEntryOut: buffer = allocate(#value.names[index])
-		buffer.writestring(namesEntryOut, namesEntryOffset, value.names[index])
+		buffer.writeu8(out_2, offset_2, #namesEntry)
+		local namesEntryOffset: number, namesEntryOut: buffer = allocate(#namesEntry)
+		buffer.writestring(namesEntryOut, namesEntryOffset, namesEntry)
 	end
 
-	if value.owner ~= nil then
-		if typeof(value.owner) ~= "Instance" then
+	if owner ~= nil then
+		if typeof(owner) ~= "Instance" then
 			refuse("Save.owner: expected Instance")
 		end
 
-		slot(value.owner)
+		slot(owner)
 	end
 end
 
@@ -166,16 +171,18 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0xFE2061F6,
+	hash = 0x4EA0F775,
 	scope = "Exports",
 	side = "server",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {
@@ -188,7 +195,7 @@ runtime = Volt.start({
 local net = {
 	Save = table.freeze({
 		write = function (value: Save): (buffer, { any }?)
-			return runtime:encode(writeSave, value)
+			return runtime:encode("Save", writeSave, value)
 		end,
 
 		read = function (packet: buffer, side: { any }?): Save
@@ -199,7 +206,7 @@ local net = {
 	Inventory = table.freeze({
 		Kind = table.freeze({
 			write = function (value: Inventory_Kind): (buffer, { any }?)
-				return runtime:encode(writeInventory_Kind, value)
+				return runtime:encode("Inventory.Kind", writeInventory_Kind, value)
 			end,
 
 			read = function (packet: buffer, side: { any }?): Inventory_Kind

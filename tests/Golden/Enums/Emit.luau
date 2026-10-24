@@ -49,7 +49,7 @@ local function writeEnums(a: Team, b: "X", c: { kind: "Move", dx: number, dy: nu
 		refuseReliable("Enums.b: expected enum { X }")
 	end
 
-	if typeof(c) ~= "table" then
+	if type(c) ~= "table" then
 		refuseReliable("Enums.c: expected table")
 	end
 
@@ -72,32 +72,35 @@ local function writeEnums(a: Team, b: "X", c: { kind: "Move", dx: number, dy: nu
 
 	if cIndex == 1 then
 		local offset_2: number, out_2: buffer = allocateReliable(2)
+		local dx = c.dx
 
-		if typeof(c.dx) ~= "number" or c.dx % 1 ~= 0 or c.dx < -128 or c.dx > 127 then
+		if type(dx) ~= "number" or dx % 1 ~= 0 or dx < -128 or dx > 127 then
 			refuseReliable("Enums.c.dx: expected i8")
 		end
 
-		buffer.writei8(out_2, offset_2, c.dx)
+		buffer.writei8(out_2, offset_2, dx)
+		local dy = c.dy
 
-		if typeof(c.dy) ~= "number" or c.dy % 1 ~= 0 or c.dy < -128 or c.dy > 127 then
+		if type(dy) ~= "number" or dy % 1 ~= 0 or dy < -128 or dy > 127 then
 			refuseReliable("Enums.c.dy: expected i8")
 		end
 
-		buffer.writei8(out_2, offset_2 + 1, c.dy)
+		buffer.writei8(out_2, offset_2 + 1, dy)
 	elseif cIndex == 3 then
 		local offset_4: number, out_4: buffer = allocateReliable(1)
+		local text = c.text
 
-		if typeof(c.text) ~= "string" then
+		if type(text) ~= "string" then
 			refuseReliable("Enums.c.text: expected string")
 		end
 
-		if #c.text > 16 then
+		if #text > 16 then
 			refuseReliable("Enums.c.text: length out of range")
 		end
 
-		buffer.writeu8(out_4, offset_4, #c.text)
-		local textOffset: number, textOut: buffer = allocateReliable(#c.text)
-		buffer.writestring(textOut, textOffset, c.text)
+		buffer.writeu8(out_4, offset_4, #text)
+		local textOffset: number, textOut: buffer = allocateReliable(#text)
+		buffer.writestring(textOut, textOffset, text)
 	end
 end
 

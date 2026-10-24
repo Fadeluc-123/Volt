@@ -9,7 +9,7 @@
 --!strict
 export type Bench = {
 	name: string,
-	perFrame: number, -- Fires a frame, sized so a frame of them fits under Volt's outgoing cap
+	perFrame: number, -- Fires a frame, as Blink's published benchmark sizes them; the definitions raise every cap to fit
 	unreliable: boolean?,
 	build: (random: Random) -> any,
 }
@@ -47,7 +47,7 @@ local Benches = {}
 Benches.list = {
 	{
 		name = "Entities",
-		perFrame = 400,
+		perFrame = 1000,
 		build = function (random: Random)
 			local entities: { any } = table.create(ENTITIES)
 

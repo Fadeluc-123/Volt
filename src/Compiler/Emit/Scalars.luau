@@ -22,6 +22,7 @@ type Type = Schema.Type
 
 local PREFIXES: { string } = { "u8", "u16", "u24", "u32" } -- A length prefix by its width in bytes
 local EXACT_HIGH: number = 2 ^ 21 -- The high word of 2^53, the last integer a number holds exactly
+local MASKED_BYTES: number = 4 -- The widest unsigned integer bit32 holds, which its check masks to
 
 local minus = Expressions.minus
 local plus = Expressions.plus
@@ -45,24 +46,8 @@ function Scalars:number(node: Type, write: Block, read: Block, value: string, hi
 	local index: number = write:reserve(bytes)
 	local at: number = read:reserve(bytes)
 
-	local low: number? = range and range.min or row.min
-	local high: number? = range and range.max or row.max
-
 	if self._validate then
-		local terms: { string } = { row.float and `{value} ~= {value}` or `{value} % 1 ~= 0` }
-
-		if not self._known then
-			table.insert(terms, 1, `typeof({value}) ~= "number"`)
-		end
-
-		if low then
-			table.insert(terms, `{value} < {low}`)
-		end
-		if high then
-			table.insert(terms, `{value} > {high}`)
-		end
-
-		refuse(write, table.concat(terms, " or "), `{path}: expected {Print.type(node)}`)
+		self:checked(node, write, value, path)
 	end
 
 	if name == "f16" then
@@ -104,6 +89,43 @@ function Scalars:number(node: Type, write: Block, read: Block, value: string, hi
 end
 
 --[[
+    The write-side check of an integer or float. An unsigned integer the
+    bit32 library holds is refused in one comparison, since masking it to
+    its width changes a fraction, a negative, NaN, infinity or anything
+    past the width, beside only a declared end narrower than the width's;
+    every other width keeps the fraction or NaN term and both its bounds
+--]]
+
+function Scalars:checked(node: Type, write: Block, value: string, path: string)
+	local range: Range? = (node :: any).range
+	local row = Primitives[(node :: any).name]
+	local masked: boolean = row.min == 0 and (row.bytes :: number) <= MASKED_BYTES
+	local terms: { string } = {}
+
+	local low: number? = range and range.min or row.min
+	local high: number? = range and range.max or row.max
+
+	if not self._known then
+		table.insert(terms, `type({value}) ~= "number"`)
+	end
+
+	if masked then
+		table.insert(terms, `bit32.band({value}, {row.max}) ~= {value}`)
+	else
+		table.insert(terms, row.float and `{value} ~= {value}` or `{value} % 1 ~= 0`)
+	end
+
+	if low and not (masked and low == row.min) then
+		table.insert(terms, `{value} < {low}`)
+	end
+	if high and not (masked and high == row.max) then
+		table.insert(terms, `{value} > {high}`)
+	end
+
+	refuse(write, table.concat(terms, " or "), `{path}: expected {Print.type(node)}`)
+end
+
+--[[
     Reads a 64-bit integer as its two words and refuses one past the
     magnitude a number holds exactly before joining them
 --]]
@@ -140,7 +162,7 @@ function Scalars:quantised(node: Type, write: Block, read: Block, value: string,
 
 	if self._validate then
 		local nan: string = `{value} ~= {value}`
-		local condition: string = self._known and nan or `typeof({value}) ~= "number" or {nan}`
+		local condition: string = self._known and nan or `type({value}) ~= "number" or {nan}`
 
 		refuse(write, condition, `{path}: expected {Print.type(node)}`)
 	end

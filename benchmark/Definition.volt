@@ -2,6 +2,7 @@ option clientOutput = "Generated/Volt/Client.luau"
 option serverOutput = "Generated/Volt/Server.luau"
 option maxPacket = 1048576
 option maxPacketsPerSecond = 100000
+option maxOutgoing = 1048576
 
 -- The two payloads of Blink's published benchmark, then a mixed struct and a small unreliable input
 struct Entity { id: u8, x: u8, y: u8, z: u8, orientation: u8, animation: u8 }

@@ -106,6 +106,11 @@ function Api:event(event: Event): string
 	if fires then
 		local id: number = walked.out :: number
 		local call: string = `write{walked.label}({walked.arguments})`
+
+		-- An unchecked writer fires through the runtime, so a value that raises part way leaves nothing behind
+		if self._file.options.writeValidation == false then
+			call = `runtime:write({joined(tostring(id), `write{walked.label}`, walked.arguments)})`
+		end
 		local target: string = server and "player" or "nil"
 		local allowed: string = `before[{id}] == nil or before[{id}]({joined(target, walked.arguments)})`
 
@@ -181,7 +186,7 @@ function Api:export(declaration: TypeDeclaration): string
 	local write: string = member(
 		self:method("write"),
 		`(value: {annotation}): (buffer, \{ any }?)`,
-		`return runtime:encode(write{pair}, value)`
+		`return runtime:encode("{declaration.path}", write{pair}, value)`
 	)
 
 	local read: string = member(

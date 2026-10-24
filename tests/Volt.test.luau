@@ -24,6 +24,7 @@ local OPTIONS: { [string]: any } = {
 	manualReplication = false,
 	maxPacket = 8192,
 	maxPacketsPerSecond = 240,
+	maxOutgoing = 262144,
 	unreliableBudget = 900,
 }
 

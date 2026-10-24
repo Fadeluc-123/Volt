@@ -7,6 +7,7 @@
 --]]
 
 --!strict
+--!native
 local Limits = {} :: any
 
 local Config = require("./Config/Runtime")

@@ -121,13 +121,13 @@ local studio = process.exec(
 	{ stdio = "default" }
 )
 local output: string = `{studio.stdout}{studio.stderr}`
-
-if not studio.ok then
-	print(output)
-	process.exit(studio.code)
-end
-
 local at: number? = output:find(MARKER, 1, true)
+
+-- run-in-roblox exits 1 when any plugin in Studio prints an error, so the report and not the exit code says whether
+-- the run worked
+if not at then
+	print(output)
+end
 
 assert(at, "Studio printed no report")
 

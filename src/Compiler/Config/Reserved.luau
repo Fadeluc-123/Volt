@@ -63,6 +63,8 @@ local Reserved = {
 		"string",
 		"table",
 		"tostring",
+		"trimReliable",
+		"trimUnreliable",
 		"typeof",
 		"writef16",
 	} :: { string },

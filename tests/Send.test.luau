@@ -1,15 +1,13 @@
 --[[
     Proves a send grows its buffer and keeps what was written, flushes
-    exactly the bytes and slots written and nothing else, splits an
-    unreliable packet between messages to fit the budget with none
-    straddling, copies a broadcast into every target it should reach,
-    takes the scratch state as one packet, undoes a refused message,
-    drops one past the cap, and counts
+    exactly the bytes and slots written, trims a message to what it wrote,
+    splits an unreliable packet between messages to fit the budget, copies
+    a broadcast into every target it should reach, takes the scratch state
+    as one packet, undoes a refusal, drops a message past the cap, and counts
 --]]
 
 --!strict
 local Suite = require("./Suite")
-local Config = require("@volt/Config/Runtime")
 local Limits = require("@volt/Limits")
 local Send = require("@volt/Send")
 local Types = require("@volt/Config/Types/Runtime")
@@ -24,7 +22,7 @@ type Stats = Types.Stats
 
 type Fired = { target: any, packet: buffer, side: { any }? }
 
-local MAX_OUTGOING: number = Config.maxOutgoing
+local MAX_OUTGOING: number = 256 -- The most a target's frame may hold here, as a schema's maxOutgoing sets it
 
 -- A send that records what it fires and whom it dropped a message for, counting into a total
 local function recorded(budget: number?): (Send, { Fired }, Stats, { any })
@@ -39,6 +37,7 @@ local function recorded(budget: number?): (Send, { Fired }, Stats, { any })
 		function (target: any)
 			table.insert(dropped, target)
 		end,
+		MAX_OUTGOING,
 		budget
 	)
 
@@ -106,6 +105,24 @@ describe("Send", function ()
 
 		send:flush()
 		expect(#fired).is(1)
+	end)
+
+	test("trims a message that took its largest size to the bytes it wrote, so the next follows them", function ()
+		local send: Send, fired: { Fired } = recorded()
+		local state: State = send:add("a", Limits.fresh())
+
+		send.current = state
+
+		local offset: number, out: buffer = send.begin(10)
+
+		buffer.fill(out, offset, 1, 4)
+		send.trim(offset + 4)
+		message(send, 2, 2)
+		send:flush()
+
+		expect(buffer.len(fired[1].packet)).is(6)
+		expect(buffer.readu8(fired[1].packet, 3)).is(1)
+		expect(buffer.readu8(fired[1].packet, 4)).is(2)
 	end)
 
 	test("fires no side array when nothing took a slot", function ()

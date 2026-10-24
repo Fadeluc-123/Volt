@@ -6,8 +6,10 @@
 --]]
 
 --!strict
+--!native
 local Receive = {} :: any
 
+local Config = require("./Config/Runtime")
 local Types = require("./Config/Types/Runtime")
 
 type Limit = Types.Limit
@@ -29,6 +31,7 @@ type Channel = {
 }
 
 local NO_SLOTS: { any } = table.freeze({}) -- What a reader indexes when the packet carried no instances
+local POSITION: string = Config.position
 
 -- Calls a listener with the player first on the server and with the values alone on the client
 local function invoke(listener: (...any) -> (), player: any, ...: any)
@@ -52,6 +55,36 @@ local function pop(channel: Channel): Entry?
 	channel.head = head + 1
 
 	return entry
+end
+
+--[[
+    Runs one listener the way the channel's mode says: a sync listener
+    inline under one xpcall, with the frame compared before and after so
+    an error or a yield is the listener's failure and the packet goes
+    on; an async listener on a new thread. Both deliver and the drain of
+    a queue come through here, and nothing else sits before the listener
+--]]
+
+local function run(self: any, channel: Channel, listener: (...any) -> (), player: any, ...: any)
+	if channel.kind ~= "sync" then
+		self._spawn(invoke, listener, player, ...)
+		return
+	end
+
+	local frame: number = self.frame
+	local ok: boolean, message: any
+
+	if player == nil then
+		ok, message = xpcall(listener, self._trace, ...)
+	else
+		ok, message = xpcall(listener, self._trace, player, ...)
+	end
+
+	if not ok then
+		self:fail(player, "listener", `{channel.name}: {message}`)
+	elseif self.frame ~= frame then
+		self:fail(player, "listener", `{channel.name}: a sync listener yielded`)
+	end
 end
 
 --[[
@@ -138,7 +171,7 @@ function Receive:packet(player: any, packet: any, side: any)
 
 	local ok: boolean, message: any = pcall(loop, self, player, packet, side or NO_SLOTS, start)
 	if not ok then
-		self:fail(player, "decode", (tostring(message):gsub("^.-:%d+: ", "")))
+		self:fail(player, "decode", (tostring(message):gsub(POSITION, "")))
 	end
 end
 
@@ -168,7 +201,7 @@ function Receive:deliver(id: number, player: any, cursor: number, sideCursor: nu
 		self:_push(channel, player, ...)
 	else
 		for _, listener in listeners do
-			self:_run(channel, listener, player, ...)
+			run(self, channel, listener, player, ...)
 		end
 	end
 
@@ -193,7 +226,7 @@ function Receive:on(id: number, listener: (...any) -> ()): () -> ()
 	if #listeners == 1 then
 		local entry: Entry? = pop(channel)
 		while entry do
-			self:_run(channel, listener, table.unpack(entry, 1, entry.n))
+			run(self, channel, listener, table.unpack(entry, 1, entry.n))
 			entry = pop(channel)
 		end
 	end
@@ -231,30 +264,9 @@ function Receive:iter(id: number): () -> ...any
 	end
 end
 
--- Runs one listener the way the channel's mode says
-function Receive:_run(channel: Channel, listener: (...any) -> (), player: any, ...: any)
-	if channel.kind == "sync" then
-		self:_call(channel, listener, player, ...)
-	else
-		self._spawn(invoke, listener, player, ...)
-	end
-end
-
 -- The error a listener or a handler raised with the stack that raised it, taken before the stack unwinds
 function Receive._trace(message: any): string
 	return debug.traceback(tostring(message), 2)
-end
-
--- Runs one sync listener inline; an error or a yield is the listener's failure and the packet goes on
-function Receive:_call(channel: Channel, listener: (...any) -> (), player: any, ...: any)
-	local frame: number = self.frame
-	local ok: boolean, message: any = xpcall(invoke, self._trace, listener, player, ...)
-
-	if not ok then
-		self:fail(player, "listener", `{channel.name}: {message}`)
-	elseif self.frame ~= frame then
-		self:fail(player, "listener", `{channel.name}: a sync listener yielded`)
-	end
 end
 
 -- Queues a message behind the others, dropping the oldest when the queue is full

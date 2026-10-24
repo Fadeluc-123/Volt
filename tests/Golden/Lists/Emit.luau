@@ -6,34 +6,38 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuse("Stack: expected table")
 	end
 
-	if typeof(value.item) ~= "string" then
+	local item = value.item
+
+	if type(item) ~= "string" then
 		refuse("Stack.item: expected string")
 	end
 
-	if #value.item < 1 or #value.item > 8 then
+	if #item < 1 or #item > 8 then
 		refuse("Stack.item: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 1, #value.item - 1)
+	buffer.writeu8(out, offset + 1, #item - 1)
+	local quantity = value.quantity
 
-	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
+	if type(quantity) ~= "number" or bit32.band(quantity, 65535) ~= quantity or quantity < 1 or quantity > 999 then
 		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
-	buffer.writeu16(out, offset + 2, value.quantity)
-	flags += value.properties ~= nil and 1 or 0
+	buffer.writeu16(out, offset + 2, quantity)
+	local properties = value.properties
+	flags += properties ~= nil and 1 or 0
 
-	if value.properties ~= nil then
-		slot(value.properties)
+	if properties ~= nil then
+		slot(properties)
 	end
 
 	buffer.writeu8(out, offset, flags)
-	local itemOffset: number, itemOut: buffer = allocate(#value.item)
-	buffer.writestring(itemOut, itemOffset, value.item)
+	local itemOffset: number, itemOut: buffer = allocate(#item)
+	buffer.writestring(itemOut, itemOffset, item)
 end
 
 local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
@@ -82,7 +86,7 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 	local offset: number, out: buffer = beginReliable(6)
 	local flags: number = 0
 
-	if typeof(a) ~= "table" then
+	if type(a) ~= "table" then
 		refuseReliable("Lists.a: expected table")
 	end
 
@@ -92,7 +96,7 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 
 	buffer.writeu8(out, offset + 1, #a)
 
-	if typeof(b) ~= "table" then
+	if type(b) ~= "table" then
 		refuseReliable("Lists.b: expected table")
 	end
 
@@ -100,7 +104,7 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 		refuseReliable("Lists.b: expected 2 entries")
 	end
 
-	if typeof(c) ~= "table" then
+	if type(c) ~= "table" then
 		refuseReliable("Lists.c: expected table")
 	end
 
@@ -108,11 +112,16 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 		refuseReliable("Lists.c: expected 8 entries")
 	end
 
-	for index_3 = 1, 8 do
-		flags += c[index_3] and 2 ^ (index_3 - 1) or 0
-	end
+	flags += (c[1] and 1 or 0)
+		+ (c[2] and 2 or 0)
+		+ (c[3] and 4 or 0)
+		+ (c[4] and 8 or 0)
+		+ (c[5] and 16 or 0)
+		+ (c[6] and 32 or 0)
+		+ (c[7] and 64 or 0)
+		+ (c[8] and 128 or 0)
 
-	if typeof(d) ~= "table" then
+	if type(d) ~= "table" then
 		refuseReliable("Lists.d: expected table")
 	end
 
@@ -122,7 +131,7 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 
 	buffer.writeu8(out, offset + 2, #d)
 
-	if typeof(e) ~= "table" then
+	if type(e) ~= "table" then
 		refuseReliable("Lists.e: expected table")
 	end
 
@@ -132,7 +141,7 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 
 	buffer.writeu8(out, offset + 3, #e)
 
-	if typeof(f) ~= "table" then
+	if type(f) ~= "table" then
 		refuseReliable("Lists.f: expected table")
 	end
 
@@ -145,54 +154,64 @@ local function writeLists(a: { number }, b: { string }, c: { boolean }, d: { boo
 	local aOffset: number, aOut: buffer = allocateReliable(#a)
 
 	for index = 1, #a do
-		if typeof(a[index]) ~= "number" or a[index] % 1 ~= 0 or a[index] < 0 or a[index] > 255 then
+		local aEntry = a[index]
+
+		if type(aEntry) ~= "number" or bit32.band(aEntry, 255) ~= aEntry then
 			refuseReliable("Lists.a[]: expected u8")
 		end
 
-		buffer.writeu8(aOut, aOffset, a[index])
+		buffer.writeu8(aOut, aOffset, aEntry)
 		aOffset += 1
 	end
 
 	for index_2 = 1, 2 do
 		local offset_2: number, out_2: buffer = allocateReliable(1)
+		local bEntry = b[index_2]
 
-		if typeof(b[index_2]) ~= "string" then
+		if type(bEntry) ~= "string" then
 			refuseReliable("Lists.b[]: expected string")
 		end
 
-		if #b[index_2] > 4 then
+		if #bEntry > 4 then
 			refuseReliable("Lists.b[]: length out of range")
 		end
 
-		buffer.writeu8(out_2, offset_2, #b[index_2])
-		local bEntryOffset: number, bEntryOut: buffer = allocateReliable(#b[index_2])
-		buffer.writestring(bEntryOut, bEntryOffset, b[index_2])
+		buffer.writeu8(out_2, offset_2, #bEntry)
+		local bEntryOffset: number, bEntryOut: buffer = allocateReliable(#bEntry)
+		buffer.writestring(bEntryOut, bEntryOffset, bEntry)
 	end
 
 	local dOffset: number, dOut: buffer = allocateReliable((#d + 7) // 8)
 
 	for byte = 0, (#d + 7) // 8 - 1 do
-		local packed: number = 0
+		local at: number = byte * 8
 
-		for bit = 0, 7 do
-			packed += d[byte * 8 + bit + 1] and 2 ^ bit or 0
-		end
+		local packed: number = (d[at + 1] and 1 or 0)
+			+ (d[at + 2] and 2 or 0)
+			+ (d[at + 3] and 4 or 0)
+			+ (d[at + 4] and 8 or 0)
+			+ (d[at + 5] and 16 or 0)
+			+ (d[at + 6] and 32 or 0)
+			+ (d[at + 7] and 64 or 0)
+			+ (d[at + 8] and 128 or 0)
 
 		buffer.writeu8(dOut, dOffset + byte, packed)
 	end
 
-	for index_5 = 1, #e do
-		writeStack(allocateReliable, slotReliable, refuseReliable, e[index_5])
+	for index_3 = 1, #e do
+		writeStack(allocateReliable, slotReliable, refuseReliable, e[index_3])
 	end
 
 	local fOffset: number, fOut: buffer = allocateReliable(#f)
 
-	for index_6 = 1, #f do
-		if typeof(f[index_6]) ~= "number" or f[index_6] % 1 ~= 0 or f[index_6] < 0 or f[index_6] > 255 then
+	for index_4 = 1, #f do
+		local fEntry = f[index_4]
+
+		if type(fEntry) ~= "number" or bit32.band(fEntry, 255) ~= fEntry then
 			refuseReliable("Lists.f[]: expected u8")
 		end
 
-		buffer.writeu8(fOut, fOffset, f[index_6])
+		buffer.writeu8(fOut, fOffset, fEntry)
 		fOffset += 1
 	end
 end
@@ -209,11 +228,16 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.a: length out of range")
 	end
 
-	local c: { boolean } = table.create(8)
-
-	for index_3 = 1, 8 do
-		c[index_3] = bit32.btest(flags, 2 ^ (index_3 - 1))
-	end
+	local c: { boolean } = {
+		bit32.btest(flags, 1),
+		bit32.btest(flags, 2),
+		bit32.btest(flags, 4),
+		bit32.btest(flags, 8),
+		bit32.btest(flags, 16),
+		bit32.btest(flags, 32),
+		bit32.btest(flags, 64),
+		bit32.btest(flags, 128),
+	}
 
 	local dLength: number = buffer.readu8(packet, cursor + 2)
 
@@ -276,8 +300,21 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 
 	local d: { boolean } = table.create(dLength)
 
-	for index_4 = 1, dLength do
-		d[index_4] = bit32.btest(buffer.readu8(packet, cursor + (index_4 - 1) // 8), 2 ^ ((index_4 - 1) % 8))
+	for byte = 0, dLength // 8 - 1 do
+		local packed: number = buffer.readu8(packet, cursor + byte)
+		local at: number = byte * 8
+		d[at + 1] = bit32.btest(packed, 1)
+		d[at + 2] = bit32.btest(packed, 2)
+		d[at + 3] = bit32.btest(packed, 4)
+		d[at + 4] = bit32.btest(packed, 8)
+		d[at + 5] = bit32.btest(packed, 16)
+		d[at + 6] = bit32.btest(packed, 32)
+		d[at + 7] = bit32.btest(packed, 64)
+		d[at + 8] = bit32.btest(packed, 128)
+	end
+
+	for index_3 = dLength // 8 * 8 + 1, dLength do
+		d[index_3] = bit32.btest(buffer.readu8(packet, cursor + (index_3 - 1) // 8), bit32.lshift(1, (index_3 - 1) % 8))
 	end
 
 	cursor += (dLength + 7) // 8
@@ -288,10 +325,10 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 
 	local e = table.create(eLength)
 
-	for index_5 = 1, eLength do
+	for index_4 = 1, eLength do
 		local eEntry
 		cursor, sideCursor, eEntry = readStack(packet, cursor, side, sideCursor, length)
-		e[index_5] = eEntry
+		e[index_4] = eEntry
 	end
 
 	if cursor + fLength > length then
@@ -300,10 +337,10 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 
 	local f = table.create(fLength)
 
-	for index_6 = 1, fLength do
+	for index_5 = 1, fLength do
 		local fEntry: number = buffer.readu8(packet, cursor)
 		cursor += 1
-		f[index_6] = fEntry
+		f[index_5] = fEntry
 	end
 
 	return cursor, sideCursor, a, b, c, d, e, f

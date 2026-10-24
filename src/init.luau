@@ -37,8 +37,9 @@ export type Runtime = {
 	afterReceive: (name: string?, hook: Hook?) -> (),
 	rate: (name: string, perSecond: number, burst: number?) -> (),
 	target: (self: Runtime, player: any) -> boolean,
+	write: (self: Runtime, id: number, write: (...any) -> (), ...any) -> (),
 	broadcast: (self: Runtime, id: number, targets: { [any]: any }?, except: any?, write: (...any) -> (), ...any) -> (),
-	encode: (self: Runtime, write: (...any) -> (), value: any) -> (buffer, { any }?),
+	encode: (self: Runtime, name: string, write: (...any) -> (), value: any) -> (buffer, { any }?),
 	decode: (self: Runtime, read: (...any) -> (number, number, any), packet: buffer, side: { any }?) -> any,
 	deliver: (self: Runtime, id: number, player: any, cursor: number, sideCursor: number, ...any) -> (number, number),
 	on: (self: Runtime, id: number, listener: (...any) -> ()) -> () -> (),
@@ -75,6 +76,7 @@ export type Runtime = {
 }
 
 type Bucket = Types.Bucket
+type Outgoing = Types.Outgoing
 type State = Send.State
 
 -- What the server keeps per player: their send states, counters and rate buckets, whether they have handshaken
@@ -117,6 +119,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
 		_messages = schema.messages,
 		_outgoing = schema.outgoing,
+		_checked = options.writeValidation ~= false, -- Whether the module's writers check their values before a byte is written
 		_server = server,
 		_idBytes = schema.idBytes,
 		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
@@ -138,8 +141,8 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		self:fail(server and target or nil, "outgoing", "over maxOutgoing, a message was dropped")
 	end
 
-	self.reliable = Send.new(live.reliable, stats, dropped)
-	self.unreliable = Send.new(live.unreliable, stats, dropped, options.unreliableBudget)
+	self.reliable = Send.new(live.reliable, stats, dropped, options.maxOutgoing)
+	self.unreliable = Send.new(live.unreliable, stats, dropped, options.maxOutgoing, options.unreliableBudget)
 
 	self:channels(schema.messages)
 	self:functions(schema.messages)
@@ -221,6 +224,25 @@ function Runtime:target(player: any): boolean
 end
 
 --[[
+    Fires a message the way a module built without write validation does:
+    its writer runs under pcall, so a value that raises part way through,
+    in a buffer write or a field of the wrong kind, leaves nothing of its
+    message behind and reaches whoever fired named for the message
+--]]
+
+function Runtime:write(id: number, write: (...any) -> (), ...: any)
+	local ok: boolean, message: any = pcall(write, ...)
+	if ok then
+		return
+	end
+
+	local row: Outgoing = self._outgoing[id]
+	local send: Send.Send = row.reliable and self.reliable or self.unreliable
+
+	error(send:undo(row.name, message), 0)
+end
+
+--[[
     Writes a message once, to the scratch states, and copies it to every
     target, or to those listed or set, or to all but one, unless the hook
     before its send vetoes it. Every broadcast variant of the generated
@@ -234,7 +256,13 @@ function Runtime:broadcast(id: number, targets: { [any]: any }?, except: any?, w
 	end
 
 	self:target(nil)
-	write(...)
+
+	-- An unchecked writer that raised would leave the scratch state dirty for the next broadcast
+	if self._checked then
+		write(...)
+	else
+		self:write(id, write, ...)
+	end
 
 	local send: Send.Send = self._outgoing[id].reliable and self.reliable or self.unreliable
 	send:broadcast(targets, except)

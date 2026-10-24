@@ -169,7 +169,19 @@ function Emit:type(node: Type, write: Block, read: Block, value: string, hint: s
 		end
 
 		return self:type(target.type, write, read, value, hint, path)
-	elseif node.kind == "primitive" then
+	end
+
+	-- A value reached through a field or an index is read into a local first, so the checks and the write after
+	-- it cost one lookup rather than one each; a number or boolean nothing checks is read once, as it is
+	local scalar: boolean = node.kind == "primitive" and (Primitives[node.name].bytes ~= nil or node.name == "boolean")
+
+	if value:find("[.%[]") and (self._validate or not scalar) then
+		local name: string = write:name(hint)
+		write:line(`local {name} = {value}`)
+		value = name
+	end
+
+	if node.kind == "primitive" then
 		if node.name == "boolean" then
 			return self:boolean(write, read, value, path)
 		elseif node.name == "unknown" then
@@ -205,7 +217,7 @@ end
 
 function Emit:shape(write: Block, value: string, luauType: string, path: string)
 	if self._validate and not self._known then
-		Expressions.refuse(write, `typeof({value}) ~= "{luauType}"`, `{path}: expected {luauType}`)
+		Expressions.refuse(write, `type({value}) ~= "{luauType}"`, `{path}: expected {luauType}`)
 	end
 end
 

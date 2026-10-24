@@ -32,6 +32,7 @@ local Options = {
 		{ key = "flush", kind = "number", default = 1 },
 		{ key = "maxPacket", kind = "number", default = 8192 },
 		{ key = "maxPacketsPerSecond", kind = "number", default = 240 },
+		{ key = "maxOutgoing", kind = "number", default = 262144 },
 		{ key = "unreliableBudget", kind = "number", default = 900 },
 		{ key = "queue", kind = "number", default = 64 },
 		{ key = "rate", kind = "number", values = RATE, default = 120 },

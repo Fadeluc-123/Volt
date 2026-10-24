@@ -95,10 +95,10 @@ function Calls:invoke(id: number, write: (slot: number, ...any) -> (), ...: any)
 	local pending: Pending = { deadline = os.clock() + call.timeout }
 	local written: boolean, refused: any = pcall(write, slot, ...)
 
-	-- A refused argument undid the call's bytes; its slot goes back too, and the refusal reaches the caller
+	-- Whatever the writer raised leaves none of the call's bytes behind; its slot goes back too, and the error reaches the caller
 	if not written then
 		table.insert(call.free, slot)
-		error(refused, 0)
+		error(self.reliable:undo(call.name, refused), 0)
 	end
 
 	call.last = math.max(call.last, slot)
@@ -256,7 +256,7 @@ function Calls:_reply(id: number, player: any, slot: number, status: number, ...
 			return
 		end
 
-		local reason: string = tostring(refused) -- Names the function and the return itself, as every refusal does
+		local reason: string = self.reliable:undo(message.name, refused) -- A refusal names the return itself
 
 		self:fail(player, "handler", reason)
 		return self:_reply(id, player, slot, STATUS.failed, reason)

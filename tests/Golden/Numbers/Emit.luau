@@ -46,78 +46,78 @@ end
 local function writeIntegers(a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number)
 	local offset: number, out: buffer = beginReliable(48)
 
-	if typeof(a) ~= "number" or a % 1 ~= 0 or a < 0 or a > 255 then
+	if type(a) ~= "number" or bit32.band(a, 255) ~= a then
 		refuseReliable("Integers.a: expected u8")
 	end
 
 	buffer.writeu8(out, offset, a)
 
-	if typeof(b) ~= "number" or b % 1 ~= 0 or b < 1 or b > 999 then
+	if type(b) ~= "number" or bit32.band(b, 65535) ~= b or b < 1 or b > 999 then
 		refuseReliable("Integers.b: expected u16(1..999)")
 	end
 
 	buffer.writeu16(out, offset + 1, b)
 
-	if typeof(c) ~= "number" or c % 1 ~= 0 or c < 0 or c > 16777215 then
+	if type(c) ~= "number" or bit32.band(c, 16777215) ~= c then
 		refuseReliable("Integers.c: expected u24")
 	end
 
 	buffer.writeu8(out, offset + 3, c % 256)
 	buffer.writeu16(out, offset + 4, c // 256)
 
-	if typeof(d) ~= "number" or d % 1 ~= 0 or d < 0 or d > 4294967295 then
+	if type(d) ~= "number" or bit32.band(d, 4294967295) ~= d then
 		refuseReliable("Integers.d: expected u32")
 	end
 
 	buffer.writeu32(out, offset + 6, d)
 
-	if typeof(e) ~= "number" or e % 1 ~= 0 or e < 0 or e > 281474976710655 then
+	if type(e) ~= "number" or e % 1 ~= 0 or e < 0 or e > 281474976710655 then
 		refuseReliable("Integers.e: expected u48")
 	end
 
 	buffer.writeu16(out, offset + 10, e % 65536)
 	buffer.writeu32(out, offset + 12, e // 65536)
 
-	if typeof(f) ~= "number" or f % 1 ~= 0 or f < 0 or f > 9007199254740992 then
+	if type(f) ~= "number" or f % 1 ~= 0 or f < 0 or f > 9007199254740992 then
 		refuseReliable("Integers.f: expected u64")
 	end
 
 	buffer.writeu32(out, offset + 16, f % 4294967296)
 	buffer.writeu32(out, offset + 20, f // 4294967296)
 
-	if typeof(g) ~= "number" or g % 1 ~= 0 or g < -5 or g > 5 then
+	if type(g) ~= "number" or g % 1 ~= 0 or g < -5 or g > 5 then
 		refuseReliable("Integers.g: expected i8(-5..5)")
 	end
 
 	buffer.writei8(out, offset + 24, g)
 
-	if typeof(h) ~= "number" or h % 1 ~= 0 or h < -32768 or h > 32767 then
+	if type(h) ~= "number" or h % 1 ~= 0 or h < -32768 or h > 32767 then
 		refuseReliable("Integers.h: expected i16")
 	end
 
 	buffer.writei16(out, offset + 25, h)
 
-	if typeof(i) ~= "number" or i % 1 ~= 0 or i < -8388608 or i > 8388607 then
+	if type(i) ~= "number" or i % 1 ~= 0 or i < -8388608 or i > 8388607 then
 		refuseReliable("Integers.i: expected i24")
 	end
 
 	buffer.writeu8(out, offset + 27, i % 256)
 	buffer.writeu16(out, offset + 28, 32768 + i // 256)
 
-	if typeof(j) ~= "number" or j % 1 ~= 0 or j < -2147483648 or j > 2147483647 then
+	if type(j) ~= "number" or j % 1 ~= 0 or j < -2147483648 or j > 2147483647 then
 		refuseReliable("Integers.j: expected i32")
 	end
 
 	buffer.writei32(out, offset + 30, j)
 
-	if typeof(k) ~= "number" or k % 1 ~= 0 or k < -140737488355328 or k > 140737488355327 then
+	if type(k) ~= "number" or k % 1 ~= 0 or k < -140737488355328 or k > 140737488355327 then
 		refuseReliable("Integers.k: expected i48")
 	end
 
 	buffer.writeu16(out, offset + 34, k % 65536)
 	buffer.writeu32(out, offset + 36, 2147483648 + k // 65536)
 
-	if typeof(l) ~= "number" or l % 1 ~= 0 or l < -9007199254740992 or l > 9007199254740992 then
+	if type(l) ~= "number" or l % 1 ~= 0 or l < -9007199254740992 or l > 9007199254740992 then
 		refuseReliable("Integers.l: expected i64")
 	end
 
@@ -174,31 +174,31 @@ end
 local function writeFloats(a: number, b: number, c: number, d: number, e: number)
 	local offset: number, out: buffer = beginReliable(17)
 
-	if typeof(a) ~= "number" or a ~= a then
+	if type(a) ~= "number" or a ~= a then
 		refuseReliable("Floats.a: expected f16")
 	end
 
 	writef16(out, offset, a)
 
-	if typeof(b) ~= "number" or b ~= b then
+	if type(b) ~= "number" or b ~= b then
 		refuseReliable("Floats.b: expected f32")
 	end
 
 	buffer.writef32(out, offset + 2, b)
 
-	if typeof(c) ~= "number" or c ~= c or c < 0 or c > 1 then
+	if type(c) ~= "number" or c ~= c or c < 0 or c > 1 then
 		refuseReliable("Floats.c: expected f64(0..1)")
 	end
 
 	buffer.writef64(out, offset + 6, c)
 
-	if typeof(d) ~= "number" or d ~= d then
+	if type(d) ~= "number" or d ~= d then
 		refuseReliable("Floats.d: expected q8(0..1)")
 	end
 
 	buffer.writeu8(out, offset + 14, math.round(math.clamp(d, 0, 1) * 255))
 
-	if typeof(e) ~= "number" or e ~= e then
+	if type(e) ~= "number" or e ~= e then
 		refuseReliable("Floats.e: expected q16(-3.2..3.2)")
 	end
 

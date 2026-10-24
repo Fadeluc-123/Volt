@@ -7,83 +7,98 @@ local function writeVectors(a: Vector3, b: Vector3, c: Vector2, d: Vector3)
 		refuseReliable("Vectors.a: expected Vector3")
 	end
 
-	if a.X ~= a.X then
+	local aX = a.X
+
+	if aX ~= aX then
 		refuseReliable("Vectors.a.X: expected f32")
 	end
 
-	buffer.writef32(out, offset, a.X)
+	buffer.writef32(out, offset, aX)
+	local aY = a.Y
 
-	if a.Y ~= a.Y then
+	if aY ~= aY then
 		refuseReliable("Vectors.a.Y: expected f32")
 	end
 
-	buffer.writef32(out, offset + 4, a.Y)
+	buffer.writef32(out, offset + 4, aY)
+	local aZ = a.Z
 
-	if a.Z ~= a.Z then
+	if aZ ~= aZ then
 		refuseReliable("Vectors.a.Z: expected f32")
 	end
 
-	buffer.writef32(out, offset + 8, a.Z)
+	buffer.writef32(out, offset + 8, aZ)
 
 	if typeof(b) ~= "Vector3" then
 		refuseReliable("Vectors.b: expected Vector3<i16(-1000..1000)>")
 	end
 
-	if b.X % 1 ~= 0 or b.X < -1000 or b.X > 1000 then
+	local bX = b.X
+
+	if bX % 1 ~= 0 or bX < -1000 or bX > 1000 then
 		refuseReliable("Vectors.b.X: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 12, b.X)
+	buffer.writei16(out, offset + 12, bX)
+	local bY = b.Y
 
-	if b.Y % 1 ~= 0 or b.Y < -1000 or b.Y > 1000 then
+	if bY % 1 ~= 0 or bY < -1000 or bY > 1000 then
 		refuseReliable("Vectors.b.Y: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 14, b.Y)
+	buffer.writei16(out, offset + 14, bY)
+	local bZ = b.Z
 
-	if b.Z % 1 ~= 0 or b.Z < -1000 or b.Z > 1000 then
+	if bZ % 1 ~= 0 or bZ < -1000 or bZ > 1000 then
 		refuseReliable("Vectors.b.Z: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 16, b.Z)
+	buffer.writei16(out, offset + 16, bZ)
 
 	if typeof(c) ~= "Vector2" then
 		refuseReliable("Vectors.c: expected Vector2<q8(0..1)>")
 	end
 
-	if c.X ~= c.X then
+	local cX = c.X
+
+	if cX ~= cX then
 		refuseReliable("Vectors.c.X: expected q8(0..1)")
 	end
 
-	buffer.writeu8(out, offset + 18, math.round(math.clamp(c.X, 0, 1) * 255))
+	buffer.writeu8(out, offset + 18, math.round(math.clamp(cX, 0, 1) * 255))
+	local cY = c.Y
 
-	if c.Y ~= c.Y then
+	if cY ~= cY then
 		refuseReliable("Vectors.c.Y: expected q8(0..1)")
 	end
 
-	buffer.writeu8(out, offset + 19, math.round(math.clamp(c.Y, 0, 1) * 255))
+	buffer.writeu8(out, offset + 19, math.round(math.clamp(cY, 0, 1) * 255))
 
 	if typeof(d) ~= "Vector3" then
 		refuseReliable("Vectors.d: expected Vector3<u8>")
 	end
 
-	if d.X % 1 ~= 0 or d.X < 0 or d.X > 255 then
+	local dX = d.X
+
+	if bit32.band(dX, 255) ~= dX then
 		refuseReliable("Vectors.d.X: expected u8")
 	end
 
-	buffer.writeu8(out, offset + 20, d.X)
+	buffer.writeu8(out, offset + 20, dX)
+	local dY = d.Y
 
-	if d.Y % 1 ~= 0 or d.Y < 0 or d.Y > 255 then
+	if bit32.band(dY, 255) ~= dY then
 		refuseReliable("Vectors.d.Y: expected u8")
 	end
 
-	buffer.writeu8(out, offset + 21, d.Y)
+	buffer.writeu8(out, offset + 21, dY)
+	local dZ = d.Z
 
-	if d.Z % 1 ~= 0 or d.Z < 0 or d.Z > 255 then
+	if bit32.band(dZ, 255) ~= dZ then
 		refuseReliable("Vectors.d.Z: expected u8")
 	end
 
-	buffer.writeu8(out, offset + 22, d.Z)
+	buffer.writeu8(out, offset + 22, dZ)
 end
 
 local function readVectors(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)

@@ -21,3 +21,9 @@ event Value {
 event Empty {
 	from: Client, type: Reliable, call: SingleSync,
 }
+
+-- Booleans packed eight to a byte by a writer that holds its largest size
+event Bits {
+	from: Client, type: Reliable, call: SingleSync,
+	data: boolean[0..12],
+}

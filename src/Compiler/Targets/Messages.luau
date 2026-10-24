@@ -11,6 +11,7 @@ local Messages = {} :: any
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
 local Emit = require("../Emit")
+local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
 local Types = require("./Types")
@@ -22,6 +23,7 @@ type Field = Schema.Field
 type Function = Schema.Function
 type Pack = Schema.Pack
 type Type = Schema.Type
+type TypeDeclaration = Schema.TypeDeclaration
 
 -- What an event's API entry is built from once it is walked: its ids on this side, its writer's signature and its listener's
 export type Walked = {
@@ -46,6 +48,7 @@ export type Exchanged = {
 
 local SLOT_BYTES: number = Wire.slotBytes
 local STATUS_BYTES: number = Wire.statusBytes
+local RESERVE_BYTES: number = Contract.reserveBytes
 
 -- The prefix and the bounds of the reason a refusal carries, by the length rule the runtime follows
 local REASON_PREFIX: number, REASON_MIN: number, REASON_MAX: number =
@@ -72,14 +75,20 @@ local function handed(values: { string }): string
 	return #values == 0 and "" or `, {table.concat(values, ", ")}`
 end
 
--- Points a message's write block at the runtime's calls for one reliability, the module's locals of that name
-local function sends(write: Block, reliable: boolean)
-	local suffix: string = reliable and "Reliable" or "Unreliable"
+-- Whether a walk of a type calls a shared named type's pair, which takes its bytes from the allocator itself
+local function paired(node: Type | Pack): boolean
+	if node.kind == "reference" then
+		local target: TypeDeclaration = node.target :: TypeDeclaration
+		return Sizes.shared(target) or paired(target.type)
+	end
 
-	write.first = `begin{suffix}`
-	write.allocate = `allocate{suffix}`
-	write.slot = `slot{suffix}`
-	write.refuse = `refuse{suffix}`
+	for _, child: Type in Parser.children(node) do
+		if paired(child) then
+			return true
+		end
+	end
+
+	return false
 end
 
 -- Each field of a pack typed under the name the walk gave it, and the types alone
@@ -90,6 +99,30 @@ local function typed(names: { string }, data: (Type | Pack)?): ({ string }, { st
 		annotated[index] = `{names[index]}: {types[index]}`
 	end
 	return annotated, types
+end
+
+--[[
+    Points a message's write block at the runtime's calls for one
+    reliability, the module's locals of that name. A writer whose size
+    varies, whose largest is at most RESERVE_BYTES with the fixed bytes
+    before its data, and which calls no shared pair holds that size.
+    Returns the statement such a writer trims with last, or nil
+--]]
+
+function Messages.sends(write: Block, reliable: boolean, fixed: number, data: (Type | Pack)?): string?
+	local suffix: string = reliable and "Reliable" or "Unreliable"
+	local least: number, most: number = bounds(data)
+
+	write.first = `begin{suffix}`
+	write.allocate = `allocate{suffix}`
+	write.slot = `slot{suffix}`
+	write.refuse = `refuse{suffix}`
+
+	if least == most or fixed + most > RESERVE_BYTES or paired(data :: Type | Pack) then
+		return nil
+	end
+
+	return `trim{suffix}({write:hold(fixed + most)})`
 end
 
 -- The fields a pack of data carries: a pack's parameters, or the one value
@@ -110,10 +143,10 @@ end
 
 --[[
     Walks one event through the emitter and keeps what this side needs:
-    a writer with the id first and, for an unreliable event, the mark
-    last, and an outgoing row, when the side fires it; a reader ending in
-    the runtime's deliver, and a message row, when it hears it. Both
-    blocks are walked either way, since the emitter fills both at once
+    a writer with the id first and its trim, then for an unreliable event
+    the mark, last, and an outgoing row, when the side fires it; a reader
+    ending in the runtime's deliver, and a message row, when it hears it.
+    Both blocks are walked either way, since the emitter fills both at once
 --]]
 
 function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
@@ -127,8 +160,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	local write: Block = Blocks.new("write", path)
 	local read: Block = Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
-
-	sends(write, reliable)
+	local trim: string? = Messages.sends(write, reliable, width, event.data)
 
 	if outId then
 		identify(write, width, outId)
@@ -142,6 +174,10 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 
 	if outId then
 		local least: number, most: number = bounds(event.data)
+
+		if trim then
+			write:tail(trim)
+		end
 
 		if not reliable then
 			write:tail("markUnreliable()")
@@ -207,15 +243,18 @@ function Messages:exchange(declaration: Function): Exchanged
 	local replyWrite: Block, replyRead: Block = Blocks.new("write", path), Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
 	local results: { string }, yields: { string } = {}, {}
-
-	sends(callWrite, true)
-	sends(replyWrite, true)
+	local callTrim: string? = Messages.sends(callWrite, true, width + SLOT_BYTES, declaration.data)
+	local replyTrim: string? = Messages.sends(replyWrite, true, width + SLOT_BYTES + STATUS_BYTES, returns)
 
 	identify(callWrite, width, callId)
 	frame(callWrite, callRead, "slot", SLOT_BYTES)
 
 	if declaration.data then
 		names, values = self._emitter:block(declaration.data, callWrite, callRead)
+	end
+
+	if callTrim then
+		callWrite:tail(callTrim)
 	end
 
 	identify(replyWrite, width, replyId)
@@ -242,6 +281,10 @@ function Messages:exchange(declaration: Function): Exchanged
 		replyWrite:open("if status == 0 then")
 		returnsWrite:done()
 		replyWrite:close("end")
+	end
+
+	if replyTrim then
+		replyWrite:tail(replyTrim)
 	end
 
 	returnsRead:done(`return runtime:reply({replyId}, slot, cursor, sideCursor{handed(yields)})`)

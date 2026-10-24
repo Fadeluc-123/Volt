@@ -14,7 +14,6 @@ local Suite = require("./Suite")
 local Generated = require("./Generated")
 local handshake = require("./Handshake")
 local Volt = require("@volt")
-local Config = require("@volt/Config/Runtime")
 
 local describe = Suite.describe
 local test = Suite.test
@@ -43,6 +42,7 @@ local PONG: number = 2 -- The unlimited event's id
 local RATE: number = 2 -- Pings a player may send a second
 local MAX_PACKET: number = 16
 local MAX_PACKETS: number = 3 -- Packets a player may send a second
+local MAX_OUTGOING: number = 64 -- Bytes a player's frame may hold before the message past it is dropped
 local INPUT_RATE: number = 120 -- What Events.volt leaves Input at, the file's default
 local ECHO_RATE: number = 60 -- What Functions.volt leaves Echo at, the file's default
 
@@ -87,6 +87,7 @@ local function setup(): Harness
 			manualReplication = false,
 			maxPacket = MAX_PACKET,
 			maxPacketsPerSecond = MAX_PACKETS,
+			maxOutgoing = MAX_OUTGOING,
 			unreliableBudget = 900,
 		},
 		messages = {
@@ -219,7 +220,7 @@ describe("Limits", function ()
 
 		recording(harness)
 		runtime:target(harness.player)
-		runtime.reliable.begin(Config.maxOutgoing + 1)
+		runtime.reliable.begin(MAX_OUTGOING + 1)
 		runtime.reliable.begin(1)
 
 		expect(harness.failures[1].kind).is("outgoing")

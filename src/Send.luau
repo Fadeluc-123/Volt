@@ -1,12 +1,13 @@
 --[[
     The send side of one reliability: a state per target with a growing
     buffer, a side array and their cursors; the calls every generated
-    writer makes, which begin a message, take its bytes, store a slot or
-    refuse a value; the mark a flush splits packets at; a broadcast
-    written once and copied; the per-frame cap and the counters
+    writer makes, which begin or trim a message, take its bytes, store a
+    slot or refuse a value; what a raise leaves taken back; the flush's
+    marks; a broadcast written once and copied; the cap and the counters
 --]]
 
 --!strict
+--!native
 local Send = {} :: any
 Send.__index = Send
 
@@ -18,7 +19,7 @@ type Stats = Types.Stats
 
 local INITIAL_BYTES: number = Config.initialBytes
 local GROWTH: number = Config.growth
-local MAX_OUTGOING: number = Config.maxOutgoing
+local POSITION: string = Config.position
 
 export type State = {
 	out: buffer,
@@ -35,6 +36,7 @@ export type State = {
 
 export type Send = {
 	begin: (bytes: number) -> (number, buffer),
+	trim: (offset: number) -> (),
 	allocate: (bytes: number) -> (number, buffer),
 	slot: (value: any) -> (),
 	refuse: (message: string) -> never,
@@ -44,6 +46,7 @@ export type Send = {
 	add: (self: Send, target: any, stats: Stats) -> State,
 	remove: (self: Send, target: any) -> (),
 	broadcast: (self: Send, targets: { [any]: any }?, except: any?) -> (),
+	undo: (self: Send, name: string, message: any) -> string,
 	take: (self: Send) -> (buffer, { any }?),
 	flush: (self: Send) -> (),
 }
@@ -91,12 +94,14 @@ end
 --[[
     A send for one reliability, firing through the transport's function
     for it, counting into the runtime's totals and reporting a dropped
-    message for its target. An unreliable send takes the budget one fire
-    may carry; a reliable send has no limit. The calls a writer makes are
-    plain functions because every generated writer takes them as values
+    message for its target. Every send takes the most a target's frame
+    may hold, the schema's cap; an unreliable send also takes the budget
+    one fire may carry, where a reliable send has no limit. The calls a
+    writer makes are plain functions because every generated writer takes
+    them as values
 --]]
 
-function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget: number?): Send
+function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: number, budget: number?): Send
 	local scratch: State = blank(nil, nil)
 	local self: Send
 
@@ -129,7 +134,7 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget
 		local state: State = self.current
 		local stats: Stats? = state.stats
 
-		if state.cursor > MAX_OUTGOING then
+		if state.cursor > cap then
 			(self :: any):_discard(state)
 		end
 
@@ -142,6 +147,11 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget
 		end
 
 		return allocate(bytes)
+	end
+
+	-- Ends a message that began with its largest size where its bytes did, so the next begins right after them
+	local function trim(offset: number)
+		self.current.cursor = offset
 	end
 
 	-- Stores a value at the next side-array index, never with insert, so a nil cannot shift the rest
@@ -166,6 +176,7 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget
 
 	self = setmetatable({
 		begin = begin,
+		trim = trim,
 		allocate = allocate,
 		slot = slot,
 		refuse = refuse,
@@ -175,6 +186,7 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), budget
 		_fire = fire,
 		_total = total,
 		_dropped = dropped,
+		_cap = cap,
 		_budget = budget or math.huge,
 		_states = {} :: { [any]: State },
 	}, Send) :: any
@@ -245,6 +257,25 @@ function Send:_copy(state: State?)
 end
 
 --[[
+    Takes back what a writer left in the current state when it raised and
+    returns the error to raise again. A refusal has already returned the
+    state to where its message began and goes on as it was; anything else
+    left bytes behind, since begin is a writer's first call and takes the
+    id at least, so they go, the message is uncounted and the error named
+--]]
+
+function Send:undo(name: string, message: any): string
+	local state: State = self.current
+	if state.cursor == state.committed then
+		return tostring(message)
+	end
+
+	rollback(state, self._total)
+
+	return `{name}: {(tostring(message):gsub(POSITION, ""))}`
+end
+
+--[[
     The scratch state's bytes and slots as one exact packet, for a value
     serialised on its own rather than sent; the state is empty again after
 --]]
@@ -270,7 +301,7 @@ end
 
 function Send:flush()
 	for target, state: State in self._states do
-		if state.cursor > MAX_OUTGOING then
+		if state.cursor > self._cap then
 			self:_discard(state)
 		end
 

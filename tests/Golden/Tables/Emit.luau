@@ -37,7 +37,7 @@ end
 local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { [Team]: number }, d: { [number]: true })
 	local offset: number, out: buffer = beginReliable(3)
 
-	if typeof(a) ~= "table" then
+	if type(a) ~= "table" then
 		refuseReliable("Tables.a: expected table")
 	end
 
@@ -53,7 +53,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 
 	buffer.writeu8(out, offset, aCount)
 
-	if typeof(b) ~= "table" then
+	if type(b) ~= "table" then
 		refuseReliable("Tables.b: expected table")
 	end
 
@@ -69,7 +69,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 
 	buffer.writeu8(out, offset + 1, bCount)
 
-	if typeof(c) ~= "table" then
+	if type(c) ~= "table" then
 		refuseReliable("Tables.c: expected table")
 	end
 
@@ -85,7 +85,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 
 	buffer.writeu8(out, offset + 2, cCount)
 
-	if typeof(d) ~= "table" then
+	if type(d) ~= "table" then
 		refuseReliable("Tables.d: expected table")
 	end
 
@@ -102,13 +102,13 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 	for aKey, aValue in a do
 		local offset_2: number, out_2: buffer = allocateReliable(2)
 
-		if typeof(aKey) ~= "number" or aKey % 1 ~= 0 or aKey < 0 or aKey > 255 then
+		if type(aKey) ~= "number" or bit32.band(aKey, 255) ~= aKey then
 			refuseReliable("Tables.a[key]: expected u8")
 		end
 
 		buffer.writeu8(out_2, offset_2, aKey)
 
-		if typeof(aValue) ~= "string" then
+		if type(aValue) ~= "string" then
 			refuseReliable("Tables.a[value]: expected string")
 		end
 
@@ -124,7 +124,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 	for bKey in b do
 		local offset_3: number, out_3: buffer = allocateReliable(1)
 
-		if typeof(bKey) ~= "string" then
+		if type(bKey) ~= "string" then
 			refuseReliable("Tables.b[]: expected string")
 		end
 
@@ -140,7 +140,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 	for cKey, cValue in c do
 		local offset_4: number, out_4: buffer = allocateReliable(2)
 
-		if typeof(cValue) ~= "number" or cValue % 1 ~= 0 or cValue < 0 or cValue > 65535 then
+		if type(cValue) ~= "number" or bit32.band(cValue, 65535) ~= cValue then
 			refuseReliable("Tables.c[value]: expected u16")
 		end
 
@@ -151,7 +151,7 @@ local function writeTables(a: { [number]: string }, b: { [string]: true }, c: { 
 	local dOffset: number, dOut: buffer = allocateReliable(3)
 
 	for dKey in d do
-		if typeof(dKey) ~= "number" or dKey % 1 ~= 0 or dKey < 0 or dKey > 255 then
+		if type(dKey) ~= "number" or bit32.band(dKey, 255) ~= dKey then
 			refuseReliable("Tables.d[]: expected u8")
 		end
 
