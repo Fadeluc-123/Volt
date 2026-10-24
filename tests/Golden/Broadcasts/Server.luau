@@ -45,34 +45,37 @@ local function writeDamage(value: Hit)
 	local offset: number, out: buffer = beginReliable(4)
 	buffer.writeu8(out, offset, 1)
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuseReliable("Damage: expected table")
 	end
 
-	if typeof(value.target) ~= "number" or value.target % 1 ~= 0 or value.target < 0 or value.target > 65535 then
+	local target = value.target
+
+	if type(target) ~= "number" or bit32.band(target, 65535) ~= target then
 		refuseReliable("Damage.target: expected u16")
 	end
 
-	buffer.writeu16(out, offset + 1, value.target)
+	buffer.writeu16(out, offset + 1, target)
+	local amount = value.amount
 
-	if typeof(value.amount) ~= "number" or value.amount % 1 ~= 0 or value.amount < 0 or value.amount > 255 then
+	if type(amount) ~= "number" or bit32.band(amount, 255) ~= amount then
 		refuseReliable("Damage.amount: expected u8")
 	end
 
-	buffer.writeu8(out, offset + 3, value.amount)
+	buffer.writeu8(out, offset + 3, amount)
 end
 
 local function writeSpray(x: number, y: number)
 	local offset: number, out: buffer = beginUnreliable(3)
 	buffer.writeu8(out, offset, 2)
 
-	if typeof(x) ~= "number" or x % 1 ~= 0 or x < 0 or x > 255 then
+	if type(x) ~= "number" or bit32.band(x, 255) ~= x then
 		refuseUnreliable("Spray.x: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, x)
 
-	if typeof(y) ~= "number" or y % 1 ~= 0 or y < 0 or y > 255 then
+	if type(y) ~= "number" or bit32.band(y, 255) ~= y then
 		refuseUnreliable("Spray.y: expected u8")
 	end
 
@@ -87,16 +90,18 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x81227874,
+	hash = 0xD9DF1E2D,
 	scope = "Broadcasts",
 	side = "server",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {},

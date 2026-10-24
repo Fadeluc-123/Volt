@@ -22,9 +22,9 @@ type Size = Sizes.Size
 type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
 
-local minus = Expressions.minus
+local BYTE_BITS: number = 8 -- Booleans packed into one byte of a bitset
+
 local times = Expressions.times
-local group = Expressions.group
 local refusal = Expressions.refusal
 
 --[[
@@ -146,7 +146,10 @@ end
 
 --[[
     An array of booleans: an exact count as bits of the block's own flags,
-    a bounded one as a length and a run of bytes packed eight to a byte
+    one term per element with its mask; a bounded one as a length and a
+    run of bytes packed eight to a byte, each byte built from eight terms
+    and unpacked into eight entries, with the last partial byte read bit
+    by bit
 --]]
 
 function Collections:bitset(range: Range?, write: Block, read: Block, value: string, hint: string, path: string): string
@@ -155,36 +158,68 @@ function Collections:bitset(range: Range?, write: Block, read: Block, value: str
 	local measured: string = `#{value}`
 	local count: string, prefix: number, low: number = self:length(range, write, read, measured, hint, path, "entries")
 	local result: string = read:name(hint)
-	local index: string = write:name("index")
-	local position: string = read:name("index")
 
 	if prefix == 0 then
 		local word: string, bit: number = write:flag(low)
-		local lift: string = group(minus(index, 1 - bit))
-		local readLift: string = group(minus(position, 1 - bit))
+		local terms: { string } = {}
+		local tests: { string } = {}
 
 		read:flag(low)
-		write:line(`for {index} = 1, {count} do\n\t{word} += {value}[{index}] and 2 ^ {lift} or 0\nend`)
-		read:line(`local {result}: \{ boolean } = table.create({count})`)
-		read:line(`for {position} = 1, {count} do\n\t{result}[{position}] = bit32.btest({word}, 2 ^ {readLift})\nend`)
+
+		for index: number = 1, low do
+			local mask: number = 2 ^ (bit + index - 1)
+			table.insert(terms, `({value}[{index}] and {mask} or 0)`)
+			table.insert(tests, `\tbit32.btest({word}, {mask}),`)
+		end
+
+		if low > 0 then
+			write:line(`{word} += {table.concat(terms, "\n\t+ ")}`)
+		end
+
+		read:line(`local {result}: \{ boolean } = \{{low > 0 and `\n{table.concat(tests, "\n")}\n` or ""}}`)
 
 		return result
 	end
 
 	local byte: string = write:name("byte")
-	local bit: string = write:name("bit")
+	local at: string = write:name("at")
 	local packed: string = write:name("packed")
+	local readByte: string = read:name("byte")
+	local readAt: string = read:name("at")
+	local readPacked: string = read:name("packed")
+	local position: string = read:name("index")
+	local terms: { string } = {}
+	local stores: { string } = {}
+
+	for bit: number = 1, BYTE_BITS do
+		local mask: number = 2 ^ (bit - 1)
+		table.insert(terms, `({value}[{at} + {bit}] and {mask} or 0)`)
+		table.insert(stores, `{result}[{readAt} + {bit}] = bit32.btest({readPacked}, {mask})`)
+	end
 
 	write:extend(hint, path, `({measured} + 7) // 8`, function (out: string, offset: string): string
-		local inner: string =
-			`\tlocal {packed}: number = 0\n\n\tfor {bit} = 0, 7 do\n\t\t{packed} += {value}[{byte} * 8 + {bit} + 1] and 2 ^ {bit} or 0\n\tend`
-		return `for {byte} = 0, ({measured} + 7) // 8 - 1 do\n{inner}\n\n\tbuffer.writeu8({out}, {offset} + {byte}, {packed})\nend`
+		local body: string = Blocks.paragraphs({
+			`local {at}: number = {byte} * 8`,
+			`local {packed}: number = {table.concat(terms, "\n\t+ ")}`,
+			`buffer.writeu8({out}, {offset} + {byte}, {packed})`,
+		})
+		return `for {byte} = 0, ({measured} + 7) // 8 - 1 do\n{Blocks.indent(1, body)}\nend`
 	end)
 
 	read:extend(hint, path, `({count} + 7) // 8`, function (source: string, offset: string): string
-		local byteAt: string = `{offset} + ({position} - 1) // 8`
-		local test: string = `bit32.btest(buffer.readu8({source}, {byteAt}), 2 ^ (({position} - 1) % 8))`
-		return `local {result}: \{ boolean } = table.create({count})\n\nfor {position} = 1, {count} do\n\t{result}[{position}] = {test}\nend`
+		local whole: string = Blocks.paragraphs({
+			`local {readPacked}: number = buffer.readu8({source}, {offset} + {readByte})`,
+			`local {readAt}: number = {readByte} * 8`,
+			table.unpack(stores),
+		})
+		local rest: string = `{offset} + ({position} - 1) // 8`
+		local test: string = `bit32.btest(buffer.readu8({source}, {rest}), bit32.lshift(1, ({position} - 1) % 8))`
+
+		return Blocks.paragraphs({
+			`local {result}: \{ boolean } = table.create({count})`,
+			`for {readByte} = 0, {count} // 8 - 1 do\n{Blocks.indent(1, whole)}\nend`,
+			`for {position} = {count} // 8 * 8 + 1, {count} do\n\t{result}[{position}] = {test}\nend`,
+		})
 	end)
 
 	return result

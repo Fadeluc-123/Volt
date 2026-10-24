@@ -1,4 +1,4 @@
-local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
+local beginReliable, trimReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 export type Stack = { item: string, quantity: number, properties: any? }
 export type Save = { version: number, stacks: { Stack } }
@@ -7,34 +7,38 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuse("Stack: expected table")
 	end
 
-	if typeof(value.item) ~= "string" then
+	local item = value.item
+
+	if type(item) ~= "string" then
 		refuse("Stack.item: expected string")
 	end
 
-	if #value.item < 1 or #value.item > 8 then
+	if #item < 1 or #item > 8 then
 		refuse("Stack.item: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 1, #value.item - 1)
+	buffer.writeu8(out, offset + 1, #item - 1)
+	local quantity = value.quantity
 
-	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
+	if type(quantity) ~= "number" or bit32.band(quantity, 65535) ~= quantity or quantity < 1 or quantity > 999 then
 		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
-	buffer.writeu16(out, offset + 2, value.quantity)
-	flags += value.properties ~= nil and 1 or 0
+	buffer.writeu16(out, offset + 2, quantity)
+	local properties = value.properties
+	flags += properties ~= nil and 1 or 0
 
-	if value.properties ~= nil then
-		slot(value.properties)
+	if properties ~= nil then
+		slot(properties)
 	end
 
 	buffer.writeu8(out, offset, flags)
-	local itemOffset: number, itemOut: buffer = allocate(#value.item)
-	buffer.writestring(itemOut, itemOffset, value.item)
+	local itemOffset: number, itemOut: buffer = allocate(#item)
+	buffer.writestring(itemOut, itemOffset, item)
 end
 
 local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
@@ -82,28 +86,31 @@ end
 local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(3)
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuse("Save: expected table")
 	end
 
-	if typeof(value.version) ~= "number" or value.version % 1 ~= 0 or value.version < 0 or value.version > 65535 then
+	local version = value.version
+
+	if type(version) ~= "number" or bit32.band(version, 65535) ~= version then
 		refuse("Save.version: expected u16")
 	end
 
-	buffer.writeu16(out, offset, value.version)
+	buffer.writeu16(out, offset, version)
+	local stacks = value.stacks
 
-	if typeof(value.stacks) ~= "table" then
+	if type(stacks) ~= "table" then
 		refuse("Save.stacks: expected table")
 	end
 
-	if #value.stacks > 4 then
+	if #stacks > 4 then
 		refuse("Save.stacks: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 2, #value.stacks)
+	buffer.writeu8(out, offset + 2, #stacks)
 
-	for index = 1, #value.stacks do
-		writeStack(allocate, slot, refuse, value.stacks[index])
+	for index = 1, #stacks do
+		writeStack(allocate, slot, refuse, stacks[index])
 	end
 end
 
@@ -142,39 +149,43 @@ local function writeRecords(a: { x: number, y: string, z: boolean }, b: {}, c: S
 	local offset: number, out: buffer = beginReliable(3)
 	local flags: number = 0
 
-	if typeof(a) ~= "table" then
+	if type(a) ~= "table" then
 		refuseReliable("Records.a: expected table")
 	end
 
-	if typeof(a.x) ~= "number" or a.x % 1 ~= 0 or a.x < 0 or a.x > 255 then
+	local x = a.x
+
+	if type(x) ~= "number" or bit32.band(x, 255) ~= x then
 		refuseReliable("Records.a.x: expected u8")
 	end
 
-	buffer.writeu8(out, offset + 1, a.x)
+	buffer.writeu8(out, offset + 1, x)
+	local y = a.y
 
-	if typeof(a.y) ~= "string" then
+	if type(y) ~= "string" then
 		refuseReliable("Records.a.y: expected string")
 	end
 
-	if #a.y > 4 then
+	if #y > 4 then
 		refuseReliable("Records.a.y: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 2, #a.y)
+	buffer.writeu8(out, offset + 2, #y)
+	local z = a.z
 
-	if typeof(a.z) ~= "boolean" then
+	if type(z) ~= "boolean" then
 		refuseReliable("Records.a.z: expected boolean")
 	end
 
-	flags += a.z and 1 or 0
+	flags += z and 1 or 0
 
-	if typeof(b) ~= "table" then
+	if type(b) ~= "table" then
 		refuseReliable("Records.b: expected table")
 	end
 
 	buffer.writeu8(out, offset, flags)
-	local yOffset: number, yOut: buffer = allocateReliable(#a.y)
-	buffer.writestring(yOut, yOffset, a.y)
+	local yOffset: number, yOut: buffer = allocateReliable(#y)
+	buffer.writestring(yOut, yOffset, y)
 	writeStack(allocateReliable, slotReliable, refuseReliable, c)
 	writeSave(allocateReliable, slotReliable, refuseReliable, d)
 end
@@ -210,6 +221,165 @@ local function readRecords(packet: buffer, cursor: number, side: { any }, sideCu
 	return cursor, sideCursor, a, b, c, d
 end
 
+local function writeRows(a: { { id: number, name: string, tag: number? } }, b: { number })
+	local offset: number, out: buffer = beginReliable(33)
+
+	if type(a) ~= "table" then
+		refuseReliable("Rows.a: expected table")
+	end
+
+	if #a > 3 then
+		refuseReliable("Rows.a: length out of range")
+	end
+
+	buffer.writeu8(out, offset, #a)
+
+	if type(b) ~= "table" then
+		refuseReliable("Rows.b: expected table")
+	end
+
+	if #b > 4 then
+		refuseReliable("Rows.b: length out of range")
+	end
+
+	buffer.writeu8(out, offset + 1, #b)
+	offset += 2
+
+	for index = 1, #a do
+		local flags: number = 0
+		local aEntry = a[index]
+
+		if type(aEntry) ~= "table" then
+			refuseReliable("Rows.a[]: expected table")
+		end
+
+		local id = aEntry.id
+
+		if type(id) ~= "number" or bit32.band(id, 255) ~= id then
+			refuseReliable("Rows.a[].id: expected u8")
+		end
+
+		buffer.writeu8(out, offset + 1, id)
+		local name = aEntry.name
+
+		if type(name) ~= "string" then
+			refuseReliable("Rows.a[].name: expected string")
+		end
+
+		if #name > 4 then
+			refuseReliable("Rows.a[].name: length out of range")
+		end
+
+		buffer.writeu8(out, offset + 2, #name)
+		local tag = aEntry.tag
+		flags += tag ~= nil and 1 or 0
+		buffer.writeu8(out, offset, flags)
+		offset += 3
+		buffer.writestring(out, offset, name)
+		offset += #name
+
+		if tag ~= nil then
+			if type(tag) ~= "number" or bit32.band(tag, 65535) ~= tag then
+				refuseReliable("Rows.a[].tag: expected u16")
+			end
+
+			buffer.writeu16(out, offset, tag)
+			offset += 2
+		end
+	end
+
+	for index_2 = 1, #b do
+		local bEntry = b[index_2]
+
+		if type(bEntry) ~= "number" or bit32.band(bEntry, 255) ~= bEntry then
+			refuseReliable("Rows.b[]: expected u8")
+		end
+
+		buffer.writeu8(out, offset, bEntry)
+		offset += 1
+	end
+
+	trimReliable(offset)
+end
+
+local function readRows(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+	if cursor + 2 > length then
+		error("Rows: truncated")
+	end
+
+	local aLength: number = buffer.readu8(packet, cursor)
+
+	if aLength > 3 then
+		error("Rows.a: length out of range")
+	end
+
+	local bLength: number = buffer.readu8(packet, cursor + 1)
+
+	if bLength > 4 then
+		error("Rows.b: length out of range")
+	end
+
+	cursor += 2
+
+	if cursor + 3 * aLength > length then
+		error("Rows.a: truncated")
+	end
+
+	local a = table.create(aLength)
+
+	for index = 1, aLength do
+		if cursor + 3 > length then
+			error("Rows.a: truncated")
+		end
+
+		local flags: number = buffer.readu8(packet, cursor)
+		local id: number = buffer.readu8(packet, cursor + 1)
+		local nameLength: number = buffer.readu8(packet, cursor + 2)
+
+		if nameLength > 4 then
+			error("Rows.a[].name: length out of range")
+		end
+
+		local tag
+		cursor += 3
+
+		if cursor + nameLength > length then
+			error("Rows.a[].name: truncated")
+		end
+
+		local name: string = buffer.readstring(packet, cursor, nameLength)
+		cursor += nameLength
+
+		if bit32.btest(flags, 1) then
+			if cursor + 2 > length then
+				error("Rows.a[].tag: truncated")
+			end
+
+			local tag_2: number = buffer.readu16(packet, cursor)
+			cursor += 2
+			tag = tag_2
+		end
+
+		local aEntry = { id = id, name = name, tag = tag }
+		a[index] = aEntry
+	end
+
+	if cursor + bLength > length then
+		error("Rows.b: truncated")
+	end
+
+	local b = table.create(bLength)
+
+	for index_2 = 1, bLength do
+		local bEntry: number = buffer.readu8(packet, cursor)
+		cursor += 1
+		b[index_2] = bEntry
+	end
+
+	return cursor, sideCursor, a, b
+end
+
 return {
 	Records = { write = writeRecords, read = readRecords },
+	Rows = { write = writeRows, read = readRows },
 }

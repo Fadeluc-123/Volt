@@ -30,7 +30,7 @@ export type Exported<T> = {
 
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
-local allocateReliable: (number) -> (number, buffer)
+local trimReliable: (number) -> ()
 local slotReliable: (any) -> ()
 local refuseReliable: (string) -> never
 local beginUnreliable: (number) -> (number, buffer)
@@ -42,13 +42,13 @@ local function writeInput(dir: number, jump: boolean)
 	buffer.writeu8(out, offset, 1)
 	local flags: number = 0
 
-	if typeof(dir) ~= "number" or dir % 1 ~= 0 or dir < 0 or dir > 8 then
+	if type(dir) ~= "number" or bit32.band(dir, 255) ~= dir or dir > 8 then
 		refuseUnreliable("Input.dir: expected u8(0..8)")
 	end
 
 	buffer.writeu8(out, offset + 2, dir)
 
-	if typeof(jump) ~= "boolean" then
+	if type(jump) ~= "boolean" then
 		refuseUnreliable("Input.jump: expected boolean")
 	end
 
@@ -58,10 +58,10 @@ local function writeInput(dir: number, jump: boolean)
 end
 
 local function writeChat(value: string)
-	local offset: number, out: buffer = beginReliable(2)
+	local offset: number, out: buffer = beginReliable(66)
 	buffer.writeu8(out, offset, 2)
 
-	if typeof(value) ~= "string" then
+	if type(value) ~= "string" then
 		refuseReliable("Chat: expected string")
 	end
 
@@ -70,8 +70,10 @@ local function writeChat(value: string)
 	end
 
 	buffer.writeu8(out, offset + 1, #value)
-	local valueOffset: number, valueOut: buffer = allocateReliable(#value)
-	buffer.writestring(valueOut, valueOffset, value)
+	offset += 2
+	buffer.writestring(out, offset, value)
+	offset += #value
+	trimReliable(offset)
 end
 
 local function writeReady()
@@ -94,7 +96,7 @@ local function writePing(value: number)
 	local offset: number, out: buffer = beginReliable(5)
 	buffer.writeu8(out, offset, 5)
 
-	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 4294967295 then
+	if type(value) ~= "number" or bit32.band(value, 4294967295) ~= value then
 		refuseReliable("Ping: expected u32")
 	end
 
@@ -105,7 +107,7 @@ local function writeSync(value: number)
 	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 6)
 
-	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
+	if type(value) ~= "number" or bit32.band(value, 255) ~= value then
 		refuseReliable("Sync: expected u8")
 	end
 
@@ -125,16 +127,18 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x88701285,
+	hash = 0xC94D3980,
 	scope = "Events",
 	side = "client",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {
@@ -152,7 +156,7 @@ runtime = Volt.start({
 })
 
 beginReliable = runtime.reliable.begin
-allocateReliable = runtime.reliable.allocate
+trimReliable = runtime.reliable.trim
 slotReliable = runtime.reliable.slot
 refuseReliable = runtime.reliable.refuse
 beginUnreliable = runtime.unreliable.begin

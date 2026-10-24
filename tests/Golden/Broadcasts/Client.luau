@@ -63,16 +63,18 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x81227874,
+	hash = 0xD9DF1E2D,
 	scope = "Broadcasts",
 	side = "client",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {

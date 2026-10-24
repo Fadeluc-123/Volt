@@ -249,7 +249,7 @@ describe("Parser", function ()
 				"option foo = 1\noption flush = 2\nevent Input { form: Client, from: Client, type: Reliable, call: Polling }"
 			local file: Schema.File = parse(text)
 			local options: string =
-				"clientOutput, serverOutput, typesOutput, runtime, scope, casing, writeValidation, manualReplication, flush, maxPacket, maxPacketsPerSecond, unreliableBudget, queue, rate, functionRate, timeout, yield, promise"
+				"clientOutput, serverOutput, typesOutput, runtime, scope, casing, writeValidation, manualReplication, flush, maxPacket, maxPacketsPerSecond, maxOutgoing, unreliableBudget, queue, rate, functionRate, timeout, yield, promise"
 			local first: string =
 				rendered(text, "foo", `error V2003: unknown key "foo" in the options; keys are {options}`)
 			local second: string = rendered(

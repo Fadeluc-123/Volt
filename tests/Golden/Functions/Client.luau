@@ -38,7 +38,7 @@ local function writeEcho(slot: number, value: number)
 	buffer.writeu8(out, offset, 1)
 	buffer.writeu16(out, offset + 1, slot)
 
-	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
+	if type(value) ~= "number" or bit32.band(value, 255) ~= value then
 		refuseReliable("Echo: expected u8")
 	end
 
@@ -95,13 +95,13 @@ local function writeDivide(slot: number, dividend: number, divisor: number)
 	buffer.writeu8(out, offset, 3)
 	buffer.writeu16(out, offset + 1, slot)
 
-	if typeof(dividend) ~= "number" or dividend ~= dividend then
+	if type(dividend) ~= "number" or dividend ~= dividend then
 		refuseReliable("Divide.dividend: expected f64")
 	end
 
 	buffer.writef64(out, offset + 3, dividend)
 
-	if typeof(divisor) ~= "number" or divisor ~= divisor then
+	if type(divisor) ~= "number" or divisor ~= divisor then
 		refuseReliable("Divide.divisor: expected f64")
 	end
 
@@ -152,19 +152,19 @@ local function writeInventory_Transfer(slot: number, source: number, destination
 	buffer.writeu8(out, offset, 4)
 	buffer.writeu16(out, offset + 1, slot)
 
-	if typeof(source) ~= "number" or source % 1 ~= 0 or source < 0 or source > 255 then
+	if type(source) ~= "number" or bit32.band(source, 255) ~= source then
 		refuseReliable("Inventory.Transfer.source: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 3, source)
 
-	if typeof(destination) ~= "number" or destination % 1 ~= 0 or destination < 0 or destination > 255 then
+	if type(destination) ~= "number" or bit32.band(destination, 255) ~= destination then
 		refuseReliable("Inventory.Transfer.destination: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 4, destination)
 
-	if typeof(quantity) ~= "number" or quantity % 1 ~= 0 or quantity < 0 or quantity > 65535 then
+	if type(quantity) ~= "number" or bit32.band(quantity, 65535) ~= quantity then
 		refuseReliable("Inventory.Transfer.quantity: expected u16")
 	end
 
@@ -219,7 +219,7 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x2D03F5D0,
+	hash = 0x16939E15,
 	scope = "Functions",
 	side = "client",
 	idBytes = 1,
@@ -227,9 +227,11 @@ runtime = Volt.start({
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {

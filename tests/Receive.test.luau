@@ -81,6 +81,7 @@ local function setup(side: string, mode: string, depth: number?, idBytes: number
 			manualReplication = false,
 			maxPacket = 8192,
 			maxPacketsPerSecond = 240,
+			maxOutgoing = 262144,
 			unreliableBudget = 900,
 		},
 		messages = { [PING] = { name = "Ping", kind = "event", mode = mode, queue = depth or 4, read = read } },

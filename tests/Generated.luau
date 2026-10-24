@@ -36,7 +36,7 @@ type File = Schema.File
 type Transport = Volt.Transport
 
 -- The calls a rendered chunk's writers may make, as a module names them and in the order the chunk takes them
-local CALLS: { string } = { "beginReliable", "allocateReliable", "slotReliable", "refuseReliable" }
+local CALLS: { string } = { "beginReliable", "trimReliable", "allocateReliable", "slotReliable", "refuseReliable" }
 
 local Generated = {}
 
@@ -105,14 +105,15 @@ function Generated.render(file: File): string
 		local read: Block = Blocks.new("read", event.name)
 		local names: { string }, values: { string } = {}, {}
 
-		-- A message writes through the chunk's own calls, named as a module names them
-		write.first = "beginReliable"
-		write.allocate = "allocateReliable"
-		write.slot = "slotReliable"
-		write.refuse = "refuseReliable"
+		-- A message writes through the chunk's own calls, named as a module names them, and holds as a module's would
+		local trim: string? = Messages.sends(write, true, 0, event.data)
 
 		if event.data then
 			names, values = emitter:block(event.data, write, read)
+		end
+
+		if trim then
+			write:tail(trim)
 		end
 
 		local typed: { string } = {}
@@ -169,10 +170,10 @@ end
 --[[
     Loads a rendered chunk with the calls a writer makes: an allocator
     that grows a buffer as the writers ask, a begin that records where a
-    message starts, a slot store filling a side array and a refuse that
-    returns to the start before it raises, as the runtime's do; and a
-    packet function that hands back exactly what was written since the
-    last call
+    message starts, a trim that ends it where its bytes did, a slot store
+    filling a side array and a refuse that returns to the start before it
+    raises, as the runtime's do; and a packet function that hands back
+    exactly what was written since the last call
 --]]
 
 function Generated.load(name: string, text: string): (any, () -> (buffer, { any }))
@@ -198,6 +199,10 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 	local function begin(bytes: number): (number, buffer)
 		committed, sideCommitted = cursor, sideCursor
 		return allocate(bytes)
+	end
+
+	local function trim(offset: number)
+		cursor = offset
 	end
 
 	local function slot(value: any)
@@ -226,6 +231,7 @@ function Generated.load(name: string, text: string): (any, () -> (buffer, { any 
 	local given: { any } = {}
 	local calls: { [string]: any } = {
 		beginReliable = begin,
+		trimReliable = trim,
 		allocateReliable = allocate,
 		slotReliable = slot,
 		refuseReliable = refuse,

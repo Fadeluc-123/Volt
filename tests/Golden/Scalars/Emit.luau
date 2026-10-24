@@ -1,4 +1,4 @@
-local beginReliable, allocateReliable, refuseReliable = ...
+local beginReliable, trimReliable, allocateReliable, refuseReliable = ...
 
 export type Health = number
 
@@ -6,25 +6,25 @@ local function writeFlags(a: boolean, b: number, c: boolean, d: boolean)
 	local offset: number, out: buffer = beginReliable(2)
 	local flags: number = 0
 
-	if typeof(a) ~= "boolean" then
+	if type(a) ~= "boolean" then
 		refuseReliable("Flags.a: expected boolean")
 	end
 
 	flags += a and 1 or 0
 
-	if typeof(b) ~= "number" or b % 1 ~= 0 or b < 0 or b > 255 then
+	if type(b) ~= "number" or bit32.band(b, 255) ~= b then
 		refuseReliable("Flags.b: expected u8")
 	end
 
 	buffer.writeu8(out, offset + 1, b)
 
-	if typeof(c) ~= "boolean" then
+	if type(c) ~= "boolean" then
 		refuseReliable("Flags.c: expected boolean")
 	end
 
 	flags += c and 2 or 0
 
-	if typeof(d) ~= "boolean" then
+	if type(d) ~= "boolean" then
 		refuseReliable("Flags.d: expected boolean")
 	end
 
@@ -47,7 +47,7 @@ end
 local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer, free: string, health: Health)
 	local offset: number, out: buffer = beginReliable(12)
 
-	if typeof(name) ~= "string" then
+	if type(name) ~= "string" then
 		refuseReliable("Bytes.name: expected string")
 	end
 
@@ -57,7 +57,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 
 	buffer.writeu8(out, offset, #name - 1)
 
-	if typeof(tag) ~= "string" then
+	if type(tag) ~= "string" then
 		refuseReliable("Bytes.tag: expected string")
 	end
 
@@ -67,7 +67,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 
 	buffer.writestring(out, offset + 1, tag)
 
-	if typeof(raw) ~= "buffer" then
+	if type(raw) ~= "buffer" then
 		refuseReliable("Bytes.raw: expected buffer")
 	end
 
@@ -77,7 +77,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 
 	buffer.writeu16(out, offset + 5, buffer.len(raw))
 
-	if typeof(fixed) ~= "buffer" then
+	if type(fixed) ~= "buffer" then
 		refuseReliable("Bytes.fixed: expected buffer")
 	end
 
@@ -87,7 +87,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 
 	buffer.copy(out, offset + 7, fixed)
 
-	if typeof(free) ~= "string" then
+	if type(free) ~= "string" then
 		refuseReliable("Bytes.free: expected string")
 	end
 
@@ -97,7 +97,7 @@ local function writeBytes(name: string, tag: string, raw: buffer, fixed: buffer,
 
 	buffer.writeu16(out, offset + 9, #free)
 
-	if typeof(health) ~= "number" or health % 1 ~= 0 or health < 0 or health > 100 then
+	if type(health) ~= "number" or bit32.band(health, 255) ~= health or health > 100 then
 		refuseReliable("Bytes.health: expected u8(0..100)")
 	end
 
@@ -169,7 +169,7 @@ end
 local function writeValue(value: number)
 	local offset: number, out: buffer = beginReliable(2)
 
-	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 65535 then
+	if type(value) ~= "number" or bit32.band(value, 65535) ~= value then
 		refuseReliable("Value: expected u16")
 	end
 
@@ -194,9 +194,84 @@ local function readEmpty(_: buffer, cursor: number, _: { any }, sideCursor: numb
 	return cursor, sideCursor
 end
 
+local function writeBits(value: { boolean })
+	local offset: number, out: buffer = beginReliable(3)
+
+	if type(value) ~= "table" then
+		refuseReliable("Bits: expected table")
+	end
+
+	if #value > 12 then
+		refuseReliable("Bits: length out of range")
+	end
+
+	buffer.writeu8(out, offset, #value)
+	offset += 1
+
+	for byte = 0, (#value + 7) // 8 - 1 do
+		local at: number = byte * 8
+
+		local packed: number = (value[at + 1] and 1 or 0)
+			+ (value[at + 2] and 2 or 0)
+			+ (value[at + 3] and 4 or 0)
+			+ (value[at + 4] and 8 or 0)
+			+ (value[at + 5] and 16 or 0)
+			+ (value[at + 6] and 32 or 0)
+			+ (value[at + 7] and 64 or 0)
+			+ (value[at + 8] and 128 or 0)
+
+		buffer.writeu8(out, offset + byte, packed)
+	end
+
+	offset += (#value + 7) // 8
+	trimReliable(offset)
+end
+
+local function readBits(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+	if cursor + 1 > length then
+		error("Bits: truncated")
+	end
+
+	local valueLength: number = buffer.readu8(packet, cursor)
+
+	if valueLength > 12 then
+		error("Bits: length out of range")
+	end
+
+	cursor += 1
+
+	if cursor + (valueLength + 7) // 8 > length then
+		error("Bits: truncated")
+	end
+
+	local value: { boolean } = table.create(valueLength)
+
+	for byte = 0, valueLength // 8 - 1 do
+		local packed: number = buffer.readu8(packet, cursor + byte)
+		local at: number = byte * 8
+		value[at + 1] = bit32.btest(packed, 1)
+		value[at + 2] = bit32.btest(packed, 2)
+		value[at + 3] = bit32.btest(packed, 4)
+		value[at + 4] = bit32.btest(packed, 8)
+		value[at + 5] = bit32.btest(packed, 16)
+		value[at + 6] = bit32.btest(packed, 32)
+		value[at + 7] = bit32.btest(packed, 64)
+		value[at + 8] = bit32.btest(packed, 128)
+	end
+
+	for index = valueLength // 8 * 8 + 1, valueLength do
+		value[index] = bit32.btest(buffer.readu8(packet, cursor + (index - 1) // 8), bit32.lshift(1, (index - 1) % 8))
+	end
+
+	cursor += (valueLength + 7) // 8
+
+	return cursor, sideCursor, value
+end
+
 return {
 	Flags = { write = writeFlags, read = readFlags },
 	Bytes = { write = writeBytes, read = readBytes },
 	Value = { write = writeValue, read = readValue },
 	Empty = { write = writeEmpty, read = readEmpty },
+	Bits = { write = writeBits, read = readBits },
 }

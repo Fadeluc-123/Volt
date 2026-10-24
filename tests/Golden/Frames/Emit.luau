@@ -62,64 +62,75 @@ local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
 		refuseReliable("Frames.a: expected CFrame")
 	end
 
-	if a.X ~= a.X then
+	local aX = a.X
+
+	if aX ~= aX then
 		refuseReliable("Frames.a.X: expected f32")
 	end
 
-	buffer.writef32(out, offset, a.X)
+	buffer.writef32(out, offset, aX)
+	local aY = a.Y
 
-	if a.Y ~= a.Y then
+	if aY ~= aY then
 		refuseReliable("Frames.a.Y: expected f32")
 	end
 
-	buffer.writef32(out, offset + 4, a.Y)
+	buffer.writef32(out, offset + 4, aY)
+	local aZ = a.Z
 
-	if a.Z ~= a.Z then
+	if aZ ~= aZ then
 		refuseReliable("Frames.a.Z: expected f32")
 	end
 
-	buffer.writef32(out, offset + 8, a.Z)
+	buffer.writef32(out, offset + 8, aZ)
 	local aAxis: Vector3, aAngle: number = axisAngle(a)
+	local aRotationX = aAxis.X * aAngle
 
-	if aAxis.X * aAngle ~= aAxis.X * aAngle then
+	if aRotationX ~= aRotationX then
 		refuseReliable("Frames.a.Rotation.X: expected f32")
 	end
 
-	buffer.writef32(out, offset + 12, aAxis.X * aAngle)
+	buffer.writef32(out, offset + 12, aRotationX)
+	local aRotationY = aAxis.Y * aAngle
 
-	if aAxis.Y * aAngle ~= aAxis.Y * aAngle then
+	if aRotationY ~= aRotationY then
 		refuseReliable("Frames.a.Rotation.Y: expected f32")
 	end
 
-	buffer.writef32(out, offset + 16, aAxis.Y * aAngle)
+	buffer.writef32(out, offset + 16, aRotationY)
+	local aRotationZ = aAxis.Z * aAngle
 
-	if aAxis.Z * aAngle ~= aAxis.Z * aAngle then
+	if aRotationZ ~= aRotationZ then
 		refuseReliable("Frames.a.Rotation.Z: expected f32")
 	end
 
-	buffer.writef32(out, offset + 20, aAxis.Z * aAngle)
+	buffer.writef32(out, offset + 20, aRotationZ)
 
 	if typeof(b) ~= "CFrame" then
 		refuseReliable("Frames.b: expected CFrame<f32, i16>")
 	end
 
-	if b.X ~= b.X then
+	local bX = b.X
+
+	if bX ~= bX then
 		refuseReliable("Frames.b.X: expected f32")
 	end
 
-	buffer.writef32(out, offset + 24, b.X)
+	buffer.writef32(out, offset + 24, bX)
+	local bY = b.Y
 
-	if b.Y ~= b.Y then
+	if bY ~= bY then
 		refuseReliable("Frames.b.Y: expected f32")
 	end
 
-	buffer.writef32(out, offset + 28, b.Y)
+	buffer.writef32(out, offset + 28, bY)
+	local bZ = b.Z
 
-	if b.Z ~= b.Z then
+	if bZ ~= bZ then
 		refuseReliable("Frames.b.Z: expected f32")
 	end
 
-	buffer.writef32(out, offset + 32, b.Z)
+	buffer.writef32(out, offset + 32, bZ)
 	local bAxis: Vector3, bAngle: number = axisAngle(b)
 	buffer.writei16(out, offset + 36, math.round(-32768 + (bAxis.X * bAngle + math.pi) / (2 * math.pi) * 65535))
 	buffer.writei16(out, offset + 38, math.round(-32768 + (bAxis.Y * bAngle + math.pi) / (2 * math.pi) * 65535))
@@ -136,65 +147,75 @@ local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
 	end
 
 	buffer.writeu8(out, offset + 42, cRotation)
+	local cX = c.X
 
-	if c.X ~= c.X then
+	if cX ~= cX then
 		refuseReliable("Frames.c.X: expected q16(-512..512)")
 	end
 
-	buffer.writeu16(out, offset + 43, math.round((math.clamp(c.X, -512, 512) + 512) / 1024 * 65535))
+	buffer.writeu16(out, offset + 43, math.round((math.clamp(cX, -512, 512) + 512) / 1024 * 65535))
+	local cY = c.Y
 
-	if c.Y ~= c.Y then
+	if cY ~= cY then
 		refuseReliable("Frames.c.Y: expected q16(-512..512)")
 	end
 
-	buffer.writeu16(out, offset + 45, math.round((math.clamp(c.Y, -512, 512) + 512) / 1024 * 65535))
+	buffer.writeu16(out, offset + 45, math.round((math.clamp(cY, -512, 512) + 512) / 1024 * 65535))
+	local cZ = c.Z
 
-	if c.Z ~= c.Z then
+	if cZ ~= cZ then
 		refuseReliable("Frames.c.Z: expected q16(-512..512)")
 	end
 
-	buffer.writeu16(out, offset + 47, math.round((math.clamp(c.Z, -512, 512) + 512) / 1024 * 65535))
+	buffer.writeu16(out, offset + 47, math.round((math.clamp(cZ, -512, 512) + 512) / 1024 * 65535))
 
 	if typeof(d) ~= "CFrame" then
 		refuseReliable("Frames.d: expected CFrame<i16(-1000..1000), q8(-3.2..3.2)>")
 	end
 
-	if d.X % 1 ~= 0 or d.X < -1000 or d.X > 1000 then
+	local dX = d.X
+
+	if dX % 1 ~= 0 or dX < -1000 or dX > 1000 then
 		refuseReliable("Frames.d.X: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 49, d.X)
+	buffer.writei16(out, offset + 49, dX)
+	local dY = d.Y
 
-	if d.Y % 1 ~= 0 or d.Y < -1000 or d.Y > 1000 then
+	if dY % 1 ~= 0 or dY < -1000 or dY > 1000 then
 		refuseReliable("Frames.d.Y: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 51, d.Y)
+	buffer.writei16(out, offset + 51, dY)
+	local dZ = d.Z
 
-	if d.Z % 1 ~= 0 or d.Z < -1000 or d.Z > 1000 then
+	if dZ % 1 ~= 0 or dZ < -1000 or dZ > 1000 then
 		refuseReliable("Frames.d.Z: expected i16(-1000..1000)")
 	end
 
-	buffer.writei16(out, offset + 53, d.Z)
+	buffer.writei16(out, offset + 53, dZ)
 	local dAxis: Vector3, dAngle: number = axisAngle(d)
+	local dRotationX = dAxis.X * dAngle
 
-	if dAxis.X * dAngle ~= dAxis.X * dAngle then
+	if dRotationX ~= dRotationX then
 		refuseReliable("Frames.d.Rotation.X: expected q8(-3.2..3.2)")
 	end
 
-	buffer.writeu8(out, offset + 55, math.round((math.clamp(dAxis.X * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
+	buffer.writeu8(out, offset + 55, math.round((math.clamp(dRotationX, -3.2, 3.2) + 3.2) / 6.4 * 255))
+	local dRotationY = dAxis.Y * dAngle
 
-	if dAxis.Y * dAngle ~= dAxis.Y * dAngle then
+	if dRotationY ~= dRotationY then
 		refuseReliable("Frames.d.Rotation.Y: expected q8(-3.2..3.2)")
 	end
 
-	buffer.writeu8(out, offset + 56, math.round((math.clamp(dAxis.Y * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
+	buffer.writeu8(out, offset + 56, math.round((math.clamp(dRotationY, -3.2, 3.2) + 3.2) / 6.4 * 255))
+	local dRotationZ = dAxis.Z * dAngle
 
-	if dAxis.Z * dAngle ~= dAxis.Z * dAngle then
+	if dRotationZ ~= dRotationZ then
 		refuseReliable("Frames.d.Rotation.Z: expected q8(-3.2..3.2)")
 	end
 
-	buffer.writeu8(out, offset + 57, math.round((math.clamp(dAxis.Z * dAngle, -3.2, 3.2) + 3.2) / 6.4 * 255))
+	buffer.writeu8(out, offset + 57, math.round((math.clamp(dRotationZ, -3.2, 3.2) + 3.2) / 6.4 * 255))
 end
 
 local function readFrames(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)

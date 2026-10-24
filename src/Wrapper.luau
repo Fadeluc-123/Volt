@@ -98,22 +98,25 @@ end
 --[[
     A value serialised on its own through an exported type's writer, as
     one exact buffer with its side array when it carried an instance:
-    written to the scratch state, which is empty again after, with the
-    current target kept, since on the client that is the server
+    written to the scratch state, which is empty again after, whether it
+    was written or raised, with the current target kept, since on the
+    client that is the server
 --]]
 
-function Wrapper:encode(write: (...any) -> (), value: any): (buffer, { any }?)
+function Wrapper:encode(name: string, write: (...any) -> (), value: any): (buffer, { any }?)
 	local send = self.reliable
 	local was = send.current
 
 	send.current = send.scratch
 
 	local ok: boolean, refused: any = pcall(write, send.allocate, send.slot, send.refuse, value)
-	send.current = was
-
 	if not ok then
-		error(refused, 0)
+		local reason: string = send:undo(name, refused)
+		send.current = was
+		error(reason, 0)
 	end
+
+	send.current = was
 
 	return send:take()
 end

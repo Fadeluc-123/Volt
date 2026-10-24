@@ -106,7 +106,7 @@ local function writeSync(value: number)
 	local offset: number, out: buffer = beginReliable(2)
 	buffer.writeu8(out, offset, 1)
 
-	if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
+	if type(value) ~= "number" or bit32.band(value, 255) ~= value then
 		refuseReliable("Sync: expected u8")
 	end
 
@@ -126,16 +126,18 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x88701285,
+	hash = 0xC94D3980,
 	scope = "Events",
 	side = "server",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {

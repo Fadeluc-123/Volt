@@ -2,14 +2,16 @@
     The blocks the generator writes serialisers in. A block is a straight
     line region whose byte size is known at compile time, so a writer
     allocates it once and a reader bounds-checks it once, and every field
-    sits at a constant offset. A block owns its flag bytes and a tail that
-    carries the variable-size payloads and child blocks after its bytes
+    sits at a constant offset, with a tail for the variable-size payloads
+    and child blocks after its bytes; its flag bytes are a sibling's
 --]]
 
 --!strict
 local Blocks = {} :: any
 Blocks.__index = Blocks
 
+-- An init file stands for its folder, so its siblings are reached through the folder's name
+local Flags = require("./Blocks/Flags")
 local Reserved = require("./Config/Reserved")
 
 export type Side = "write" | "read"
@@ -25,6 +27,7 @@ export type Block = {
 	allocate: string,
 	slot: string,
 	refuse: string,
+	hold: (self: Block, bytes: number) -> string,
 	reserve: (self: Block, bytes: number) -> number,
 	at: (self: Block, index: number) -> string,
 	flags: (self: Block, bits: number) -> (),
@@ -40,31 +43,6 @@ export type Block = {
 	child: (self: Block, path: string?, region: Region?) -> Block,
 	done: (self: Block, final: string?) -> string,
 }
-
-local WORD_BITS: number = 32 -- What one flags local holds, which is as far as bit32 reaches
-local STORE_WIDTHS: { number } = { 4, 2, 1 } -- The buffer widths flag bytes are stored with, widest first
-
---[[
-    Every store or read that carries one word of a block's flag bytes: the
-    width of each, the byte it starts at among the flag bytes and the bit
-    it starts at within the word
---]]
-
-local function stores(word: number, bytes: number): { { width: number, byte: number, shift: number } }
-	local list: { { width: number, byte: number, shift: number } } = {}
-	local byte: number = word * 4
-	local remaining: number = math.min(4, bytes - byte)
-
-	for _, width: number in STORE_WIDTHS do
-		while remaining >= width do
-			table.insert(list, { width = width, byte = byte, shift = (byte - word * 4) * 8 })
-			byte += width
-			remaining -= width
-		end
-	end
-
-	return list
-end
 
 -- A statement's lines each indented by the level, with a blank line left blank
 function Blocks.indent(level: number, text: string): string
@@ -122,6 +100,8 @@ function Blocks.new(side: Side, path: string, parent: Block?, region: Region?): 
 		_indent = parent and (parent :: any)._indent + 1 or 1,
 		_offset = region and region.offset or "cursor", -- Where the fixed bytes start
 		_region = region ~= nil, -- Whether the parent took or checked the fixed bytes already
+		_held = nil :: number?, -- What a root's first call takes when it holds the writer's largest size
+		_running = parent and (parent :: any)._running, -- The offset every block writes at in turn once the root holds
 		_bytes = 0, -- Fixed bytes reserved so far
 		_bits = 0, -- Flag bits the block was opened with
 		_claimed = 0, -- Flag bits handed out so far
@@ -143,11 +123,26 @@ end
 
 --[[
     Opens a child block. The caller opens and closes the scope around it
-    in this block's tail
+    in this block's tail. Under a root that holds, a child takes its bytes
+    at the running offset, as if its parent had taken them as a region
 --]]
 
 function Blocks:child(path: string?, region: Region?): Block
-	return Blocks.new(self.side, path or self.path, self, region)
+	local running: string? = self._running
+	return Blocks.new(self.side, path or self.path, self, region or running and { offset = running, out = self.out })
+end
+
+--[[
+    Makes a message's writer take its largest size with its first call,
+    so every region, payload and child after takes its bytes at a running
+    offset rather than from the allocator. Returns the local the offset is
+    in, which the writer trims with last to hand back what it did not use
+--]]
+
+function Blocks:hold(bytes: number): string
+	self._held = bytes
+	self._running = self._offset
+	return self._offset
 end
 
 --[[
@@ -163,54 +158,6 @@ end
 
 function Blocks:at(index: number): string
 	return index == 0 and self._offset or `{self._offset} + {index}`
-end
-
---[[
-    Reserves the flag bytes for the bits the block will claim, at the
-    point in the fixed bytes the walk has reached, and opens the locals
-    that build them on the write side and hold them on the read side
---]]
-
-function Blocks:flags(bits: number)
-	local bytes: number = math.ceil(bits / 8)
-
-	self._bits = bits
-	self._flagsAt = self:reserve(bytes)
-
-	for word: number = 0, math.ceil(bits / WORD_BITS) - 1 do
-		local name: string = self:name("flags")
-		table.insert(self._words, name)
-
-		if self.side == "write" then
-			self:line(`local {name}: number = 0`)
-			continue
-		end
-
-		local parts: { string } = {}
-		for _, store in stores(word, bytes) do
-			local read: string = `buffer.readu{store.width * 8}(packet, {self:at(self._flagsAt + store.byte)})`
-			table.insert(parts, store.shift == 0 and read or `{read} * {2 ^ store.shift}`)
-		end
-
-		self:line(`local {name}: number = {table.concat(parts, " + ")}`)
-	end
-end
-
---[[
-    Claims the next flag bits, returning the local that holds them and
-    the bit they start at
---]]
-
-function Blocks:flag(count: number?): (string, number)
-	local width: number = count or 1
-	local index: number = self._claimed
-	local bit: number = index % WORD_BITS
-
-	-- Whiteoak TODO: a tag that straddles two words is refused; split it over both when a block needs one
-	assert(bit + width <= WORD_BITS, `{self.path}: a flag of {width} bits does not fit its word at bit {bit}`)
-	self._claimed += width
-
-	return self._words[index // WORD_BITS + 1], bit
 end
 
 --[[
@@ -273,13 +220,18 @@ end
 
 --[[
     Takes a run of bytes after the fixed bytes: the write side from the
-    allocator into locals named for the field, the read side checked to
-    be all there. What fills it, a payload or a loop of child blocks over
-    the region, comes next in the tail
+    allocator into locals named for the field, or at the running offset
+    under a root that holds, the read side checked to be all there. What
+    fills it, a payload or a loop of child blocks over it, comes next
 --]]
 
 function Blocks:region(hint: string, path: string, bytes: string): Region
-	if self.side == "write" then
+	if self._running then
+		return {
+			offset = self._running,
+			out = self.out,
+		}
+	elseif self.side == "write" then
 		local offset: string = self:name(`{hint}Offset`)
 		local out: string = self:name(`{hint}Out`)
 
@@ -302,15 +254,16 @@ end
 --[[
     A variable-size payload after the fixed bytes, taken as a region and
     filled by the payload callback, which writes the line between given
-    the buffer and offset to use; the read side steps the cursor past it
+    the buffer and offset to use; the read side's cursor and a held
+    writer's running offset step past it
 --]]
 
 function Blocks:extend(hint: string, path: string, bytes: string, payload: (string, string) -> string)
 	local region: Region = self:region(hint, path, bytes)
 	self:tail(payload(region.out, region.offset))
 
-	if self.side == "read" then
-		self:tail(`cursor += {bytes}`)
+	if self.side == "read" or self._running then
+		self:tail(`{region.offset} += {bytes}`)
 	end
 end
 
@@ -328,10 +281,11 @@ function Blocks:done(final: string?): string
 
 	local statements: { string } = {}
 	local bytes: number = self._bytes
+	local taken: number = self._held or bytes -- A root that holds takes the writer's largest size, not its fixed bytes
 
 	-- A region's bytes were taken or checked by the parent, so only a block of its own opens with a line
-	if bytes > 0 and not self._region and self.side == "write" then
-		self:line(`local {self._offset}: number, {self.out}: buffer = {self.first or self.allocate}({bytes})`)
+	if taken > 0 and not self._region and self.side == "write" then
+		self:line(`local {self._offset}: number, {self.out}: buffer = {self.first or self.allocate}({taken})`)
 		table.insert(statements, table.remove(self._body) :: string)
 	elseif bytes > 0 and not self._region then
 		self:line(`if cursor + {bytes} > length then\n\terror("{self.path}: truncated")\nend`)
@@ -341,24 +295,12 @@ function Blocks:done(final: string?): string
 	table.move(self._body, 1, #self._body, #statements + 1, statements)
 
 	if self.side == "write" then
-		local flagBytes: number = math.ceil(self._bits / 8)
-
-		for word: number, name: string in self._words do
-			local wordBits: number = math.min(WORD_BITS, self._bits - (word - 1) * WORD_BITS)
-
-			for _, store in stores(word - 1, flagBytes) do
-				local whole: boolean = store.shift == 0 and wordBits <= store.width * 8
-				local value: string = whole and name or `bit32.extract({name}, {store.shift}, {store.width * 8})`
-				local at: string = self:at(self._flagsAt + store.byte)
-
-				table.insert(
-					statements,
-					Blocks.indent(self._indent, `buffer.writeu{store.width * 8}({self.out}, {at}, {value})`)
-				)
-			end
+		for _, store: string in self:_stored() do
+			table.insert(statements, Blocks.indent(self._indent, store))
 		end
 
-		if bytes > 0 and self._region then
+		-- The running offset steps past the fixed bytes, whether a region's or a holding root's, for the tail after
+		if bytes > 0 and (self._region or self._held ~= nil) then
 			table.insert(statements, Blocks.indent(self._indent, `{self._offset} += {bytes}`))
 		end
 	elseif bytes > 0 then
@@ -377,6 +319,12 @@ function Blocks:done(final: string?): string
 	end
 
 	return text == "" and "" or `{text}\n`
+end
+
+-- The flag bytes are the methods of one sibling file, and a name defined twice is a bug
+for name: string, method in Flags do
+	assert(Blocks[name] == nil, `Blocks.{name} is defined twice`)
+	Blocks[name] = method
 end
 
 return Blocks

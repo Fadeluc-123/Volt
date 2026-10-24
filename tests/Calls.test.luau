@@ -56,6 +56,7 @@ local function schema(side: string, message: any): Schema
 			manualReplication = false,
 			maxPacket = 8192,
 			maxPacketsPerSecond = 240,
+			maxOutgoing = 262144,
 			unreliableBudget = 900,
 		},
 		messages = { [ID] = message },
@@ -334,7 +335,8 @@ describe("Calls", function ()
 	test("a refused argument reaches the caller and takes no slot", function ()
 		local harness: Harness = setup()
 		local ok: boolean, message: any = pcall(harness.client.invoke, harness.client, ID, function ()
-			error("Double: expected u8", 0)
+			harness.client.reliable.begin(4)
+			harness.client.reliable.refuse("Double: expected u8")
 		end)
 
 		expect(ok).is(false)

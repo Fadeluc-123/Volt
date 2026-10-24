@@ -34,6 +34,7 @@ export type Exported<T> = {
 
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
+local trimReliable: (number) -> ()
 local allocateReliable: (number) -> (number, buffer)
 local refuseReliable: (string) -> never
 
@@ -58,7 +59,7 @@ local function writeEcho(slot: number, status: number, value: number)
 	if status == 0 then
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
-		if typeof(value) ~= "number" or value % 1 ~= 0 or value < 0 or value > 255 then
+		if type(value) ~= "number" or bit32.band(value, 255) ~= value then
 			refuseReliable("Echo: expected u8")
 		end
 
@@ -108,33 +109,35 @@ local function readDivide(player: Player?, packet: buffer, cursor: number, _: { 
 end
 
 local function writeDivide(slot: number, status: number, ok: boolean, quotient: number?)
-	local offset: number, out: buffer = beginReliable(4)
+	local offset: number, out: buffer = beginReliable(13)
 	buffer.writeu8(out, offset, 3)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
+	offset += 4
 
 	if status == 0 then
-		local offset_2: number, out_2: buffer = allocateReliable(1)
 		local flags: number = 0
 
-		if typeof(ok) ~= "boolean" then
+		if type(ok) ~= "boolean" then
 			refuseReliable("Divide.ok: expected boolean")
 		end
 
 		flags += ok and 1 or 0
 		flags += quotient ~= nil and 2 or 0
-		buffer.writeu8(out_2, offset_2, flags)
+		buffer.writeu8(out, offset, flags)
+		offset += 1
 
 		if quotient ~= nil then
-			local offset_3: number, out_3: buffer = allocateReliable(8)
-
-			if typeof(quotient) ~= "number" or quotient ~= quotient then
+			if type(quotient) ~= "number" or quotient ~= quotient then
 				refuseReliable("Divide.quotient: expected f64")
 			end
 
-			buffer.writef64(out_3, offset_3, quotient)
+			buffer.writef64(out, offset, quotient)
+			offset += 8
 		end
 	end
+
+	trimReliable(offset)
 end
 
 local function readInventory_Transfer(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
@@ -152,27 +155,26 @@ local function readInventory_Transfer(player: Player?, packet: buffer, cursor: n
 end
 
 local function writeInventory_Transfer(slot: number, status: number, ok: boolean, reason: string?)
-	local offset: number, out: buffer = beginReliable(4)
+	local offset: number, out: buffer = beginReliable(70)
 	buffer.writeu8(out, offset, 4)
 	buffer.writeu16(out, offset + 1, slot)
 	buffer.writeu8(out, offset + 3, status)
+	offset += 4
 
 	if status == 0 then
-		local offset_2: number, out_2: buffer = allocateReliable(1)
 		local flags: number = 0
 
-		if typeof(ok) ~= "boolean" then
+		if type(ok) ~= "boolean" then
 			refuseReliable("Inventory.Transfer.ok: expected boolean")
 		end
 
 		flags += ok and 1 or 0
 		flags += reason ~= nil and 2 or 0
-		buffer.writeu8(out_2, offset_2, flags)
+		buffer.writeu8(out, offset, flags)
+		offset += 1
 
 		if reason ~= nil then
-			local offset_3: number, out_3: buffer = allocateReliable(1)
-
-			if typeof(reason) ~= "string" then
+			if type(reason) ~= "string" then
 				refuseReliable("Inventory.Transfer.reason: expected string")
 			end
 
@@ -180,25 +182,30 @@ local function writeInventory_Transfer(slot: number, status: number, ok: boolean
 				refuseReliable("Inventory.Transfer.reason: length out of range")
 			end
 
-			buffer.writeu8(out_3, offset_3, #reason)
-			local reasonOffset: number, reasonOut: buffer = allocateReliable(#reason)
-			buffer.writestring(reasonOut, reasonOffset, reason)
+			buffer.writeu8(out, offset, #reason)
+			offset += 1
+			buffer.writestring(out, offset, reason)
+			offset += #reason
 		end
 	end
+
+	trimReliable(offset)
 end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x2D03F5D0,
+	hash = 0x16939E15,
 	scope = "Functions",
 	side = "server",
 	idBytes = 1,
 	options = {
 		flush = 1,
 		manualReplication = false,
+		maxOutgoing = 262144,
 		maxPacket = 8192,
 		maxPacketsPerSecond = 240,
 		unreliableBudget = 900,
+		writeValidation = true,
 	},
 
 	messages = {
@@ -217,6 +224,7 @@ runtime = Volt.start({
 })
 
 beginReliable = runtime.reliable.begin
+trimReliable = runtime.reliable.trim
 allocateReliable = runtime.reliable.allocate
 refuseReliable = runtime.reliable.refuse
 

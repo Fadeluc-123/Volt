@@ -9,34 +9,38 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	local offset: number, out: buffer = allocate(4)
 	local flags: number = 0
 
-	if typeof(value) ~= "table" then
+	if type(value) ~= "table" then
 		refuse("Stack: expected table")
 	end
 
-	if typeof(value.item) ~= "string" then
+	local item = value.item
+
+	if type(item) ~= "string" then
 		refuse("Stack.item: expected string")
 	end
 
-	if #value.item < 1 or #value.item > 8 then
+	if #item < 1 or #item > 8 then
 		refuse("Stack.item: length out of range")
 	end
 
-	buffer.writeu8(out, offset + 1, #value.item - 1)
+	buffer.writeu8(out, offset + 1, #item - 1)
+	local quantity = value.quantity
 
-	if typeof(value.quantity) ~= "number" or value.quantity % 1 ~= 0 or value.quantity < 1 or value.quantity > 999 then
+	if type(quantity) ~= "number" or bit32.band(quantity, 65535) ~= quantity or quantity < 1 or quantity > 999 then
 		refuse("Stack.quantity: expected u16(1..999)")
 	end
 
-	buffer.writeu16(out, offset + 2, value.quantity)
-	flags += value.properties ~= nil and 1 or 0
+	buffer.writeu16(out, offset + 2, quantity)
+	local properties = value.properties
+	flags += properties ~= nil and 1 or 0
 
-	if value.properties ~= nil then
-		slot(value.properties)
+	if properties ~= nil then
+		slot(properties)
 	end
 
 	buffer.writeu8(out, offset, flags)
-	local itemOffset: number, itemOut: buffer = allocate(#value.item)
-	buffer.writestring(itemOut, itemOffset, value.item)
+	local itemOffset: number, itemOut: buffer = allocate(#item)
+	buffer.writestring(itemOut, itemOffset, item)
 end
 
 local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
@@ -140,7 +144,7 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 	if aMember == 0 then
 		local offset_2: number, out_2: buffer = allocateReliable(1)
 
-		if a % 1 ~= 0 or a < 0 or a > 255 then
+		if bit32.band(a, 255) ~= a then
 			refuseReliable("Unions.a: expected u8")
 		end
 
@@ -164,24 +168,27 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 
 	if bMember == 0 then
 		local offset_5: number, out_5: buffer = allocateReliable(12)
+		local bX = b.X
 
-		if b.X ~= b.X then
+		if bX ~= bX then
 			refuseReliable("Unions.b.X: expected f32")
 		end
 
-		buffer.writef32(out_5, offset_5, b.X)
+		buffer.writef32(out_5, offset_5, bX)
+		local bY = b.Y
 
-		if b.Y ~= b.Y then
+		if bY ~= bY then
 			refuseReliable("Unions.b.Y: expected f32")
 		end
 
-		buffer.writef32(out_5, offset_5 + 4, b.Y)
+		buffer.writef32(out_5, offset_5 + 4, bY)
+		local bZ = b.Z
 
-		if b.Z ~= b.Z then
+		if bZ ~= bZ then
 			refuseReliable("Unions.b.Z: expected f32")
 		end
 
-		buffer.writef32(out_5, offset_5 + 8, b.Z)
+		buffer.writef32(out_5, offset_5 + 8, bZ)
 	elseif bMember == 1 then
 		writeStack(allocateReliable, slotReliable, refuseReliable, b)
 	end
@@ -202,11 +209,13 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 		local cOffset: number, cOut: buffer = allocateReliable(#c)
 
 		for index = 1, #c do
-			if typeof(c[index]) ~= "number" or c[index] % 1 ~= 0 or c[index] < 0 or c[index] > 255 then
+			local cEntry = c[index]
+
+			if type(cEntry) ~= "number" or bit32.band(cEntry, 255) ~= cEntry then
 				refuseReliable("Unions.c[]: expected u8")
 			end
 
-			buffer.writeu8(cOut, cOffset, c[index])
+			buffer.writeu8(cOut, cOffset, cEntry)
 			cOffset += 1
 		end
 	elseif cMember == 2 then
