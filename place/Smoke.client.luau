@@ -1,23 +1,28 @@
 --[[
-    The client half of the Studio smoke test: fires every event Smoke.volt
-    lets a client fire, invokes its function, listens for the server's
-    answers, and prints Volt smoke: pass once every answer has arrived
-    with the value expected, or the first thing that went wrong
+    The client half of the Studio smoke test: requires its module late, so
+    the server's Late messages are held for it, fires every event, invokes
+    the function, checks every answer and every Late number in order, and
+    prints Volt smoke: pass once all of it arrived, or the first fault
 --]]
 
 --!strict
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local net = require(ReplicatedStorage:WaitForChild("Net"))
-
-local DEADLINE: number = 10 -- Seconds to wait for the server's answers before reporting what never came
+local LOAD_DELAY: number = 10 -- Seconds before the module is required, while the server already fires Late at us
+local DEADLINE: number = 20 -- Seconds to wait for the server's answers and the rest of Late before reporting
+local LATE: number = 600 -- The Late numbers the server fires, each to arrive once and in order
 local PING: number = 7
 local MOVE_X: number = 1.5 -- Exact in f32, so what comes back compares equal
 local MOVE_Y: number = -2.5
 local WORD: string = "volt"
 
-local waiting: { [string]: boolean } = { Pong = true, Moved = true, Echo = true } -- The answers still to arrive
+task.wait(LOAD_DELAY)
+
+local Network = require(ReplicatedStorage:WaitForChild("Network"))
+
+local waiting: { [string]: boolean } = { Pong = true, Moved = true, Echo = true, Late = true } -- The answers still to arrive
 local failed: string? = nil
+local late: number = 0 -- The last Late number heard
 
 -- Keeps the first failure only, since everything after it is noise
 local function fail(detail: string)
@@ -33,24 +38,37 @@ local function arrived(name: string, right: boolean, got: string)
 	waiting[name] = nil
 end
 
-net.onFailure(function (_, kind: string, detail: string)
+Network.onFailure(function (_, kind: string, detail: string)
 	fail(`{kind}: {detail}`)
 end)
 
-net.Pong.on(function (value: number)
+Network.Pong.on(function (value: number)
 	arrived("Pong", value == PING + 1, tostring(value))
 end)
 
-net.Moved.on(function (x: number, y: number)
+Network.Moved.on(function (x: number, y: number)
 	arrived("Moved", x == MOVE_X and y == MOVE_Y, `{x}, {y}`)
 end)
 
-net.Ping.fire(PING)
-net.Move.fire(MOVE_X, MOVE_Y)
-net.Mark.fire(workspace)
+-- Every number once and in order, the held ones first, then the rest as the server fires them
+Network.Late.on(function (index: number)
+	if index ~= late + 1 then
+		fail(`Late: got {index} after {late}`)
+	end
+
+	late = index
+
+	if late == LATE then
+		waiting.Late = nil
+	end
+end)
+
+Network.Ping.fire(PING)
+Network.Move.fire(MOVE_X, MOVE_Y)
+Network.Mark.fire(workspace)
 
 -- The call yields this script until the server replies or the function's timeout passes
-local ok: boolean, echoed: string = net.Echo.invoke(WORD)
+local ok: boolean, echoed: string = Network.Echo.invoke(WORD)
 arrived("Echo", ok and echoed == WORD:upper(), echoed)
 
 local deadline: number = os.clock() + DEADLINE

@@ -14,20 +14,26 @@ local Volt = require(ReplicatedStorage.Packages.Volt)
 
 export type Hit = { target: number, amount: number }
 
+type Bot = Volt.Bot
+
 export type ServerEvent<A...> = {
-	fire: (player: Player, A...) -> (),
+	fire: (player: Player | Bot, A...) -> (),
 	fireAll: (A...) -> (),
-	fireList: (players: { Player }, A...) -> (),
-	fireExcept: (player: Player, A...) -> (),
-	fireSet: (players: { [Player]: true }, A...) -> (),
+	fireList: (players: { Player | Bot }, A...) -> (),
+	fireExcept: (player: Player | Bot, A...) -> (),
+	fireSet: (players: { [Player | Bot]: true }, A...) -> (),
 }
 
 export type ServerListener<A...> = {
-	on: (listener: (player: Player, A...) -> ()) -> () -> (),
-	iter: () -> () -> (number, Player, A...),
+	on: (listener: (player: Player | Bot, A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, Player | Bot, A...),
 }
 
-export type ServerFunction<A..., R...> = { on: (handler: (player: Player, A...) -> R...) -> () -> () }
+export type ServerPolling<A...> = { iter: () -> () -> (number, Player | Bot, A...) }
+
+export type ServerFunction<A..., R...> = {
+	on: (handler: (player: Player | Bot, A...) -> R...) -> () -> (),
+}
 
 export type Exported<T> = {
 	write: (value: T) -> (buffer, { any }?),
@@ -121,9 +127,9 @@ markUnreliable = runtime.unreliable.mark
 
 local before: { [number]: Volt.Hook } = runtime.before
 
-local net = {
+local Network = {
 	Damage = table.freeze({
-		fire = function (player: Player, value: Hit)
+		fire = function (player: Player | Bot, value: Hit)
 			if (before[1] == nil or before[1](player, value)) and runtime:target(player) then
 				writeDamage(value)
 			end
@@ -133,21 +139,21 @@ local net = {
 			runtime:broadcast(1, nil, nil, writeDamage, value)
 		end,
 
-		fireList = function (players: { Player }, value: Hit)
+		fireList = function (players: { Player | Bot }, value: Hit)
 			runtime:broadcast(1, players, nil, writeDamage, value)
 		end,
 
-		fireExcept = function (player: Player, value: Hit)
+		fireExcept = function (player: Player | Bot, value: Hit)
 			runtime:broadcast(1, nil, player, writeDamage, value)
 		end,
 
-		fireSet = function (players: { [Player]: true }, value: Hit)
+		fireSet = function (players: { [Player | Bot]: true }, value: Hit)
 			runtime:broadcast(1, players, nil, writeDamage, value)
 		end,
-	}),
+	}) :: ServerEvent<(Hit)>,
 
 	Spray = table.freeze({
-		fire = function (player: Player, x: number, y: number)
+		fire = function (player: Player | Bot, x: number, y: number)
 			if (before[2] == nil or before[2](player, x, y)) and runtime:target(player) then
 				writeSpray(x, y)
 			end
@@ -157,22 +163,22 @@ local net = {
 			runtime:broadcast(2, nil, nil, writeSpray, x, y)
 		end,
 
-		fireList = function (players: { Player }, x: number, y: number)
+		fireList = function (players: { Player | Bot }, x: number, y: number)
 			runtime:broadcast(2, players, nil, writeSpray, x, y)
 		end,
 
-		fireExcept = function (player: Player, x: number, y: number)
+		fireExcept = function (player: Player | Bot, x: number, y: number)
 			runtime:broadcast(2, nil, player, writeSpray, x, y)
 		end,
 
-		fireSet = function (players: { [Player]: true }, x: number, y: number)
+		fireSet = function (players: { [Player | Bot]: true }, x: number, y: number)
 			runtime:broadcast(2, players, nil, writeSpray, x, y)
 		end,
-	}),
+	}) :: ServerEvent<(number, number)>,
 
 	Match = table.freeze({
 		Start = table.freeze({
-			fire = function (player: Player)
+			fire = function (player: Player | Bot)
 				if (before[3] == nil or before[3](player)) and runtime:target(player) then
 					writeMatch_Start()
 				end
@@ -182,19 +188,21 @@ local net = {
 				runtime:broadcast(3, nil, nil, writeMatch_Start)
 			end,
 
-			fireList = function (players: { Player })
+			fireList = function (players: { Player | Bot })
 				runtime:broadcast(3, players, nil, writeMatch_Start)
 			end,
 
-			fireExcept = function (player: Player)
+			fireExcept = function (player: Player | Bot)
 				runtime:broadcast(3, nil, player, writeMatch_Start)
 			end,
 
-			fireSet = function (players: { [Player]: true })
+			fireSet = function (players: { [Player | Bot]: true })
 				runtime:broadcast(3, players, nil, writeMatch_Start)
 			end,
-		}),
+		}) :: ServerEvent<()>,
 	}),
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -207,22 +215,40 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
+
+	onJoin = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onJoin(callback)
+	end,
+
+	onLeave = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onLeave(callback)
+	end,
+
+	onHandshake = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onHandshake(callback)
+	end,
+
+	traffic = function (player: Player | Bot): (number, number)
+		return runtime:traffic(player)
+	end,
+
+	isBot = runtime.isBot,
 }
 
-net.events = table.freeze({
-	["Damage"] = net.Damage,
-	["Spray"] = net.Spray,
-	["Match.Start"] = net.Match.Start,
-})
+Network.events = table.freeze({
+	["Damage"] = Network.Damage,
+	["Spray"] = Network.Spray,
+	["Match.Start"] = Network.Match.Start,
+}) :: { [string]: any }
 
-net.functions = table.freeze({})
-net.exports = table.freeze({})
+Network.functions = table.freeze({}) :: { [string]: any }
+Network.exports = table.freeze({}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

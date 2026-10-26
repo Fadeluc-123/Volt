@@ -244,7 +244,7 @@ local function readBits(packet: buffer, cursor: number, _: { any }, sideCursor: 
 		error("Bits: truncated")
 	end
 
-	local value: { boolean } = table.create(valueLength)
+	local value: { boolean } = table.create(valueLength) :: { boolean }
 
 	for byte = 0, valueLength // 8 - 1 do
 		local packed: number = buffer.readu8(packet, cursor + byte)

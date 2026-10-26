@@ -3,7 +3,7 @@ local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 export type Stack = { item: string, quantity: number, properties: any? }
 export type Team = "Red" | "Blue"
 
-local TEAM: { string } = { "Red", "Blue" }
+local TEAM: { "Red" | "Blue" } = { "Red", "Blue" }
 
 local function writeStack(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(4)
@@ -43,7 +43,7 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	buffer.writestring(itemOut, itemOffset, item)
 end
 
-local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
+local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number, Stack)
 	if cursor + 4 > length then
 		error("Stack: truncated")
 	end
@@ -98,13 +98,13 @@ local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (),
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number, Team)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local value: string? = TEAM[bit32.extract(flags, 0, 1) + 1]
+	local value: ("Red" | "Blue")? = TEAM[bit32.extract(flags, 0, 1) + 1]
 
 	if not value then
 		error("Team: out of range")
@@ -143,46 +143,50 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 
 	if aMember == 0 then
 		local offset_2: number, out_2: buffer = allocateReliable(1)
+		local a_2 = (a :: number)
 
-		if bit32.band(a, 255) ~= a then
+		if bit32.band(a_2, 255) ~= a_2 then
 			refuseReliable("Unions.a: expected u8")
 		end
 
-		buffer.writeu8(out_2, offset_2, a)
+		buffer.writeu8(out_2, offset_2, a_2)
 	elseif aMember == 1 then
 		local offset_3: number, out_3: buffer = allocateReliable(1)
+		local a_3 = (a :: string)
 
-		if #a > 4 then
+		if #a_3 > 4 then
 			refuseReliable("Unions.a: length out of range")
 		end
 
-		buffer.writeu8(out_3, offset_3, #a)
-		local aOffset: number, aOut: buffer = allocateReliable(#a)
-		buffer.writestring(aOut, aOffset, a)
+		buffer.writeu8(out_3, offset_3, #a_3)
+		local aOffset: number, aOut: buffer = allocateReliable(#a_3)
+		buffer.writestring(aOut, aOffset, a_3)
 	elseif aMember == 2 then
 		local offset_4: number, out_4: buffer = allocateReliable(1)
 		local flags_2: number = 0
-		flags_2 += a and 1 or 0
+		local a_4 = (a :: boolean)
+		flags_2 += a_4 and 1 or 0
 		buffer.writeu8(out_4, offset_4, flags_2)
 	end
 
 	if bMember == 0 then
 		local offset_5: number, out_5: buffer = allocateReliable(12)
-		local bX = b.X
+		local b_2 = (b :: Vector3)
+		local bX = b_2.X
 
 		if bX ~= bX then
 			refuseReliable("Unions.b.X: expected f32")
 		end
 
 		buffer.writef32(out_5, offset_5, bX)
-		local bY = b.Y
+		local bY = b_2.Y
 
 		if bY ~= bY then
 			refuseReliable("Unions.b.Y: expected f32")
 		end
 
 		buffer.writef32(out_5, offset_5 + 4, bY)
-		local bZ = b.Z
+		local bZ = b_2.Z
 
 		if bZ ~= bZ then
 			refuseReliable("Unions.b.Z: expected f32")
@@ -190,26 +194,28 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 
 		buffer.writef32(out_5, offset_5 + 8, bZ)
 	elseif bMember == 1 then
-		writeStack(allocateReliable, slotReliable, refuseReliable, b)
+		writeStack(allocateReliable, slotReliable, refuseReliable, (b :: Stack))
 	end
 
 	if cMember == 0 then
 		local offset_7: number, out_7: buffer = allocateReliable(3)
-		buffer.writeu8(out_7, offset_7, math.round(c.R * 255))
-		buffer.writeu8(out_7, offset_7 + 1, math.round(c.G * 255))
-		buffer.writeu8(out_7, offset_7 + 2, math.round(c.B * 255))
+		local c_2 = (c :: Color3)
+		buffer.writeu8(out_7, offset_7, math.round(c_2.R * 255))
+		buffer.writeu8(out_7, offset_7 + 1, math.round(c_2.G * 255))
+		buffer.writeu8(out_7, offset_7 + 2, math.round(c_2.B * 255))
 	elseif cMember == 1 then
 		local offset_8: number, out_8: buffer = allocateReliable(1)
+		local c_3 = (c :: { number })
 
-		if #c > 3 then
+		if #c_3 > 3 then
 			refuseReliable("Unions.c: length out of range")
 		end
 
-		buffer.writeu8(out_8, offset_8, #c)
-		local cOffset: number, cOut: buffer = allocateReliable(#c)
+		buffer.writeu8(out_8, offset_8, #c_3)
+		local cOffset: number, cOut: buffer = allocateReliable(#c_3)
 
-		for index = 1, #c do
-			local cEntry = c[index]
+		for index = 1, #c_3 do
+			local cEntry = c_3[index]
 
 			if type(cEntry) ~= "number" or bit32.band(cEntry, 255) ~= cEntry then
 				refuseReliable("Unions.c[]: expected u8")
@@ -219,7 +225,7 @@ local function writeUnions(a: number | string | boolean, b: Vector3 | Stack, c: 
 			cOffset += 1
 		end
 	elseif cMember == 2 then
-		writeTeam(allocateReliable, slotReliable, refuseReliable, c)
+		writeTeam(allocateReliable, slotReliable, refuseReliable, (c :: Team))
 	end
 end
 
@@ -230,11 +236,11 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 	local flags: number = buffer.readu8(packet, cursor)
 	local aTag: number = bit32.extract(flags, 0, 2)
-	local a
+	local a: number | string | boolean
 	local bTag: number = bit32.extract(flags, 2, 1)
-	local b
+	local b: Vector3 | Stack
 	local cTag: number = bit32.extract(flags, 3, 2)
-	local c
+	local c: Color3 | { number } | Team
 	cursor += 1
 
 	if aTag == 0 then
@@ -244,7 +250,7 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 		local a_2: number = buffer.readu8(packet, cursor)
 		cursor += 1
-		a = a_2
+		a = a_2 :: number
 	elseif aTag == 1 then
 		if cursor + 1 > length then
 			error("Unions.a: truncated")
@@ -264,7 +270,7 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 		local a_3: string = buffer.readstring(packet, cursor, aLength)
 		cursor += aLength
-		a = a_3
+		a = a_3 :: string
 	elseif aTag == 2 then
 		if cursor + 1 > length then
 			error("Unions.a: truncated")
@@ -272,7 +278,7 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 		local flags_2: number = buffer.readu8(packet, cursor)
 		cursor += 1
-		a = bit32.btest(flags_2, 1)
+		a = bit32.btest(flags_2, 1) :: boolean
 	else
 		error("Unions.a: out of range")
 	end
@@ -302,11 +308,11 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 		local b_2: Vector3 = Vector3.new(bX, bY, bZ)
 		cursor += 12
-		b = b_2
+		b = b_2 :: Vector3
 	elseif bTag == 1 then
-		local b_3
+		local b_3: Stack
 		cursor, sideCursor, b_3 = readStack(packet, cursor, side, sideCursor, length)
-		b = b_3
+		b = b_3 :: Stack
 	else
 		error("Unions.b: out of range")
 	end
@@ -318,7 +324,7 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 
 		local c_2: Color3 = Color3.fromRGB(buffer.readu8(packet, cursor), buffer.readu8(packet, cursor + 1), buffer.readu8(packet, cursor + 2))
 		cursor += 3
-		c = c_2
+		c = c_2 :: Color3
 	elseif cTag == 1 then
 		if cursor + 1 > length then
 			error("Unions.c: truncated")
@@ -336,7 +342,7 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 			error("Unions.c: truncated")
 		end
 
-		local c_3 = table.create(cLength)
+		local c_3: { number } = table.create(cLength) :: { number }
 
 		for index = 1, cLength do
 			local cEntry: number = buffer.readu8(packet, cursor)
@@ -344,11 +350,11 @@ local function readUnions(packet: buffer, cursor: number, side: { any }, sideCur
 			c_3[index] = cEntry
 		end
 
-		c = c_3
+		c = c_3 :: { number }
 	elseif cTag == 2 then
-		local c_4
+		local c_4: Team
 		cursor, sideCursor, c_4 = readTeam(packet, cursor, side, sideCursor, length)
-		c = c_4
+		c = c_4 :: Team
 	else
 		error("Unions.c: out of range")
 	end

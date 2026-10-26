@@ -2,13 +2,14 @@
     Proves the runtime a generated module starts: the version check, the
     states every player gets and loses, the target a fire writes into,
     the flush cadence over the Heartbeat and by hand, and the client's
-    one target
+    one target, whose reliable frame never outgrows what the server reads
 --]]
 
 --!strict
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
+local handshake = require("./Handshake")
 local Volt = require("@volt")
 
 local describe = Suite.describe
@@ -28,6 +29,10 @@ local OPTIONS: { [string]: any } = {
 	unreliableBudget = 900,
 }
 
+local SMALL_PACKET: number = 16 -- A server's maxPacket two of the largest messages below cannot share
+local LARGEST: number = 8 -- A client's largest reliable message, which fits beside the handshake alone
+local HANDSHAKE_BYTES: number = 5 -- What opens a client's first frame
+
 -- A schema table with no messages on one side, with the options the runtime reads
 local function schema(side: string, options: { [string]: any }?, version: string?): Schema
 	return {
@@ -43,12 +48,12 @@ local function schema(side: string, options: { [string]: any }?, version: string
 end
 
 describe("Volt", function ()
-	test("refuses a schema from another compiler version", function ()
+	test("refuses a schema from another compiler version, naming its scope with no source position", function ()
 		local mock = Volt.mock(task.spawn)
 		local ok: boolean, message: any = pcall(Volt.start, schema("server", nil, "0.2.0"), mock.server)
 
 		expect(ok).is(false)
-		expect(tostring(message):find("compiled by Volt 0.2.0 and the runtime is 0.1.0", 1, true) ~= nil).is(true)
+		expect(message).is(`Volt: Test's schema was compiled by Volt 0.2.0 and the runtime is {Volt.version}`)
 	end)
 
 	test("gives states to every player present and joining, and frees them when they leave", function ()
@@ -105,6 +110,8 @@ describe("Volt", function ()
 			others += 1
 		end)
 
+		-- Handed straight to the runtime, so the hold lets go of her bytes without a frame passing
+		runtime:packet(alice, handshake(0), nil)
 		runtime:target(alice)
 		runtime.reliable.allocate(3)
 
@@ -130,6 +137,7 @@ describe("Volt", function ()
 			got += 1
 		end)
 
+		runtime:packet(alice, handshake(0), nil)
 		runtime:target(alice)
 		runtime.reliable.allocate(3)
 
@@ -171,4 +179,33 @@ describe("Volt", function ()
 			expect(buffer.readu8(assert(first, "nothing reached the server"), 0)).is(0)
 		end
 	)
+
+	test("caps a client's reliable frame at maxPacket, dropping the message past it and never the handshake", function ()
+		local mock = Volt.mock(task.spawn)
+		local _, client = mock:join("Alice")
+		local options: { [string]: any } = table.clone(OPTIONS)
+		
+		options.maxPacket = SMALL_PACKET
+
+		local runtime: Runtime = Volt.start(schema("client", options), client)
+		local arrived: { string } = {}
+		local failures: { string } = {}
+
+		runtime:onFailure(function (_, kind: string, detail: string)
+			table.insert(failures, `{kind}: {detail}`)
+		end)
+		mock.server.receive(function (_, packet: buffer)
+			table.insert(arrived, `{buffer.len(packet)} {buffer.readu8(packet, 0)}`)
+		end)
+
+		-- The handshake and the first fit what the server reads, and the second would take the frame past it
+		runtime.reliable.begin(LARGEST)
+		runtime.reliable.begin(LARGEST)
+
+		mock:step()
+		mock:step()
+
+		expect(table.concat(arrived, ",")).is(`{HANDSHAKE_BYTES + LARGEST} 0`)
+		expect(table.concat(failures, ",")).is("outgoing: over maxPacket, a message was dropped")
+	end)
 end)

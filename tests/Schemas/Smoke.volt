@@ -30,3 +30,9 @@ function Echo {
 	data: string(0..32),
 	return: string(0..32),
 }
+
+-- Fired at a joiner once a frame from the server's own PlayerAdded, before their client requires its module
+event Late {
+	from: Server, type: Reliable, call: SingleSync,
+	data: u16,
+}

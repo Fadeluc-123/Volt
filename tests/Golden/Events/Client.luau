@@ -12,12 +12,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
+type Bot = Volt.Bot
+
 export type ClientEvent<A...> = { fire: (A...) -> () }
 
 export type ClientListener<A...> = {
 	on: (listener: (A...) -> ()) -> () -> (),
 	iter: () -> () -> (number, A...),
 }
+
+export type ClientPolling<A...> = { iter: () -> () -> (number, A...) }
 
 export type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
 
@@ -114,7 +118,7 @@ local function writeSync(value: number)
 	buffer.writeu8(out, offset + 1, value)
 end
 
-local function readSync(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readSync(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Sync: truncated")
 	end
@@ -165,14 +169,14 @@ markUnreliable = runtime.unreliable.mark
 
 local before: { [number]: Volt.Hook } = runtime.before
 
-local net = {
+local Network = {
 	Input = table.freeze({
 		fire = function (dir: number, jump: boolean)
 			if before[1] == nil or before[1](nil, dir, jump) then
 				writeInput(dir, jump)
 			end
 		end,
-	}),
+	}) :: ClientEvent<(number, boolean)>,
 
 	Chat = table.freeze({
 		fire = function (value: string)
@@ -180,7 +184,7 @@ local net = {
 				writeChat(value)
 			end
 		end,
-	}),
+	}) :: ClientEvent<(string)>,
 
 	Ready = table.freeze({
 		fire = function ()
@@ -188,7 +192,7 @@ local net = {
 				writeReady()
 			end
 		end,
-	}),
+	}) :: ClientEvent<()>,
 
 	Grab = table.freeze({
 		fire = function (value: Instance)
@@ -196,7 +200,7 @@ local net = {
 				writeGrab(value)
 			end
 		end,
-	}),
+	}) :: ClientEvent<(Instance)>,
 
 	Ping = table.freeze({
 		fire = function (value: number)
@@ -204,7 +208,7 @@ local net = {
 				writePing(value)
 			end
 		end,
-	}),
+	}) :: ClientEvent<(number)>,
 
 	Sync = table.freeze({
 		fire = function (value: number)
@@ -220,7 +224,9 @@ local net = {
 		iter = function (): () -> (number, number)
 			return runtime:iter(1)
 		end,
-	}),
+	}) :: ClientEvent<(number)> & ClientListener<(number)>,
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -233,25 +239,25 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
 }
 
-net.events = table.freeze({
-	["Input"] = net.Input,
-	["Chat"] = net.Chat,
-	["Ready"] = net.Ready,
-	["Grab"] = net.Grab,
-	["Ping"] = net.Ping,
-	["Sync"] = net.Sync,
-})
+Network.events = table.freeze({
+	["Input"] = Network.Input,
+	["Chat"] = Network.Chat,
+	["Ready"] = Network.Ready,
+	["Grab"] = Network.Grab,
+	["Ping"] = Network.Ping,
+	["Sync"] = Network.Sync,
+}) :: { [string]: any }
 
-net.functions = table.freeze({})
-net.exports = table.freeze({})
+Network.functions = table.freeze({}) :: { [string]: any }
+Network.exports = table.freeze({}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

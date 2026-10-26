@@ -14,6 +14,7 @@ local Expressions = require("./Expressions")
 local Print = require("../Analyse/Print")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local Types = require("../Targets/Types")
 
 type Block = Blocks.Block
 type Field = Schema.Field
@@ -68,7 +69,7 @@ function Composites:optional(node: Type, write: Block, read: Block, value: strin
 
 	read:flag()
 	write:line(`{word} += {value} ~= nil and {mask} or 0`)
-	read:line(`local {result}`)
+	read:line(`local {result}: {Types.annotation(node)}`)
 
 	write:open(`if {value} ~= nil then`)
 	read:open(`if bit32.btest({word}, {mask}) then`)
@@ -83,7 +84,8 @@ end
 
 --[[
     Walks a type as a block of its own on both sides, with the flag bytes
-    its bits need, and hands the read side's value to an outer local
+    its bits need, and hands the read side's value to an outer local, cast
+    to the type that local takes it as when one is given
 --]]
 
 function Composites:nested(
@@ -93,13 +95,17 @@ function Composites:nested(
 	value: string,
 	hint: string,
 	path: string,
-	target: string
+	target: string,
+	cast: string?
 )
 	local bits: number = Sizes.size(node).bits
 
 	write:flags(bits)
 	read:flags(bits)
-	read:tail(`{target} = {self:type(node, write, read, value, hint, path)}`)
+
+	local result: string = self:type(node, write, read, value, hint, path)
+	read:tail(cast and `{target} = {result} :: {cast}` or `{target} = {result}`)
+
 	write:done()
 	read:done()
 end
@@ -156,8 +162,10 @@ function Composites:enum(node: Type, write: Block, read: Block, value: string, h
 		self:shape(write, value, "table", path)
 	end
 
+	-- The names keep their literal types, so a value read from them is the enum a checker was told it is
+	local literal: string = table.concat(quoted, " | ")
 	local names: string = self:constant(printed, path, function (constant: string): string
-		return `local {constant}: \{ string } = \{ {table.concat(quoted, ", ")} }`
+		return `local {constant}: \{ {literal} } = \{ {table.concat(quoted, ", ")} }`
 	end)
 
 	local index: string = write:name(`{hint}Index`)
@@ -171,7 +179,7 @@ function Composites:enum(node: Type, write: Block, read: Block, value: string, h
 	store(`{index} - 1`)
 
 	if not tag then
-		read:line(`local {result}: string? = {names}[{fetch == "0" and "1" or `{fetch} + 1`}]`)
+		read:line(`local {result}: ({literal})? = {names}[{fetch == "0" and "1" or `{fetch} + 1`}]`)
 		refuse(read, `not {result}`, `{path}: out of range`)
 		return result
 	end
@@ -180,7 +188,7 @@ function Composites:enum(node: Type, write: Block, read: Block, value: string, h
 	local written: number = 0 -- Variants with nothing to write take no branch on the write side
 
 	read:line(`local {which}: number = {fetch}`)
-	read:line(`local {result}`)
+	read:line(`local {result}: {Types.annotation(node)}`)
 
 	self._known = false
 
@@ -195,8 +203,15 @@ function Composites:enum(node: Type, write: Block, read: Block, value: string, h
 		writeVariant:flags(bits)
 		readVariant:flags(bits)
 
+		-- Inside its branch the value is the variant, which is what lets a checker read the variant's fields
+		local cast: string = writeVariant:name(`{hint}{variant.name}`)
+
+		if #fields > 0 then
+			writeVariant:line(`local {cast} = {value} :: {Types.variant(tag, variant)}`)
+		end
+
 		for _, field: Field in fields do
-			local place: string = `{value}.{field.name}`
+			local place: string = `{cast}.{field.name}`
 			local fieldPath: string = `{path}.{field.name}`
 
 			table.insert(
@@ -275,7 +290,7 @@ function Composites:union(node: Type, write: Block, read: Block, value: string, 
 	store(index)
 
 	read:line(`local {which}: number = {fetch}`)
-	read:line(`local {result}`)
+	read:line(`local {result}: {Types.annotation(node)}`)
 
 	for position: number, member: Type in members do
 		if position == 1 then
@@ -286,8 +301,12 @@ function Composites:union(node: Type, write: Block, read: Block, value: string, 
 			read:tail(`elseif {which} == {position - 1} then`)
 		end
 
+		-- Inside its branch the value is the member typeof found, which is what lets a checker follow it both ways
+		local annotation: string = Types.annotation(member)
+		local cast: string = `({value} :: {annotation})`
+
 		self._known = true
-		self:nested(member, write:child(path), read:child(path), value, hint, path, result)
+		self:nested(member, write:child(path), read:child(path), cast, hint, path, result, annotation)
 	end
 
 	self._known = known

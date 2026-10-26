@@ -1,16 +1,18 @@
 --[[
     The real transport: the remotes under ReplicatedStorage.Volt.<scope>,
-    found or created by the server and awaited by the client, the
-    Heartbeat, the player list with its join and leave signals, and the
-    scheduler; the one file in the runtime that touches the DataModel.
-    Outside a running game it is a transport that drops every packet
+    found or created by the server and awaited by the client, the frame,
+    the player list and its signals, the scheduler and the VM's one hub;
+    the one file in the runtime that touches the DataModel. Outside a
+    running game it is a transport that drops every packet
 --]]
 
 --!strict
 local Config = require("./Config/Runtime")
+local Hub = require("./Hub")
 local Types = require("./Config/Types/Runtime")
 
 type Handler = Types.Handler
+type Hub = Hub.Hub
 type Spawn = Types.Spawn
 type Transport = Types.Transport
 
@@ -21,11 +23,22 @@ local WAIT_SECONDS: number = Config.waitSeconds
 
 local Remotes = {}
 
+local Shared: Hub? = nil -- The VM's hub, made at the first server open or bot call; nothing else here keeps state
+
 -- What every fire, connection and signal of the transport does outside a running game
 local function nothing() end
 
 local function nobody(): { any }
 	return {}
+end
+
+-- Connects a callback to every frame and returns what disconnects it
+local function heartbeat(callback: () -> ()): () -> ()
+	local connection: RBXScriptConnection = game:GetService("RunService").Heartbeat:Connect(callback)
+
+	return function ()
+		connection:Disconnect()
+	end
 end
 
 -- A child by name, made when it is missing, so a second server VM attaches to the same remotes
@@ -69,10 +82,6 @@ function Remotes.open(scope: string, server: boolean): Transport
 	local RunService = game:GetService("RunService")
 	local spawn: Spawn = task.spawn
 
-	local function heartbeat(callback: () -> ())
-		RunService.Heartbeat:Connect(callback)
-	end
-
 	-- The Heartbeat still runs, so what a fire wrote is dropped every frame rather than kept
 	if not RunService:IsRunning() then
 		return {
@@ -102,8 +111,9 @@ function Remotes.open(scope: string, server: boolean): Transport
 		unreliable = await(folder, UNRELIABLE) :: UnreliableRemoteEvent
 	end
 
+	-- Every scope's server transport is served through the VM's one hub, which is what lets a bot reach it
 	if server then
-		return {
+		return Remotes.hub():serve(scope, {
 			reliable = function (player: any, packet: buffer, side: { any }?)
 				reliable:FireClient(player, packet, side)
 			end,
@@ -131,7 +141,12 @@ function Remotes.open(scope: string, server: boolean): Transport
 			playerRemoving = function (callback: (player: any) -> ())
 				Players.PlayerRemoving:Connect(callback)
 			end,
-		}
+
+			-- A player is parented to Players until the engine has let them go
+			present = function (player: any): boolean
+				return player.Parent ~= nil
+			end,
+		})
 	end
 
 	return {
@@ -156,6 +171,24 @@ function Remotes.open(scope: string, server: boolean): Transport
 		heartbeat = heartbeat,
 		spawn = spawn,
 	}
+end
+
+--[[
+    The VM's hub, which every server transport is served through and
+    every bot is made by, made the first time either asks for it. Only a
+    server in a running game has one, so no client can make a bot
+--]]
+
+function Remotes.hub(): Hub
+	local RunService = game:GetService("RunService")
+
+	assert(RunService:IsServer() and RunService:IsRunning(), "Volt: bots belong to the server of a running game")
+
+	if not Shared then
+		Shared = Hub.new(task.spawn, heartbeat)
+	end
+
+	return Shared :: Hub
 end
 
 return Remotes

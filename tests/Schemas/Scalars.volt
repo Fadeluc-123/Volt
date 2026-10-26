@@ -1,6 +1,9 @@
 option clientOutput = "Client.luau"
 option serverOutput = "Server.luau"
 
+-- An unbounded payload reaches past the default maxPacket, which a client's reliable message must fit
+option maxPacket = 131072
+
 type Health = u8(0..100)
 
 event Flags {

@@ -113,15 +113,15 @@ function RobloxTypes:roblox(node: Roblox, write: Block, read: Block, value: stri
 		local item: string = node.item :: string
 		local items: string = self:constant(`Enum.{item}`, item, function (constant: string): string
 			local fill: string =
-				`for _, item: EnumItem in Enum.{item}:GetEnumItems() do\n\t{constant}[item.Value] = item\nend`
-			return `local {constant}: \{ [number]: EnumItem } = \{}\n{fill}`
+				`for _, item: Enum.{item} in Enum.{item}:GetEnumItems() do\n\t{constant}[item.Value] = item\nend`
+			return `local {constant}: \{ [number]: Enum.{item} } = \{}\n{fill}`
 		end)
 
 		local index: number = write:reserve(2)
 		local at: number = read:reserve(2)
 
 		write:line(`buffer.writeu16({write.out}, {write:at(index)}, {value}.Value)`)
-		read:line(`local {result}: EnumItem? = {items}[buffer.readu16(packet, {read:at(at)})]`)
+		read:line(`local {result}: Enum.{item}? = {items}[buffer.readu16(packet, {read:at(at)})]`)
 
 		refuse(read, `not {result}`, `{path}: out of range`)
 	else
@@ -238,9 +238,11 @@ function RobloxTypes:aligned(
 	local parts: { string } = {}
 
 	self.helpers.aligned = true
-	write:line(`local {index}: number? = alignedIndex({value})`)
 
-	refuse(write, `not {index}`, `{path}: expected an axis-aligned rotation`)
+	-- A rotation that is not aligned takes -1, so the local is a number the checker can follow
+	write:line(`local {index}: number = alignedIndex({value}) or -1`)
+
+	refuse(write, `{index} < 0`, `{path}: expected an axis-aligned rotation`)
 	write:line(`buffer.writeu8({write.out}, {write:at(reserved)}, {index})`)
 
 	read:line(`local {rotation}: CFrame? = ALIGNED[buffer.readu8(packet, {read:at(at)}) + 1]`)
@@ -280,8 +282,9 @@ function RobloxTypes:instance(
 		table.insert(terms, self._validate and `typeof({value}) ~= "Instance"` or `{value} == nil`)
 	end
 
+	-- Out of a shared pair's any the checker has nothing to call IsA on, so the value is cast to what it was checked as
 	if self._validate and class then
-		table.insert(terms, `not {value}:IsA("{class}")`)
+		table.insert(terms, `not ({value} :: Instance):IsA("{class}")`)
 	end
 
 	if #terms > 0 then

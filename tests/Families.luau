@@ -31,6 +31,7 @@ local SCHEMAS: { string } = {
 	"Optionals",
 	"Enums",
 	"Unions",
+	"Choices",
 	"Lists",
 	"Tables",
 }

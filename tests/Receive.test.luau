@@ -2,8 +2,8 @@
     Proves the receive side: the loop over a packet's messages, what a
     bad packet or a bad message drops and reports, delivery by call mode
     with the player first on the server and absent on the client, the
-    sync listener's error and yield reports, the queue before the first
-    listener and the poll that drains it
+    sync listener's error and yield reports, the queue while no listener
+    is connected, the poll that drains it, and no cap on what a client hears
 --]]
 
 --!strict
@@ -36,6 +36,7 @@ type Harness = {
 }
 
 local PING: number = 1 -- The one event's id
+local MAX_PACKET: number = 8192 -- The most the server reads in one packet, which says nothing of what the client reads
 
 -- A packet of ping messages, one byte of value each
 local function pings(...: number): buffer
@@ -79,7 +80,7 @@ local function setup(side: string, mode: string, depth: number?, idBytes: number
 		options = {
 			flush = 1,
 			manualReplication = false,
-			maxPacket = 8192,
+			maxPacket = MAX_PACKET,
 			maxPacketsPerSecond = 240,
 			maxOutgoing = 262144,
 			unreliableBudget = 900,
@@ -152,6 +153,26 @@ describe("Receive", function ()
 		expect(table.concat(client.seen, ",")).is("3 nil,5 nil")
 	end)
 
+	test("decodes a server packet larger than maxPacket on the client, which caps nothing it hears", function ()
+		local client: Harness = setup("client", "ManySync")
+		local count: number = MAX_PACKET // 2 + 1 -- Two bytes a ping, so one more than maxPacket holds
+		local packet: buffer = buffer.create(count * 2)
+		local heard: number = 0
+
+		for index = 0, count - 1 do
+			buffer.writeu8(packet, index * 2, PING)
+			buffer.writeu8(packet, index * 2 + 1, 1)
+		end
+
+		client.runtime:on(PING, function ()
+			heard += 1
+		end)
+		send(client, packet)
+
+		expect(heard).is(count)
+		expect(#client.failures).is(0)
+	end)
+
 	test("hands a reader the packet's side array, and an empty one when it carried none", function ()
 		local server: Harness = setup("server", "ManySync")
 
@@ -162,7 +183,7 @@ describe("Receive", function ()
 		expect(table.concat(server.seen, ",")).is("Alice 3 first,Alice 5 second,Alice 7 nil")
 	end)
 
-	test("drops the rest of a packet after an unknown id and reports it once", function ()
+	test("drops the rest of a packet after an unknown id and reports it once, as the packet's", function ()
 		local server: Harness = setup("server", "ManySync")
 		local packet: buffer = pings(3, 5, 7)
 
@@ -172,11 +193,11 @@ describe("Receive", function ()
 
 		expect(table.concat(server.seen, ",")).is("Alice 3 nil")
 		expect(#server.failures).is(1)
-		expect(server.failures[1].kind).is("decode")
+		expect(server.failures[1].kind).is("packet")
 		expect(server.failures[1].detail).is("unknown message 9")
 	end)
 
-	test("reports a reader that refuses its bytes as a decode failure without its position", function ()
+	test("reports a reader that refuses its bytes as a decode failure named for it, without its position", function ()
 		local server: Harness = setup("server", "ManySync")
 
 		server.runtime:on(PING, watcher(server.seen))
@@ -184,7 +205,7 @@ describe("Receive", function ()
 
 		expect(table.concat(server.seen, ",")).is("Alice 3 nil")
 		expect(server.failures[1].kind).is("decode")
-		expect(server.failures[1].detail).is("Ping.value: out of range")
+		expect(server.failures[1].detail).is("Ping: Ping.value: out of range")
 	end)
 
 	test("reads two-byte ids and reports one cut short", function ()
@@ -199,7 +220,7 @@ describe("Receive", function ()
 		send(server, packet)
 
 		expect(table.concat(server.seen, ",")).is("Alice 3 nil")
-		expect(server.failures[1].detail).is("truncated message id")
+		expect(`{server.failures[1].kind}: {server.failures[1].detail}`).is("packet: truncated message id")
 	end)
 
 	test("reports something that is not a packet and reads nothing", function ()
@@ -313,6 +334,25 @@ describe("Receive", function ()
 		send(server, pings(7))
 		expect(table.concat(server.seen, ",")).is("Alice 3 nil,Alice 5 nil,Alice 7 nil")
 	end)
+
+	test(
+		"queues again once the last listener disconnects and replays it all to the next, then delivers live",
+		function ()
+			for _, mode: string in { "SingleAsync", "ManySync" } do
+				local server: Harness = setup("server", mode)
+				local disconnect: () -> () = server.runtime:on(PING, watcher(server.seen))
+
+				send(server, pings(1))
+				disconnect()
+				send(server, pings(2, 3))
+
+				server.runtime:on(PING, watcher(server.seen))
+				send(server, pings(4))
+
+				expect(table.concat(server.seen, ",")).is("Alice 1 nil,Alice 2 nil,Alice 3 nil,Alice 4 nil")
+			end
+		end
+	)
 
 	test("drops the oldest when the queue is full and reports it once", function ()
 		local server: Harness = setup("server", "ManySync", 2)

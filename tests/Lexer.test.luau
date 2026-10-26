@@ -81,7 +81,7 @@ describe("Lexer", function ()
 	end)
 
 	test("strings drop their quotes", function ()
-		expect(summary(`"../src/Net.luau" ""`)).is("string:../src/Net.luau string: eof")
+		expect(summary(`"../src/Network.luau" ""`)).is("string:../src/Network.luau string: eof")
 	end)
 
 	test("ranges", function ()

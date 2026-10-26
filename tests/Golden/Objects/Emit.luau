@@ -27,8 +27,8 @@ local function enumItem(name: string, value: number): EnumItem?
 	return nil
 end
 
-local MATERIAL: { [number]: EnumItem } = {}
-for _, item: EnumItem in Enum.Material:GetEnumItems() do
+local MATERIAL: { [number]: Enum.Material } = {}
+for _, item: Enum.Material in Enum.Material:GetEnumItems() do
 	MATERIAL[item.Value] = item
 end
 
@@ -42,14 +42,14 @@ local function writeObjects(a: Instance, b: BasePart, c: Instance?, d: Model?, e
 
 	slotReliable(a)
 
-	if typeof(b) ~= "Instance" or not b:IsA("BasePart") then
+	if typeof(b) ~= "Instance" or not (b :: Instance):IsA("BasePart") then
 		refuseReliable("Objects.b: expected Instance(BasePart)")
 	end
 
 	slotReliable(b)
 	flags += c ~= nil and 1 or 0
 
-	if typeof(d) ~= "Instance" or not d:IsA("Model") then
+	if typeof(d) ~= "Instance" or not (d :: Instance):IsA("Model") then
 		refuseReliable("Objects.d: expected StreamedInstance(Model)")
 	end
 
@@ -97,7 +97,7 @@ local function readObjects(packet: buffer, cursor: number, side: { any }, sideCu
 		error("Objects.b: expected Instance(BasePart)")
 	end
 
-	local c
+	local c: Instance?
 	local d: Model? = side[sideCursor]
 	sideCursor += 1
 
@@ -175,7 +175,7 @@ local function readItems(packet: buffer, cursor: number, _: { any }, sideCursor:
 		error("Items: truncated")
 	end
 
-	local a: EnumItem? = MATERIAL[buffer.readu16(packet, cursor)]
+	local a: Enum.Material? = MATERIAL[buffer.readu16(packet, cursor)]
 
 	if not a then
 		error("Items.a: out of range")

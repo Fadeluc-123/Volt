@@ -1,5 +1,6 @@
-# Claude Code per-session hook state and personal overrides
+# Claude Code's hooks, settings and instructions, and the knowledge base, all local-only
 .claude/
+CLAUDE.md
 KB/
 
 # Inbox for handoff bundles awaiting ingestion into KB/

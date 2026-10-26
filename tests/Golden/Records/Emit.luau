@@ -41,7 +41,7 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	buffer.writestring(itemOut, itemOffset, item)
 end
 
-local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
+local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number, Stack)
 	if cursor + 4 > length then
 		error("Stack: truncated")
 	end
@@ -114,7 +114,7 @@ local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> 
 	end
 end
 
-local function readSave(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
+local function readSave(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number, Save)
 	if cursor + 3 > length then
 		error("Save: truncated")
 	end
@@ -132,10 +132,10 @@ local function readSave(packet: buffer, cursor: number, side: { any }, sideCurso
 		error("Save.stacks: truncated")
 	end
 
-	local stacks = table.create(stacksLength)
+	local stacks: { Stack } = table.create(stacksLength) :: { Stack }
 
 	for index = 1, stacksLength do
-		local stacksEntry
+		local stacksEntry: Stack
 		cursor, sideCursor, stacksEntry = readStack(packet, cursor, side, sideCursor, length)
 		stacks[index] = stacksEntry
 	end
@@ -203,8 +203,8 @@ local function readRecords(packet: buffer, cursor: number, side: { any }, sideCu
 		error("Records.a.y: length out of range")
 	end
 
-	local c
-	local d
+	local c: Stack
+	local d: Save
 	cursor += 3
 
 	if cursor + yLength > length then
@@ -325,7 +325,7 @@ local function readRows(packet: buffer, cursor: number, _: { any }, sideCursor: 
 		error("Rows.a: truncated")
 	end
 
-	local a = table.create(aLength)
+	local a: { { id: number, name: string, tag: number? } } = table.create(aLength) :: { { id: number, name: string, tag: number? } }
 
 	for index = 1, aLength do
 		if cursor + 3 > length then
@@ -340,7 +340,7 @@ local function readRows(packet: buffer, cursor: number, _: { any }, sideCursor: 
 			error("Rows.a[].name: length out of range")
 		end
 
-		local tag
+		local tag: number?
 		cursor += 3
 
 		if cursor + nameLength > length then
@@ -368,7 +368,7 @@ local function readRows(packet: buffer, cursor: number, _: { any }, sideCursor: 
 		error("Rows.b: truncated")
 	end
 
-	local b = table.create(bLength)
+	local b: { number } = table.create(bLength) :: { number }
 
 	for index_2 = 1, bLength do
 		local bEntry: number = buffer.readu8(packet, cursor)

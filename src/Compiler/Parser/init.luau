@@ -16,6 +16,7 @@ local Lexer = require("./Lexer")
 local Options = require("./Config/Options")
 local Records = require("./Parser/Records")
 local Schema = require("./Config/Types/Schema")
+local Source = require("./Source")
 local Tokens = require("./Parser/Tokens")
 local TypeForms = require("./Parser/TypeForms")
 
@@ -23,7 +24,10 @@ type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
 type Field = Schema.Field
 type File = Schema.File
+type Options = Schema.Options
 type Pack = Schema.Pack
+type Source = Source.Source
+type SourceFile = Source.File
 type Span = Diagnostics.Span
 type Spec = Options.Spec
 type Token = Lexer.Token
@@ -59,6 +63,65 @@ function Parser.parse(tokens: { Token }, diagnostics: Diagnostics): File
 	}, Parser)
 
 	return { options = self._options, declarations = self:declarations(nil) }
+end
+
+--[[
+    The option a file sets first, by where it sits, which is where an
+    option in the wrong file is reported
+--]]
+
+local function firstOption(options: Options): (string?, Span?)
+	local key: string?, span: Span? = nil, nil
+
+	for _, spec: Spec in Options.file do
+		local at: Span? = options.spans[spec.key]
+		if at and (not span or at.start < span.start) then
+			key, span = spec.key, at
+		end
+	end
+
+	return key, span
+end
+
+--[[
+    Lexes and parses every file of a source on its own and joins them into
+    one schema. The options file is the first that sets any option, its
+    declarations go first and the others' follow in the order they were
+    read, and an option set in any other file is reported where it starts
+--]]
+
+function Parser.schema(source: Source, diagnostics: Diagnostics): File
+	local files: { File } = {}
+	local home: number? = nil
+
+	for index: number, entry: SourceFile in source.files do
+		local file: File = Parser.parse(Lexer.scan(source, diagnostics, entry), diagnostics)
+		local key: string?, span: Span? = firstOption(file.options)
+
+		-- The first file to set an option is the options file, so any later one setting one is out of place
+		if span and home then
+			local message: string = `option "{key}" is in a second file; options are set in {source.files[home].path}`
+			diagnostics:error("V2010", message, span)
+		elseif span then
+			home = index
+		end
+
+		table.insert(files, file)
+	end
+
+	-- With no file setting an option the first one stands in, so a missing option is reported at its top
+	local chosen: number = home or 1
+	local first: File = table.remove(files, chosen) :: File
+	local declarations: { Declaration } = first.declarations
+
+	for _, file: File in files do
+		table.move(file.declarations, 1, #file.declarations, #declarations + 1, declarations)
+	end
+
+	source.path = source.files[chosen].path
+	source.start = source.files[chosen].start
+
+	return { options = first.options, declarations = declarations }
 end
 
 --[[

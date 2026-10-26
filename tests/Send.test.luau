@@ -3,7 +3,7 @@
     exactly the bytes and slots written, trims a message to what it wrote,
     splits an unreliable packet between messages to fit the budget, copies
     a broadcast into every target it should reach, takes the scratch state
-    as one packet, undoes a refusal, drops a message past the cap, and counts
+    as one packet, undoes a refusal, drops past the cap, holds and counts
 --]]
 
 --!strict
@@ -272,6 +272,34 @@ describe("Send", function ()
 			expect(#dropped).is(2)
 			expect(buffer.len(fired[1].packet)).is(6)
 			expect(total.messagesOut).is(2)
+		end
+	)
+
+	test(
+		"holds a reliable state past a flush until it is let go, and empties a held unreliable or a refused one",
+		function ()
+			local reliable: Send, sent: { Fired } = recorded()
+			local unreliable: Send, unsent: { Fired } = recorded(10)
+			local kept: State = reliable:add("a", Limits.fresh(), nil, true)
+			local refused: State = reliable:add("b", Limits.fresh())
+
+			refused.refused = true
+			unreliable.current = unreliable:add("a", Limits.fresh(), nil, true)
+			message(unreliable, 3, 1)
+
+			reliable.current = kept
+			message(reliable, 3, 1)
+			reliable.current = reliable.scratch
+			message(reliable, 2, 2)
+			reliable:broadcast()
+
+			reliable:flush()
+			unreliable:flush()
+			expect(`{#sent} {#unsent} {kept.cursor} {refused.cursor} {unreliable.current.cursor}`).is("0 0 5 0 0")
+
+			kept.held = false
+			reliable:flush()
+			expect(buffer.len(sent[1].packet)).is(5)
 		end
 	)
 

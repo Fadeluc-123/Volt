@@ -1,9 +1,9 @@
 --[[
     Checks every resolved type against the wire rules, gives each message
     an id per direction, refuses an unreliable event that cannot fit one
-    fire, and hashes the canonical print of the file. The sizes and the
-    print come from the sibling files, reached through the folder's name
-    because an init file stands for its folder
+    fire and a client's reliable message the server would drop, and hashes
+    the canonical print of the file. The sizes and the print come from the
+    sibling files, reached through the folder's name, as an init file must
 --]]
 
 --!strict
@@ -17,6 +17,7 @@ local Print = require("./Analyse/Print")
 local Roblox = require("./Config/Roblox")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
+local Wire = require("./Config/Wire")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
@@ -39,6 +40,9 @@ local CLASSES: { [string]: string } = {
 	table = "tables",
 	Instance = "instances",
 }
+
+local SLOT_BYTES: number = Wire.slotBytes
+local HANDSHAKE_BYTES: number = Wire.handshakeBytes
 
 local FNV_OFFSET: number = 2166136261
 local FNV_PRIME_LOW: number = 403 -- The prime 16777619 is 2^24 + 403; the split keeps every product exact
@@ -84,10 +88,12 @@ function Analyse.file(file: File, diagnostics: Diagnostics): number
 		_toServer = 0, -- The last id given in each direction
 		_toClient = 0,
 		_unreliable = {} :: { Event }, -- Checked against the budget once the id widths are known
+		_sent = {} :: { Declaration }, -- The reliable messages a client sends, checked against maxPacket likewise
 	}, Analyse)
 
 	self:declarations(file.declarations)
 	self:budget(file.options.unreliableBudget :: number)
+	self:packet(file.options.maxPacket :: number)
 
 	return Analyse.hash(Print.file(file))
 end
@@ -115,6 +121,7 @@ function Analyse:declarations(declarations: { Declaration })
 
 				declaration.toServer = self:next("_toServer")
 				declaration.toClient = self:next("_toClient")
+				table.insert(self._sent, declaration)
 			else
 				if declaration.from == "Client" or declaration.from == "Both" then
 					declaration.toServer = self:next("_toServer")
@@ -126,6 +133,8 @@ function Analyse:declarations(declarations: { Declaration })
 
 				if declaration.type == "Unreliable" then
 					table.insert(self._unreliable, declaration)
+				elseif declaration.toServer then
+					table.insert(self._sent, declaration)
 				end
 			end
 		end
@@ -154,6 +163,30 @@ function Analyse:budget(budget: number)
 			local message: string =
 				`event {event.path} can reach {largest} bytes, over the unreliable budget of {budget}`
 			self._diagnostics:error("V3010", message, event.spans.type)
+		end
+	end
+end
+
+--[[
+    Refuses every reliable message a client sends whose largest size, its
+    id and a call's slot included, would take the frame the handshake
+    opens past maxPacket, since the server drops a packet that long whole
+--]]
+
+function Analyse:packet(maxPacket: number)
+	local idBytes: number = Sizes.idBytes(self._toServer)
+
+	for _, declaration: Declaration in self._sent do
+		local call: boolean = declaration.kind == "function"
+		local data: (Type | Pack)? = (declaration :: any).data
+		local payload: Size = data and Sizes.size(data) or Sizes.fixed(0)
+		local largest: number = idBytes + (call and SLOT_BYTES or 0) + select(2, Sizes.block(payload))
+
+		if largest + HANDSHAKE_BYTES > maxPacket then
+			local named: string = call and `function {declaration.path}'s call` or `event {declaration.path}`
+			local message: string =
+				`{named} can reach {largest} bytes, over maxPacket {maxPacket} with the {HANDSHAKE_BYTES}-byte handshake`
+			self._diagnostics:error("V3012", message, declaration)
 		end
 	end
 end

@@ -1,6 +1,9 @@
 option clientOutput = "Client.luau"
 option serverOutput = "Server.luau"
 
+-- An unbounded payload reaches past the default maxPacket, which a client's reliable message must fit
+option maxPacket = 131072
+
 export struct Stack { item: string(1..8), quantity: u16(1..999), properties: unknown? }
 
 event Lists {

@@ -14,21 +14,20 @@ local Diagnostics = require("./Diagnostics")
 local Options = require("./Config/Options")
 local Parser = require("./Parser")
 local Schema = require("./Config/Types/Schema")
+local Source = require("./Source")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
 type File = Schema.File
 type Options = Schema.Options
 type Pack = Schema.Pack
+type Source = Source.Source
 type Span = Diagnostics.Span
 type Spec = Options.Spec
 type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
 
 local KINDS: { [string]: string } = { event = "an event", ["function"] = "a function", namespace = "a namespace" }
-
--- Where a diagnostic about the file as a whole points
-local FILE_START: Span = { start = 1, finish = 1 }
 
 --[[
     Fills the keys of a message that default from a file option, as the
@@ -57,7 +56,7 @@ function Resolve.file(file: File, diagnostics: Diagnostics)
 		_promise = nil :: Span?, -- What first asked for a promise yield
 	}, Resolve)
 
-	self:options(file.options, diagnostics.source.path)
+	self:options(file.options, diagnostics.source)
 	self:declare(file.declarations, "")
 	self:bind(file.declarations, "", file.options)
 	self:cycles(file.declarations)
@@ -73,15 +72,19 @@ end
 
 --[[
     Reports the options that must be present, fills in every default and
-    checks the numbers; the scope defaults to the schema file's own name
+    checks the numbers; the scope defaults to the options file's own name,
+    and a missing option is reported at the top of that file
 --]]
 
-function Resolve:options(options: Options, path: string)
+function Resolve:options(options: Options, source: Source)
+	local top: Span = { start = source.start, finish = source.start }
+	local path: string = source.path
+
 	for _, spec: Spec in Options.file do
 		if options[spec.key] ~= nil then
 			continue
 		elseif spec.required then
-			self._diagnostics:error("V3004", `missing option {spec.key}`, FILE_START)
+			self._diagnostics:error("V3004", `missing option {spec.key}`, top)
 		end
 
 		options[spec.key] = spec.default

@@ -257,6 +257,29 @@ describe("Analyse", function ()
 			)
 		end)
 
+		test("V3012 refuses a client's reliable message that cannot share a frame with the handshake", function ()
+			local fragment: { string } = {
+				"option maxPacket = 12",
+				"event Fits { from: Client, type: Reliable, call: SingleSync, data: (a: u32, b: u16) }",
+				"namespace N { event Big { from: Both, type: Reliable, call: SingleSync, data: (a: u32, b: u16, c: u8) } }",
+				"event Down { from: Server, type: Reliable, call: SingleSync, data: u64 }",
+				"function Ask { data: (a: u32, b: u8) }",
+			}
+			local text: string = schema(table.concat(fragment, "\n"))
+			local big: string = rendered(
+				text,
+				"Big",
+				"error V3012: event N.Big can reach 8 bytes, over maxPacket 12 with the 5-byte handshake"
+			)
+			local ask: string = rendered(
+				text,
+				"Ask",
+				"error V3012: function Ask's call can reach 8 bytes, over maxPacket 12 with the 5-byte handshake"
+			)
+
+			expect(report(text)).is(`{big}\n\n{ask}`)
+		end)
+
 		test("V3011 reports a range a primitive cannot take", function ()
 			local text: string = schema(
 				"type A = q16\ntype B = q8(0..)\ntype C = boolean(0..1)\ntype D = u8(0..256)\ntype E = i8(-129..0)\ntype F = u16(1.5..3)\ntype G = u8(5..2)\ntype H = string(-1..4)\ntype I = u8[3..1]\ntype J = f32(0.5..1.5)\ntype K = u64(0..18446744073709551615)"

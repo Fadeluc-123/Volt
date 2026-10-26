@@ -3,7 +3,7 @@ local beginReliable, trimReliable, allocateReliable, slotReliable, refuseReliabl
 export type Reference = string
 export type Team = "Red" | "Blue"
 
-local TEAM: { string } = { "Red", "Blue" }
+local TEAM: { "Red" | "Blue" } = { "Red", "Blue" }
 
 local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
@@ -18,13 +18,13 @@ local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (),
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number, Team)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local value: string? = TEAM[bit32.extract(flags, 0, 1) + 1]
+	local value: ("Red" | "Blue")? = TEAM[bit32.extract(flags, 0, 1) + 1]
 
 	if not value then
 		error("Team: out of range")
@@ -121,11 +121,11 @@ local function readOptionals(packet: buffer, cursor: number, _: { any }, sideCur
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local a
-	local b
-	local c
-	local d
-	local e
+	local a: number?
+	local b: string?
+	local c: { n: number }?
+	local d: boolean?
+	local e: Reference?
 	cursor += 1
 
 	if bit32.btest(flags, 1) then
@@ -299,21 +299,21 @@ local function readNested(packet: buffer, cursor: number, side: { any }, sideCur
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local slots
+	local slots: { { id: number, tag: Team? } }?
 	cursor += 1
 
 	if cursor + 4 > length then
 		error("Nested.grid: truncated")
 	end
 
-	local grid = table.create(2)
+	local grid: { { number } } = table.create(2) :: { { number } }
 
 	for index = 1, 2 do
 		if cursor + 2 > length then
 			error("Nested.grid[]: truncated")
 		end
 
-		local gridEntry = table.create(2)
+		local gridEntry: { number } = table.create(2) :: { number }
 
 		for index_2 = 1, 2 do
 			local gridEntryEntry: number = buffer.readu8(packet, cursor)
@@ -341,7 +341,7 @@ local function readNested(packet: buffer, cursor: number, side: { any }, sideCur
 			error("Nested.slots: truncated")
 		end
 
-		local slots_2 = table.create(slotsLength)
+		local slots_2: { { id: number, tag: Team? } } = table.create(slotsLength) :: { { id: number, tag: Team? } }
 
 		for index_3 = 1, slotsLength do
 			if cursor + 2 > length then
@@ -350,11 +350,11 @@ local function readNested(packet: buffer, cursor: number, side: { any }, sideCur
 
 			local flags_2: number = buffer.readu8(packet, cursor)
 			local id: number = buffer.readu8(packet, cursor + 1)
-			local tag
+			local tag: Team?
 			cursor += 2
 
 			if bit32.btest(flags_2, 1) then
-				local tag_2
+				local tag_2: Team
 				cursor, sideCursor, tag_2 = readTeam(packet, cursor, side, sideCursor, length)
 				tag = tag_2
 			end

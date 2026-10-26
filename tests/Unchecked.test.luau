@@ -151,6 +151,7 @@ describe("An unchecked writer that raises", function ()
 
 		harness.server.Damage.fireAll({ target = 5, amount = 2 })
 		exchange(harness.mock)
+		harness.mock:step() -- Held until the clients' handshakes arrive, a step after they are flushed
 
 		expect(table.concat(heard, ",")).is("5 2,5 2")
 	end)

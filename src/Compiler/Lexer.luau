@@ -11,6 +11,7 @@ local Primitives = require("./Config/Primitives")
 local Source = require("./Source")
 
 type Diagnostics = Diagnostics.Diagnostics
+type File = Source.File
 type Source = Source.Source
 
 export type Kind = "keyword" | "primitive" | "name" | "number" | "string" | "range" | "punctuation" | "eof"
@@ -65,16 +66,20 @@ local function matchAt(text: string, cursor: number): (string?, number)
 end
 
 --[[
-    Scans the whole source into tokens, reporting into the diagnostics.
-    Whitespace and comments produce no token, and the last token is eof
+    Scans the whole source, or one file of it, into tokens, reporting into
+    the diagnostics. Whitespace and comments produce no token, and the last
+    token is eof, one past the end of what was scanned
 --]]
 
-function Lexer.scan(source: Source, diagnostics: Diagnostics): { Token }
+function Lexer.scan(source: Source, diagnostics: Diagnostics, file: File?): { Token }
 	local text: string = source.text
 	local tokens: { Token } = {}
-	local cursor: number = 1
 
-	while cursor <= #text do
+	-- A file scanned on its own stops at its end, so nothing left open in it runs into the next
+	local cursor: number = file and file.start or 1
+	local last: number = file and file.finish or #text
+
+	while cursor <= last do
 		local kind: string?, finish: number = matchAt(text, cursor)
 		local value: string = text:sub(cursor, finish)
 
@@ -104,7 +109,7 @@ function Lexer.scan(source: Source, diagnostics: Diagnostics): { Token }
 		cursor = finish + 1
 	end
 
-	table.insert(tokens, { kind = "eof", value = "", start = #text + 1, finish = #text + 1 })
+	table.insert(tokens, { kind = "eof", value = "", start = last + 1, finish = last + 1 })
 	return tokens
 end
 

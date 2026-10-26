@@ -32,6 +32,8 @@ type Parameter = Contract.Parameter
 type Send = { name: string, type: string, from: string }
 
 local VERSION: string = Contract.version
+local BOT: string = "type Bot = Volt.Bot" -- A bot is the runtime's type, which every player in a signature may be
+local HANDSHAKE: string = "Volt" -- What a handshake failure's detail opens with, as a message's name opens its own
 
 -- The send functions a writer may name, in the order they are declared; filled from the contract below
 local SENDS: { Send } = {}
@@ -48,6 +50,43 @@ end
 
 table.insert(SENDS, { name = "markUnreliable", type = "() -> ()", from = "runtime.unreliable.mark" })
 
+-- Whether a text reaches for a module-level name: calls it, indexes it or hands it on, never a field so named
+local function reaches(text: string, name: string): boolean
+	-- A refusal's message opens with the message's name, so a string's text is blanked first, escapes before quotes
+	local code: string = text:gsub("\\.", ""):gsub('"[^"]*"', '""')
+
+	for after: string in (`\n{code}`):gmatch(`[^%w_.:]{name}%f[^%w_]%s*(=?=?)`) do
+		if after ~= "=" then
+			return true
+		end
+	end
+	return false
+end
+
+--[[
+    The module-level pieces a module keeps, each a helper, a constant or
+    one half of a shared pair: walked from the last, since a piece names
+    only those above it, and kept when the text below that is kept names
+    the one local it declares
+--]]
+
+local function kept(pieces: { string }, below: string): { string }
+	local list: { string } = {}
+	local used: string = below
+
+	for index: number = #pieces, 1, -1 do
+		local piece: string = pieces[index]
+		local name: string = piece:match("local function ([%w_]+)") or piece:match("local ([%w_]+)") :: string
+
+		if reaches(used, name) then
+			table.insert(list, 1, piece)
+			used = `{used}\n{piece}`
+		end
+	end
+
+	return list
+end
+
 -- The rows of a schema table by id, or an empty table when the side has none
 local function rows(list: { [number]: string }, count: number): string
 	local lines: { string } = {}
@@ -62,7 +101,9 @@ end
 --[[
     The three modules of a file: the client's, the server's and the types.
     A top-level declaration that would take the place of one of the API's
-    own members is refused first, in the casing the schema asks for
+    own members is refused first, in the casing the schema asks for, so is
+    one named like a handshake failure's prefix, and so is a top-level
+    type named like one the modules declare or name
 --]]
 
 function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string, string)
@@ -77,6 +118,18 @@ function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (s
 					`"{declaration.name}" is a member of the generated API and cannot be a top-level name`
 				diagnostics:error("V4001", message, declaration)
 			end
+		end
+
+		-- Refused whatever the casing, since a handshake failure's detail would read as this message's own
+		if declaration.name == HANDSHAKE then
+			local message: string = `"{HANDSHAKE}" opens a handshake failure's detail and cannot be a top-level name`
+			diagnostics:error("V4001", message, declaration)
+		end
+
+		if declaration.kind == "type" and table.find(Reserved.types, declaration.name) then
+			local message: string =
+				`"{declaration.name}" is a type the generated modules declare or name and cannot name a type`
+			diagnostics:error("V4002", message, declaration)
 		end
 	end
 
@@ -110,9 +163,9 @@ end
 --[[
     The module text: the API first, since walking the events is what
     emits the functions and the rows, then every piece in the order the
-    file reads. The named types are spelled out here whatever the schema
-    asks, so every signature resolves; the handle types too, unless a
-    types module carries them
+    file reads, the helpers, constants and shared halves only when a kept
+    function names them. The named types and this side's handle types are
+    always spelled out, the handles local when a types module exports them
 --]]
 
 function Targets:render(hash: number, name: string): string
@@ -125,6 +178,7 @@ function Targets:render(hash: number, name: string): string
 	local declared: { string } = { "local runtime: Volt.Runtime" }
 	local assigned: { string } = {}
 	local helpers: { string } = {}
+	local pieces: { string } = {}
 
 	for _, send: Send in SENDS do
 		if body:find(send.name, 1, true) then
@@ -139,28 +193,32 @@ function Targets:render(hash: number, name: string): string
 
 	table.sort(helpers)
 
+	for _, helper: string in helpers do
+		table.move(Helpers[helper], 1, #Helpers[helper], #pieces + 1, pieces)
+	end
+	for _, constant: string in emitter.constants do
+		table.insert(pieces, `{constant}\n`)
+	end
+
+	table.move(emitter.functions, 1, #emitter.functions, #pieces + 1, pieces)
+
 	local parts: { string } = { self:header(name) }
 
 	if #named > 0 then
 		table.insert(parts, `{table.concat(named, "\n")}\n`)
 	end
 
-	if not file.options.typesOutput then
-		for _, handle: string in Types.handles(self._side, self._casing) do
-			table.insert(parts, `{handle}\n`)
-		end
+	table.insert(parts, `{BOT}\n`)
+
+	for _, handle: string in Types.handles(self._side, self._casing, not file.options.typesOutput) do
+		table.insert(parts, `{handle}\n`)
 	end
 
 	table.insert(parts, `{table.concat(declared, "\n")}\n`)
 
-	for _, helper: string in helpers do
-		table.insert(parts, Helpers[helper])
-	end
-	for _, constant: string in emitter.constants do
-		table.insert(parts, `{constant}\n`)
-	end
+	local needed: { string } = kept(pieces, `{body}\n{api}`)
 
-	table.move(emitter.functions, 1, #emitter.functions, #parts + 1, parts)
+	table.move(needed, 1, #needed, #parts + 1, parts)
 	table.move(self._functions, 1, #self._functions, #parts + 1, parts)
 	table.insert(parts, self:start(hash))
 
@@ -173,9 +231,9 @@ function Targets:render(hash: number, name: string): string
 		table.insert(parts, "local before: { [number]: Volt.Hook } = runtime.before\n")
 	end
 
-	table.insert(parts, `local net = \{\n{Blocks.indent(1, api)}\n}\n`)
+	table.insert(parts, `local Network = \{\n{Blocks.indent(1, api)}\n}\n`)
 	table.insert(parts, `{registry}\n`)
-	table.insert(parts, "return table.freeze(net)\n")
+	table.insert(parts, "return table.freeze(Network)\n")
 
 	return table.concat(parts, "\n")
 end

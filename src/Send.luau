@@ -1,9 +1,9 @@
 --[[
     The send side of one reliability: a state per target with a growing
     buffer, a side array and their cursors; the calls every generated
-    writer makes, which begin or trim a message, take its bytes, store a
-    slot or refuse a value; what a raise leaves taken back; the flush's
-    marks; a broadcast written once and copied; the cap and the counters
+    writer makes to begin or trim a message, take bytes, store a slot or
+    refuse a value; what a raise leaves taken back; the flush's marks and
+    holds; a broadcast written once and copied; the cap and the counters
 --]]
 
 --!strict
@@ -12,9 +12,11 @@ local Send = {} :: any
 Send.__index = Send
 
 local Config = require("./Config/Runtime")
+local Traffic = require("./Traffic")
 local Types = require("./Config/Types/Runtime")
 
 type Fire = Types.Fire
+type Record = Types.Record
 type Stats = Types.Stats
 
 local INITIAL_BYTES: number = Config.initialBytes
@@ -32,6 +34,9 @@ export type State = {
 	sideCommitted: number, -- The side cursor where it began
 	target: any, -- Who the state's bytes go to; nil for the scratch state
 	stats: Stats?, -- The target's counters; the scratch state has none, since a broadcast counts once per target
+	record: Record?, -- The target's byte count across the VM, for a player or a bot
+	held: boolean, -- Until the player's handshake: a flush keeps reliable bytes and drops unreliable ones
+	refused: boolean, -- After a failed handshake: nothing is written or kept for the player again
 }
 
 export type Send = {
@@ -43,7 +48,7 @@ export type Send = {
 	mark: () -> (),
 	current: State,
 	scratch: State,
-	add: (self: Send, target: any, stats: Stats) -> State,
+	add: (self: Send, target: any, stats: Stats, record: Record?, held: boolean?) -> State,
 	remove: (self: Send, target: any) -> (),
 	broadcast: (self: Send, targets: { [any]: any }?, except: any?) -> (),
 	undo: (self: Send, name: string, message: any) -> string,
@@ -51,7 +56,7 @@ export type Send = {
 	flush: (self: Send) -> (),
 }
 
-local function blank(target: any, stats: Stats?): State
+local function blank(target: any, stats: Stats?, record: Record?, held: boolean): State
 	return {
 		out = buffer.create(INITIAL_BYTES),
 		cursor = 0,
@@ -63,6 +68,9 @@ local function blank(target: any, stats: Stats?): State
 		sideCommitted = 1,
 		target = target,
 		stats = stats,
+		record = record,
+		held = held,
+		refused = false,
 	}
 end
 
@@ -92,17 +100,14 @@ local function rollback(state: State, total: Stats)
 end
 
 --[[
-    A send for one reliability, firing through the transport's function
-    for it, counting into the runtime's totals and reporting a dropped
-    message for its target. Every send takes the most a target's frame
-    may hold, the schema's cap; an unreliable send also takes the budget
-    one fire may carry, where a reliable send has no limit. The calls a
-    writer makes are plain functions because every generated writer takes
-    them as values
+    A send for one reliability over the transport's fire, counting into the
+    runtime's totals and reporting a dropped message for its target, with the
+    cap a target's frame may hold and, unreliable, the budget one fire may
+    carry. A writer's calls are plain functions, as writers take them as values
 --]]
 
 function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: number, budget: number?): Send
-	local scratch: State = blank(nil, nil)
+	local scratch: State = blank(nil, nil, nil, false)
 	local self: Send
 
 	-- Takes bytes at the end of the current buffer, growing it when the frame needs more than it holds
@@ -135,7 +140,9 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		local stats: Stats? = state.stats
 
 		if state.cursor > cap then
-			(self :: any):_discard(state)
+			rollback(state, total)
+			dropped(state.target)
+			self.current = state -- The failure handler may have fired, which points the send at another target
 		end
 
 		state.committed = state.cursor
@@ -188,28 +195,43 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		_dropped = dropped,
 		_cap = cap,
 		_budget = budget or math.huge,
+		_keeps = budget == nil, -- A reliable send has no budget and keeps a held state's bytes; an unreliable one drops them
 		_states = {} :: { [any]: State },
+		_drops = {} :: { any }, -- Whom a copy or a flush dropped a message for, told once its loop is done
 	}, Send) :: any
 
 	return self
 end
 
--- A state for a target that joined, counting into their counters; nothing is ever sent to a target without one
-function Send:add(target: any, stats: Stats): State
-	local state: State = blank(target, stats)
+-- A joiner's state, counting into their counters and byte count, held until their handshake when a client will send one
+function Send:add(target: any, stats: Stats, record: Record?, held: boolean?): State
+	local state: State = blank(target, stats, record, held == true)
+
 	self._states[target] = state
+
+	if record then
+		record.states[state] = true
+	end
+
 	return state
 end
 
 function Send:remove(target: any)
+	local state: State? = self._states[target]
+	local record: Record? = state and state.record
+
+	if record then
+		record.states[state] = nil
+	end
+
 	self._states[target] = nil
 end
 
 --[[
     Copies what a broadcast wrote to the scratch state into every
-    target's state, or into those listed or set, or into all but one;
-    a target that has left is skipped. Then the scratch state is empty
-    again
+    target's state, or into those listed or set, or into all but one,
+    skipping one who has left or whose handshake failed; then empties the
+    scratch state, and only then reports a message a copy dropped
 --]]
 
 function Send:broadcast(targets: { [any]: any }?, except: any?)
@@ -227,12 +249,17 @@ function Send:broadcast(targets: { [any]: any }?, except: any?)
 	end
 
 	reset(self.scratch)
+	self:_tell()
 end
 
 -- Appends the scratch state's bytes, slots and marks to one target's state as one message of its own
 function Send:_copy(state: State?)
-	if not state then
+	if not state or state.refused then
 		return
+	end
+
+	if state.cursor > self._cap then
+		self:_discard(state) -- A handler told now could broadcast and empty the scratch state mid copy
 	end
 
 	local scratch: State = self.scratch
@@ -258,10 +285,9 @@ end
 
 --[[
     Takes back what a writer left in the current state when it raised and
-    returns the error to raise again. A refusal has already returned the
-    state to where its message began and goes on as it was; anything else
-    left bytes behind, since begin is a writer's first call and takes the
-    id at least, so they go, the message is uncounted and the error named
+    returns the error to raise again: a refusal returned the state already
+    and goes on as it was, while anything else left bytes behind, since
+    begin takes the id at least, so they go, uncounted, and the error is named
 --]]
 
 function Send:undo(name: string, message: any): string
@@ -293,10 +319,11 @@ function Send:take(): (buffer, { any }?)
 end
 
 --[[
-    Fires every target's bytes as exact packets, then empties the
-    states for the next frame. A run of whole messages goes in one
-    packet while it fits the budget, so an unreliable fire never carries
-    part of a message; a reliable state has no budget and goes in one
+    Fires every target's bytes as exact packets, a run of whole messages
+    to a packet while it fits the budget, and empties the states for the
+    next frame; a held state keeps its reliable bytes for the flush after
+    the handshake, a refused or held unreliable one goes unsent, and a
+    drop is reported once the loop is done, since its handler may fire
 --]]
 
 function Send:flush()
@@ -305,16 +332,27 @@ function Send:flush()
 			self:_discard(state)
 		end
 
-		if state.cursor > 0 then
+		if state.refused or state.held and not self._keeps then
+			reset(state)
+		elseif state.cursor > 0 and not state.held then
 			self:_send(target, state)
 		end
 	end
+
+	self:_tell()
 end
 
--- Drops the message that left a state over the cap, which is the last one written, and reports it for its target
+-- Drops the message that left a state over the cap, the last one written, and keeps its target to be told
 function Send:_discard(state: State)
 	rollback(state, self._total)
-	self._dropped(state.target)
+	table.insert(self._drops, state.target)
+end
+
+-- Tells the runtime of every message dropped since it was last told, once the writes that dropped them are done
+function Send:_tell()
+	while self._drops[1] do
+		self._dropped(table.remove(self._drops, 1))
+	end
 end
 
 function Send:_send(target: any, state: State)
@@ -342,6 +380,7 @@ function Send:_packet(target: any, state: State, from: number, to: number, sideF
 	local side: { any }? = sideTo > sideFrom and table.move(state.side, sideFrom, sideTo - 1, 1, {}) or nil
 	local stats: Stats = state.stats :: Stats
 	local total: Stats = self._total
+	local record: Record? = state.record
 
 	buffer.copy(packet, 0, state.out, from, bytes)
 
@@ -350,6 +389,10 @@ function Send:_packet(target: any, state: State, from: number, to: number, sideF
 
 	total.packetsOut += 1
 	total.bytesOut += bytes
+
+	if record then
+		Traffic.add(record, bytes)
+	end
 
 	self._fire(target, packet, side)
 end

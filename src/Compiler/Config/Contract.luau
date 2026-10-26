@@ -31,7 +31,7 @@ local Contract = {
 	} :: { Parameter },
 
 	message = {
-		{ name = "player", type = "Player?" }, -- Nil on the client, which is how the runtime tells the sides apart
+		{ name = "player", type = "(Player | Bot)?" }, -- Nil on the client, which is how the runtime tells the sides apart
 	} :: { Parameter },
 
 	-- What the runtime reads

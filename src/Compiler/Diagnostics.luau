@@ -1,8 +1,8 @@
 --[[
     The problems found while compiling one schema. Every stage reports into
     it with a code, a message and a span, and it renders each entry as a
-    location line and a two-line excerpt of the source with the span
-    underlined, so one run shows every problem in the file
+    location line in the file the span falls in and a two-line excerpt of
+    it with the span underlined, so one run shows every problem in a schema
 --]]
 
 --!strict
@@ -11,6 +11,7 @@ Diagnostics.__index = Diagnostics
 
 local Source = require("./Source")
 
+type File = Source.File
 type Source = Source.Source
 
 export type Span = { start: number, finish: number }
@@ -63,16 +64,18 @@ function Diagnostics:render(): string
 
 	for _, diagnostic: Diagnostic in self.list do
 		local span: Span = diagnostic.span
+		local file: File = source:file(span.start)
 		local line: number, column: number = source:position(span.start)
 		local text: string = source:lineText(line)
 		local lineEnd: number = span.start - column + #text
 		local length: number = math.max(1, math.min(span.finish, lineEnd) - span.start + 1)
+		local shown: number = line - file.line + 1 -- Counted from the top of the span's own file
 
 		-- Tabs are kept in the underline's lead so the carets line up with the excerpt
 		local lead: string = text:sub(1, column - 1):gsub("[^\t]", " ")
 		local location: string =
-			`{source.path}:{line}:{column}: {diagnostic.severity} {diagnostic.code}: {diagnostic.message}`
-		local excerpt: string = string.format("%5d | %s", line, text)
+			`{file.path}:{shown}:{column}: {diagnostic.severity} {diagnostic.code}: {diagnostic.message}`
+		local excerpt: string = string.format("%5d | %s", shown, text)
 		local underline: string = `      | {lead}{string.rep("^", length)}`
 
 		table.insert(rendered, `{location}\n{excerpt}\n{underline}`)

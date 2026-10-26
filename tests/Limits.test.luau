@@ -2,8 +2,8 @@
     Proves the limits: what the server drops before decoding, which is a
     packet before the handshake, one with the wrong hash, which kicks,
     one over maxPacket and one past the packet rate; the message past its
-    event's or function's rate; the outgoing cap; the counters; and over
-    the generated modules the handshake passing and failing
+    rate; the outgoing cap; the counters and the handler onFailure swaps;
+    and over the generated modules the handshake, both rates and a raise
 --]]
 
 --!strict
@@ -141,6 +141,28 @@ describe("Limits", function ()
 		expect(harness.runtime:stats().failures.handshake).is(1)
 	end)
 
+	test("hands a handler a failure already counted, and onFailure returns the handler it replaced", function ()
+		local harness: Harness = setup()
+		local counted: { number } = {}
+
+		local function first(player: any, kind: string)
+			table.insert(counted, harness.runtime:stats(player).failures[kind])
+		end
+
+		local default: Volt.Failure = harness.runtime:onFailure(first)
+		send(harness, packet({ PING, 3 }))
+
+		local replaced: Volt.Failure = harness.runtime:onFailure(function () end)
+		send(harness, packet({ PING, 3 }))
+
+		-- The one a runtime starts with is a plain function a game can call, which kicks on a handshake failure
+		default(harness.player, "handshake", "mismatch")
+
+		expect(table.concat(counted, ",")).is("1")
+		expect(replaced == first).is(true)
+		expect(harness.player.kicked).is("mismatch")
+	end)
+
 	test("admits the handshake, reads what follows it in the same packet, and expects no second", function ()
 		local harness: Harness = setup()
 
@@ -150,7 +172,7 @@ describe("Limits", function ()
 
 		expect(table.concat(harness.seen, ",")).is("ping 3")
 		expect(#harness.failures).is(1)
-		expect(harness.failures[1].detail).is("unknown message 0")
+		expect(`{harness.failures[1].kind}: {harness.failures[1].detail}`).is("packet: unknown message 0")
 	end)
 
 	test("drops a packet over maxPacket unread", function ()
@@ -231,6 +253,8 @@ describe("Limits", function ()
 	describe("over the generated modules", function ()
 		local EVENTS: string = fs.readFile("tests/Schemas/Events.volt")
 		local CLIENT: string, SERVER: string = Generated.modules("Events", EVENTS)
+		local FUNCTIONS_CLIENT: string, FUNCTIONS_SERVER: string =
+			Generated.modules("Functions", fs.readFile("tests/Schemas/Functions.volt"))
 
 		-- Counts a runtime's failures without the warnings the handler it starts with would print
 		local function quiet(server: any)
@@ -243,7 +267,7 @@ describe("Limits", function ()
 			local alice, transport = mock:join("Alice")
 			local server: any = Generated.module("Server", SERVER, mock.server)
 
-			return mock, alice, server, Generated.module("Client", client, transport)
+			return mock, alice, server, (Generated.module("Client", client, transport))
 		end
 
 		-- One step flushes what was fired and the next delivers it
@@ -305,12 +329,10 @@ describe("Limits", function ()
 		end)
 
 		test("the call past a function's rate is refused with rate limited", function ()
-			local clientText: string, serverText: string =
-				Generated.modules("Functions", fs.readFile("tests/Schemas/Functions.volt"))
 			local mock: Mock = Volt.mock(task.spawn)
 			local _, transport = mock:join("Alice")
-			local server: any = Generated.module("Server", serverText, mock.server)
-			local client: any = Generated.module("Client", clientText, transport)
+			local server: any = Generated.module("Server", FUNCTIONS_SERVER, mock.server)
+			local client: any = Generated.module("Client", FUNCTIONS_CLIENT, transport)
 			local results: { string } = {}
 
 			quiet(server)
@@ -331,6 +353,40 @@ describe("Limits", function ()
 
 			expect(results[ECHO_RATE]).is(`true {ECHO_RATE}`)
 			expect(results[ECHO_RATE + 1]).is("false rate limited")
+			expect(server.stats().failures.rate).is(1)
+		end)
+
+		test("a failure handler that raises neither holds up the reply past a rate nor escapes the step", function ()
+			local mock: Mock = Volt.mock(task.spawn)
+			local _, transport = mock:join("Alice")
+			local server: any = Generated.module("Server", FUNCTIONS_SERVER, mock.server)
+			local client: any = Generated.module("Client", FUNCTIONS_CLIENT, transport)
+			local results: { string } = {}
+
+			server.onFailure(function ()
+				error("the game's router broke")
+			end)
+
+			server.Echo.on(function (_, value: number): number
+				return value
+			end)
+			
+			server.rate("Echo", 1)
+
+			for index: number = 1, 2 do
+				task.spawn(function ()
+					local ok: boolean, value: any = client.Echo.invoke(index)
+					results[index] = `{ok} {value}`
+				end)
+			end
+
+			local stepped: boolean = pcall(function ()
+				exchange(mock)
+				mock:step()
+			end)
+
+			expect(stepped).is(true)
+			expect(table.concat(results, ",")).is("true 1,false rate limited")
 			expect(server.stats().failures.rate).is(1)
 		end)
 	end)

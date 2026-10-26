@@ -12,20 +12,26 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
+type Bot = Volt.Bot
+
 export type ServerEvent<A...> = {
-	fire: (player: Player, A...) -> (),
+	fire: (player: Player | Bot, A...) -> (),
 	fireAll: (A...) -> (),
-	fireList: (players: { Player }, A...) -> (),
-	fireExcept: (player: Player, A...) -> (),
-	fireSet: (players: { [Player]: true }, A...) -> (),
+	fireList: (players: { Player | Bot }, A...) -> (),
+	fireExcept: (player: Player | Bot, A...) -> (),
+	fireSet: (players: { [Player | Bot]: true }, A...) -> (),
 }
 
 export type ServerListener<A...> = {
-	on: (listener: (player: Player, A...) -> ()) -> () -> (),
-	iter: () -> () -> (number, Player, A...),
+	on: (listener: (player: Player | Bot, A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, Player | Bot, A...),
 }
 
-export type ServerFunction<A..., R...> = { on: (handler: (player: Player, A...) -> R...) -> () -> () }
+export type ServerPolling<A...> = { iter: () -> () -> (number, Player | Bot, A...) }
+
+export type ServerFunction<A..., R...> = {
+	on: (handler: (player: Player | Bot, A...) -> R...) -> () -> (),
+}
 
 export type Exported<T> = {
 	write: (value: T) -> (buffer, { any }?),
@@ -38,7 +44,7 @@ local trimReliable: (number) -> ()
 local allocateReliable: (number) -> (number, buffer)
 local refuseReliable: (string) -> never
 
-local function readEcho(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readEcho(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Echo: truncated")
 	end
@@ -67,7 +73,7 @@ local function writeEcho(slot: number, status: number, value: number)
 	end
 end
 
-local function readPing(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readPing(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 2 > length then
 		error("Ping: truncated")
 	end
@@ -85,7 +91,7 @@ local function writePing(slot: number, status: number)
 	buffer.writeu8(out, offset + 3, status)
 end
 
-local function readDivide(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readDivide(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 18 > length then
 		error("Divide: truncated")
 	end
@@ -140,7 +146,7 @@ local function writeDivide(slot: number, status: number, ok: boolean, quotient: 
 	trimReliable(offset)
 end
 
-local function readInventory_Transfer(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readInventory_Transfer(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 6 > length then
 		error("Inventory.Transfer: truncated")
 	end
@@ -228,32 +234,34 @@ trimReliable = runtime.reliable.trim
 allocateReliable = runtime.reliable.allocate
 refuseReliable = runtime.reliable.refuse
 
-local net = {
+local Network = {
 	Echo = table.freeze({
-		on = function (handler: (player: Player, value: number) -> (number)): () -> ()
+		on = function (handler: (player: Player | Bot, value: number) -> (number)): () -> ()
 			return runtime:handle(1, handler)
 		end,
-	}),
+	}) :: ServerFunction<(number), (number)>,
 
 	Ping = table.freeze({
-		on = function (handler: (player: Player) -> ()): () -> ()
+		on = function (handler: (player: Player | Bot) -> ()): () -> ()
 			return runtime:handle(2, handler)
 		end,
-	}),
+	}) :: ServerFunction<(), ()>,
 
 	Divide = table.freeze({
-		on = function (handler: (player: Player, dividend: number, divisor: number) -> (boolean, number?)): () -> ()
+		on = function (handler: (player: Player | Bot, dividend: number, divisor: number) -> (boolean, number?)): () -> ()
 			return runtime:handle(3, handler)
 		end,
-	}),
+	}) :: ServerFunction<(number, number), (boolean, number?)>,
 
 	Inventory = table.freeze({
 		Transfer = table.freeze({
-			on = function (handler: (player: Player, source: number, destination: number, quantity: number) -> (boolean, string?)): () -> ()
+			on = function (handler: (player: Player | Bot, source: number, destination: number, quantity: number) -> (boolean, string?)): () -> ()
 				return runtime:handle(4, handler)
 			end,
-		}),
+		}) :: ServerFunction<(number, number, number), (boolean, string?)>,
 	}),
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -266,24 +274,42 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
+
+	onJoin = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onJoin(callback)
+	end,
+
+	onLeave = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onLeave(callback)
+	end,
+
+	onHandshake = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onHandshake(callback)
+	end,
+
+	traffic = function (player: Player | Bot): (number, number)
+		return runtime:traffic(player)
+	end,
+
+	isBot = runtime.isBot,
 }
 
-net.events = table.freeze({})
+Network.events = table.freeze({}) :: { [string]: any }
 
-net.functions = table.freeze({
-	["Echo"] = net.Echo,
-	["Ping"] = net.Ping,
-	["Divide"] = net.Divide,
-	["Inventory.Transfer"] = net.Inventory.Transfer,
-})
+Network.functions = table.freeze({
+	["Echo"] = Network.Echo,
+	["Ping"] = Network.Ping,
+	["Divide"] = Network.Divide,
+	["Inventory.Transfer"] = Network.Inventory.Transfer,
+}) :: { [string]: any }
 
-net.exports = table.freeze({})
+Network.exports = table.freeze({}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

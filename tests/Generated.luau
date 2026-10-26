@@ -154,8 +154,9 @@ function Generated.render(file: File): string
 	end
 
 	for _, name: string in helpers do
-		table.insert(parts, Helpers[name])
+		table.move(Helpers[name], 1, #Helpers[name], #parts + 1, parts)
 	end
+
 	for _, constant: string in emitter.constants do
 		table.insert(parts, `{constant}\n`)
 	end
@@ -263,11 +264,12 @@ end
     with a path any runtime path resolves under, and require hands back
     the promise stand-in for the promise library's path and, for any
     other, a Volt whose start takes the transport given here in place of
-    the remotes. Returns the module
+    the remotes. Returns the module, then the runtime it started
 --]]
 
-function Generated.module(name: string, text: string, transport: Transport): any
+function Generated.module(name: string, text: string, transport: Transport): (any, Volt.Runtime)
 	local environment: { [string]: any } = table.clone(Environment)
+	local started: Volt.Runtime
 
 	environment.game = {
 		GetService = function (_, service: string)
@@ -282,13 +284,14 @@ function Generated.module(name: string, text: string, transport: Transport): any
 
 		return {
 			start = function (schema: Volt.Schema)
-				return Volt.start(schema, transport)
+				started = Volt.start(schema, transport)
+				return started
 			end,
 		}
 	end
 
 	local chunk = luau.load(text, { debugName = name, environment = environment })
-	return chunk()
+	return chunk(), started
 end
 
 return Generated

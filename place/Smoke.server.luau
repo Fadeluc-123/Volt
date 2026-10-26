@@ -1,19 +1,27 @@
 --[[
-    The server half of the Studio smoke test: listens for every event
-    Smoke.volt lets a client fire, serves its function, answers each with
-    the event the server fires back, and prints Volt smoke: pass once
-    everything the client sends has arrived, or the first thing that
-    went wrong
+    The server half of the Studio smoke test: hears every event the client
+    fires, serves its function and answers each, fires numbered Late
+    messages at a joiner from its own PlayerAdded, and prints Volt smoke:
+    pass once all of it is done with nothing reported, or the first fault
 --]]
 
 --!strict
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
+local Packages = ReplicatedStorage.Packages
 
-local net = require(ServerScriptService.Net)
+local Volt = require(Packages.Volt)
 
-local DEADLINE: number = 30 -- Seconds to wait for the client, which joins a while after the server starts
+local Network = require(ServerScriptService.Network)
 
-local waiting: { [string]: boolean } = { Ping = true, Move = true, Mark = true, Echo = true } -- What the client has yet to send
+local DEADLINE: number = 40 -- Seconds to wait for the client, which joins a while after the server and loads late
+local LATE: number = 600 -- Late messages fired at a joiner, one a frame, while their client has yet to load its module
+
+type Bot = Volt.Bot
+
+-- What the client has yet to send, and the Late messages still to fire
+local waiting: { [string]: boolean } = { Ping = true, Move = true, Mark = true, Echo = true, Late = true }
 local failed: string? = nil
 
 -- Keeps the first failure only, since everything after it is noise
@@ -25,22 +33,23 @@ local function arrived(name: string)
 	waiting[name] = nil
 end
 
-net.onFailure(function (player: Player?, kind: string, detail: string)
+-- A departed here would mean a fire from the game's own PlayerAdded was dropped
+Network.onFailure(function (player: (Player | Bot)?, kind: string, detail: string)
 	fail(`{kind} from {player and player.Name or "nobody"}: {detail}`)
 end)
 
-net.Ping.on(function (player: Player, value: number)
+Network.Ping.on(function (player: Player | Bot, value: number)
 	arrived("Ping")
-	net.Pong.fire(player, value + 1)
+	Network.Pong.fire(player, value + 1)
 end)
 
-net.Move.on(function (player: Player, x: number, y: number)
+Network.Move.on(function (player: Player | Bot, x: number, y: number)
 	arrived("Move")
-	net.Moved.fire(player, x, y)
+	Network.Moved.fire(player, x, y)
 end)
 
 -- The one value the client cannot check from its side: an Instance through the side array
-net.Mark.on(function (_, instance: Instance)
+Network.Mark.on(function (_, instance: Instance)
 	if instance ~= workspace then
 		fail(`Mark: got {instance:GetFullName()}`)
 	end
@@ -48,9 +57,19 @@ net.Mark.on(function (_, instance: Instance)
 	arrived("Mark")
 end)
 
-net.Echo.on(function (_, word: string): string
+Network.Echo.on(function (_, word: string): string
 	arrived("Echo")
 	return word:upper()
+end)
+
+-- Connected after the module, as a game's own is; the server lives as long as the place, so nothing disconnects it
+Players.PlayerAdded:Connect(function (player: Player)
+	for index: number = 1, LATE do
+		Network.Late.fire(player, index)
+		task.wait()
+	end
+
+	arrived("Late")
 end)
 
 local deadline: number = os.clock() + DEADLINE
