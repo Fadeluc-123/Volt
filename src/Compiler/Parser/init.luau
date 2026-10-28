@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local Parser = {} :: any
+local Parser = {}
 Parser.__index = Parser
 
 -- An init file stands for its folder, so its siblings are reached through the folder's name
@@ -19,13 +19,16 @@ local Schema = require("./Config/Types/Schema")
 local Source = require("./Source")
 local Tokens = require("./Parser/Tokens")
 local TypeForms = require("./Parser/TypeForms")
+local Types = require("./Config/Types/Parser")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
 type Field = Schema.Field
+type Fields = Types.Fields
 type File = Schema.File
 type Options = Schema.Options
 type Pack = Schema.Pack
+type Self = Types.Parser
 type Source = Source.Source
 type SourceFile = Source.File
 type Span = Diagnostics.Span
@@ -53,14 +56,15 @@ local ABANDONED: { nil } = {}
 --]]
 
 function Parser.parse(tokens: { Token }, diagnostics: Diagnostics): File
-	local self = setmetatable({
+	local fields: Fields = {
 		_tokens = tokens,
 		_diagnostics = diagnostics,
-		_index = 1, -- The lookahead token
-		_depth = 0, -- Brackets opened and not yet closed
-		_options = { spans = {} },
-		_declared = false, -- Set by the first declaration, after which an option is out of place
-	}, Parser)
+		_index = 1,
+		_depth = 0,
+		_options = { spans = {} } :: Options,
+		_declared = false,
+	}
+	local self: Self = setmetatable(fields, Parser) :: any
 
 	return { options = self._options, declarations = self:declarations(nil) }
 end
@@ -130,7 +134,7 @@ end
     one, so everything after a broken declaration is still checked
 --]]
 
-function Parser:declarations(close: string?): { Declaration }
+function Parser.declarations(self: Self, close: string?): { Declaration }
 	local declarations: { Declaration } = {}
 	local depth: number = self._depth
 
@@ -163,7 +167,7 @@ end
     a name follows it, which is what tells struct Stack from struct {
 --]]
 
-function Parser:synchronise(depth: number, close: string?)
+function Parser.synchronise(self: Self, depth: number, close: string?)
 	while self:peek().kind ~= "eof" do
 		local token: Token = self:peek()
 		local following: Token = self:peek(1)
@@ -190,7 +194,7 @@ end
     before them
 --]]
 
-function Parser:declaration(): Declaration?
+function Parser.declaration(self: Self): Declaration?
 	local token: Token = self:peek()
 
 	if self:at("option") then
@@ -218,12 +222,13 @@ function Parser:declaration(): Declaration?
 	return self:fail("V2001", `expected a declaration, got {self:describe(token)}`, token)
 end
 
-function Parser:option()
+function Parser.option(self: Self)
 	self:consume()
 
 	local key: Token = self:key()
+	local label: string = "the options"
 	self:expect("punctuation", "=")
-	self:entry(self._options, Options.file, key, "the options", nil)
+	self:entry(self._options :: { [string]: any }, Options.file, key, label, nil)
 end
 
 --[[
@@ -232,7 +237,7 @@ end
     so later stages see one kind of named type
 --]]
 
-function Parser:typeDeclaration(): Declaration
+function Parser.typeDeclaration(self: Self): Declaration
 	local export: boolean = self:at("export")
 	if export then
 		self:consume()
@@ -277,7 +282,7 @@ end
     keys are checked against the shape
 --]]
 
-function Parser:message(shape: { Spec }): Declaration
+function Parser.message(self: Self, shape: { Spec }): Declaration
 	local keyword: Token = self:consume()
 	local name: Token = self:name()
 	local node = {
@@ -292,7 +297,7 @@ function Parser:message(shape: { Spec }): Declaration
 	return node
 end
 
-function Parser:namespace(): Declaration
+function Parser.namespace(self: Self): Declaration
 	self:consume()
 
 	local name: Token = self:name()
@@ -315,7 +320,7 @@ end
     declarations loop catches it and resumes at the next one
 --]]
 
-function Parser:fail(code: string, message: string, span: Span): never
+function Parser.fail(self: Self, code: string, message: string, span: Span): never
 	self._diagnostics:error(code, message, span)
 	error(ABANDONED, 0)
 end
@@ -357,8 +362,12 @@ function Parser.children(node: Type | Pack): { Type }
 	return list
 end
 
+local _: Types.Own, _: Types.Tokens, _: Types.Records, _: Types.TypeForms = Parser, Tokens, Records, TypeForms
+
 -- Each part of the grammar is parsed by the methods of one sibling file, and a name defined twice is a bug
-for _, part in { Tokens, Records, TypeForms } do
+local parts: { any } = { Tokens, Records, TypeForms }
+
+for _, part in parts do
 	for name: string, method in part do
 		assert(Parser[name] == nil, `Parser.{name} is defined twice`)
 		Parser[name] = method

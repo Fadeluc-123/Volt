@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local Scalars = {} :: any
+local Scalars = {}
 
 local Blocks = require("../Blocks")
 local Expressions = require("./Expressions")
@@ -15,8 +15,10 @@ local Primitives = require("../Config/Primitives")
 local Print = require("../Analyse/Print")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local Types = require("../Config/Types/Emit")
 
 type Block = Blocks.Block
+type Emit = Types.Emit
 type Range = Schema.Range
 type Type = Schema.Type
 
@@ -38,7 +40,15 @@ local readNumber = Expressions.readNumber
     range, and a 64-bit value a number cannot hold exactly
 --]]
 
-function Scalars:number(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Scalars.number(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local name: string = (node :: any).name
 	local range: Range? = (node :: any).range
 	local row = Primitives[name]
@@ -96,7 +106,7 @@ end
     every other width keeps the fraction or NaN term and both its bounds
 --]]
 
-function Scalars:checked(node: Type, write: Block, value: string, path: string)
+function Scalars.checked(self: Emit, node: Type, write: Block, value: string, path: string)
 	local range: Range? = (node :: any).range
 	local row = Primitives[(node :: any).name]
 	local masked: boolean = row.min == 0 and (row.bytes :: number) <= MASKED_BYTES
@@ -130,7 +140,7 @@ end
     magnitude a number holds exactly before joining them
 --]]
 
-function Scalars:exact(read: Block, name: string, at: number, result: string, path: string)
+function Scalars.exact(_: Emit, read: Block, name: string, at: number, result: string, path: string)
 	local row = Primitives[name]
 	local half: number = row.half :: number
 	local low: string = read:name(`{result}Low`)
@@ -149,7 +159,15 @@ end
     steps a byte or two hold, then stretched back out on the read side
 --]]
 
-function Scalars:quantised(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Scalars.quantised(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local name: string = (node :: any).name
 	local range: Range = (node :: any).range
 	local row = Primitives[name]
@@ -187,7 +205,7 @@ end
     local, the reader tests it there, with no local of its own
 --]]
 
-function Scalars:boolean(write: Block, read: Block, value: string, path: string): string
+function Scalars.boolean(self: Emit, write: Block, read: Block, value: string, path: string): string
 	local word: string, bit: number = write:flag()
 	local mask: number = 2 ^ bit
 
@@ -204,7 +222,15 @@ end
     no prefix; otherwise the bytes follow in the tail after their prefix
 --]]
 
-function Scalars:bytes(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Scalars.bytes(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local isBuffer: boolean = (node :: any).name == "buffer"
 	local measured: string = isBuffer and `buffer.len({value})` or `#{value}`
 	local result: string = read:name(hint)
@@ -251,7 +277,8 @@ end
     count, the prefix width and the least length
 --]]
 
-function Scalars:length(
+function Scalars.length(
+	_: Emit,
 	range: Range?,
 	write: Block,
 	read: Block,
@@ -295,7 +322,7 @@ end
     a side-array slot when present, which the reader refuses to find empty
 --]]
 
-function Scalars:unknown(write: Block, read: Block, value: string, hint: string, path: string): string
+function Scalars.unknown(_: Emit, write: Block, read: Block, value: string, hint: string, path: string): string
 	local word: string, bit: number = write:flag()
 	local mask: number = 2 ^ bit
 	local result: string = read:name(hint)

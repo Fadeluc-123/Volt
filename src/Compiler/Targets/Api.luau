@@ -6,20 +6,21 @@
 --]]
 
 --!strict
-local Api = {} :: any
+local Api = {}
 
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
-local Messages = require("./Messages")
 local Schema = require("../Config/Types/Schema")
+local TargetsTypes = require("../Config/Types/Targets")
 local Types = require("./Types")
 
 type Declaration = Schema.Declaration
 type Event = Schema.Event
-type Exchanged = Messages.Exchanged
+type Exchanged = TargetsTypes.Exchanged
 type Function = Schema.Function
+type Targets = TargetsTypes.Targets
 type TypeDeclaration = Schema.TypeDeclaration
-type Walked = Messages.Walked
+type Walked = TargetsTypes.Walked
 
 local VERSION: string = Contract.version
 
@@ -63,7 +64,7 @@ end
     the player callbacks, the byte count and the bot test after them
 --]]
 
-function Api:api(): string
+function Api.api(self: Targets): string
 	local entries: { string } = self:declarations(self._file.declarations)
 	local hooks: { string } = {
 		`{self:method("hooks")} = table.freeze(\{`,
@@ -104,7 +105,7 @@ end
     an exported type's, and a namespace's frozen table of its own entries
 --]]
 
-function Api:declarations(declarations: { Declaration }): { string }
+function Api.declarations(self: Targets, declarations: { Declaration }): { string }
 	local entries: { string } = {}
 
 	for _, declaration: Declaration in declarations do
@@ -130,7 +131,7 @@ end
     it. A two-way entry is cast to both handles it fits
 --]]
 
-function Api:event(event: Event): string
+function Api.event(self: Targets, event: Event): string
 	local server: boolean = self._server
 	local fires: boolean = event.from == "Both" or (event.from == "Server") == server
 	local hears: boolean = event.from == "Both" or (event.from == "Server") ~= server
@@ -196,7 +197,7 @@ end
     the reply; on for the one handler on the server
 --]]
 
-function Api:call(declaration: Function): string
+function Api.call(self: Targets, declaration: Function): string
 	local exchanged: Exchanged = self:exchange(declaration)
 	local packs: string = `<{exchanged.pack}, {exchanged.returns}>`
 	local handle: string
@@ -226,7 +227,7 @@ end
     back, both through the type's shared pair
 --]]
 
-function Api:export(declaration: TypeDeclaration): string
+function Api.export(self: Targets, declaration: TypeDeclaration): string
 	local pair: string = self._emitter:shared(declaration)
 	local annotation: string = Types.label(declaration)
 	local write: string = member(
@@ -251,7 +252,7 @@ end
     index with a name it holds and walk
 --]]
 
-function Api:registry(): string
+function Api.registry(self: Targets): string
 	local maps: { string } = {}
 
 	for _, kind: string in REGISTRIES do

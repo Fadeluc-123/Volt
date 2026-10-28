@@ -219,7 +219,7 @@ describe("Blocks", function ()
 		write:flags(2)
 		write:flag()
 
-		local ok: boolean, message: any = pcall(write.done, write)
+		local ok: boolean, message: any = pcall(write.done, write, nil)
 		expect(ok).is(false)
 		expect(tostring(message):find("Test: 1 flag bits claimed of 2 reserved", 1, true) ~= nil).is(true)
 	end)
@@ -229,7 +229,7 @@ describe("Blocks", function ()
 
 		write:open("if x then")
 
-		local ok: boolean, message: any = pcall(write.done, write)
+		local ok: boolean, message: any = pcall(write.done, write, nil)
 		expect(ok).is(false)
 		expect(tostring(message):find("Test: a scope was left open", 1, true) ~= nil).is(true)
 	end)

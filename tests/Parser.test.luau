@@ -240,7 +240,7 @@ describe("Parser", function ()
 			local third: string = rendered(text, "A", `error V2002: duplicate variant "A"`, 2)
 
 			expect(report(text)).is(`{first}\n\n{second}\n\n{third}`)
-			expect((file.declarations[1] :: any).from).is("Client")
+			expect((file.declarations[1] :: Schema.Event).from).is("Client")
 			expect(#(file.declarations[2] :: any).type.fields).is(1)
 		end)
 
@@ -260,7 +260,7 @@ describe("Parser", function ()
 
 			expect(report(text)).is(`{first}\n\n{second}`)
 			expect(file.options.flush).is(2)
-			expect((file.declarations[1] :: any).from).is("Client")
+			expect((file.declarations[1] :: Schema.Event).from).is("Client")
 		end)
 
 		test("V2004 reports every missing key at the record's name", function ()

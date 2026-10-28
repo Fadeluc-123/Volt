@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local RobloxTypes = {} :: any
+local RobloxTypes = {}
 
 local Blocks = require("../Blocks")
 local Expressions = require("./Expressions")
@@ -15,9 +15,11 @@ local Primitives = require("../Config/Primitives")
 local Print = require("../Analyse/Print")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
+local Types = require("../Config/Types/Emit")
 local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
+type Emit = Types.Emit
 type Range = Schema.Range
 type Roblox = Schema.Roblox
 type Type = Schema.Type
@@ -50,7 +52,15 @@ local readNumber = Expressions.readNumber
     checks its own type
 --]]
 
-function RobloxTypes:roblox(node: Roblox, write: Block, read: Block, value: string, hint: string, path: string): string
+function RobloxTypes.roblox(
+	self: Emit,
+	node: Roblox,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local name: string = node.name
 	local row = Roblox[name]
 
@@ -152,7 +162,8 @@ end
     angle, each component carried as the named numeric type
 --]]
 
-function RobloxTypes:cframe(
+function RobloxTypes.cframe(
+	self: Emit,
 	node: Roblox,
 	write: Block,
 	read: Block,
@@ -192,7 +203,15 @@ end
     the way out and back on the way in
 --]]
 
-function RobloxTypes:turn(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function RobloxTypes.turn(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local name: string = (node :: any).name
 	local row = Primitives[name]
 	local floor: number? = row.min
@@ -221,7 +240,8 @@ end
     so it is refused on every build
 --]]
 
-function RobloxTypes:aligned(
+function RobloxTypes.aligned(
+	self: Emit,
 	node: Roblox,
 	write: Block,
 	read: Block,
@@ -264,7 +284,8 @@ end
     that is not one
 --]]
 
-function RobloxTypes:instance(
+function RobloxTypes.instance(
+	self: Emit,
 	node: Roblox,
 	write: Block,
 	read: Block,

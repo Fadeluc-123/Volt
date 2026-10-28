@@ -8,7 +8,7 @@
 --]]
 
 --!strict
-local Emit = {} :: any
+local Emit = {}
 Emit.__index = Emit
 
 -- An init file stands for its folder, so its siblings are reached through the folder's name
@@ -22,17 +22,20 @@ local Roblox = require("./Emit/Roblox")
 local Scalars = require("./Emit/Scalars")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
+local Types = require("./Config/Types/Emit")
 
 type Block = Blocks.Block
 type Field = Schema.Field
+type Fields = Types.Fields
 type Options = Schema.Options
 type Pack = Schema.Pack
 type Parameter = Contract.Parameter
+type Self = Types.Emit
 type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
 
-function Emit.new(options: Options)
-	return setmetatable({
+function Emit.new(options: Options): Self
+	local fields: Fields = {
 		_validate = options.writeValidation ~= false, -- Whether writers check their values
 		_known = false, -- Whether the value being walked already had its Luau type established
 		_constants = {} :: { [string]: string }, -- Constant names by what they hold, so one table serves every use
@@ -41,7 +44,9 @@ function Emit.new(options: Options)
 		helpers = {} :: { [string]: boolean }, -- The helpers the walked types needed
 		constants = {} :: { string }, -- The module-level tables the walked types need, in first-use order
 		functions = {} :: { string }, -- The function pairs of shared named types, each after the pairs it calls
-	}, Emit)
+	}
+
+	return setmetatable(fields, Emit) :: any
 end
 
 --[[
@@ -67,7 +72,7 @@ end
     expressions the read side yields them as
 --]]
 
-function Emit:block(node: Type | Pack, write: Block, read: Block): ({ string }, { string })
+function Emit.block(self: Self, node: Type | Pack, write: Block, read: Block): ({ string }, { string })
 	local bits: number = Sizes.size(node).bits
 	local names: { string } = {}
 	local values: { string } = {}
@@ -99,7 +104,7 @@ end
     shared types it references first. Returns the name the pair carries
 --]]
 
-function Emit:shared(target: TypeDeclaration): string
+function Emit.shared(self: Self, target: TypeDeclaration): string
 	local path: string = target.path :: string
 	local name: string = path:gsub("%.", "_")
 
@@ -139,7 +144,7 @@ end
     and the advanced cursors back, both after the block's own bytes
 --]]
 
-function Emit:call(target: TypeDeclaration, write: Block, read: Block, value: string, hint: string): string
+function Emit.call(self: Self, target: TypeDeclaration, write: Block, read: Block, value: string, hint: string): string
 	local name: string = self:shared(target)
 	local result: string = read:name(hint)
 	local passed: { string } = {}
@@ -162,7 +167,7 @@ end
     for it, hint names the read side's local, path names it in a failure
 --]]
 
-function Emit:type(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Emit.type(self: Self, node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
 	if node.kind == "reference" then
 		local target: TypeDeclaration = node.target :: TypeDeclaration
 		if Sizes.shared(target) then
@@ -218,14 +223,14 @@ end
     validation is off or whatever walked the value here established it
 --]]
 
-function Emit:shape(write: Block, value: string, luauType: string, path: string)
+function Emit.shape(self: Self, write: Block, value: string, luauType: string, path: string)
 	if self._validate and not self._known then
 		Expressions.refuse(write, `type({value}) ~= "{luauType}"`, `{path}: expected {luauType}`)
 	end
 end
 
 -- Sets whether writers check their values and returns what it was, so a walk can be checked whatever the option says
-function Emit:validating(on: boolean): boolean
+function Emit.validating(self: Self, on: boolean): boolean
 	local was: boolean = self._validate
 	self._validate = on
 	return was
@@ -236,7 +241,7 @@ end
     and named after where it was first needed, in SCREAMING_SNAKE
 --]]
 
-function Emit:constant(key: string, hint: string, render: (string) -> string): string
+function Emit.constant(self: Self, key: string, hint: string, render: (string) -> string): string
 	local existing: string? = self._constants[key]
 	if existing then
 		return existing
@@ -260,8 +265,13 @@ function Emit:constant(key: string, hint: string, render: (string) -> string): s
 	return name
 end
 
+local _: Types.Own, _: Types.Scalars, _: Types.RobloxTypes, _: Types.Composites, _: Types.Collections =
+	Emit, Scalars, Roblox, Composites, Collections
+
 -- Each kind of type is walked by the methods of one sibling file, and a name defined twice is a bug
-for _, part in { Scalars, Roblox, Composites, Collections } do
+local parts: { any } = { Scalars, Roblox, Composites, Collections }
+
+for _, part in parts do
 	for name: string, method in part do
 		assert(Emit[name] == nil, `Emit.{name} is defined twice`)
 		Emit[name] = method

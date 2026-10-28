@@ -7,9 +7,10 @@
 --]]
 
 --!strict
-local Composites = {} :: any
+local Composites = {}
 
 local Blocks = require("../Blocks")
+local EmitTypes = require("../Config/Types/Emit")
 local Expressions = require("./Expressions")
 local Print = require("../Analyse/Print")
 local Schema = require("../Config/Types/Schema")
@@ -17,6 +18,7 @@ local Sizes = require("../Analyse/Sizes")
 local Types = require("../Targets/Types")
 
 type Block = Blocks.Block
+type Emit = EmitTypes.Emit
 type Field = Schema.Field
 type Type = Schema.Type
 type Variant = Schema.Variant
@@ -29,7 +31,15 @@ local refuse = Expressions.refuse
     table constructor after every field's bytes
 --]]
 
-function Composites:struct(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Composites.struct(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local result: string = read:name(hint)
 	local parts: { string } = {}
 
@@ -55,7 +65,15 @@ end
     block under it, read into a local declared before the branch
 --]]
 
-function Composites:optional(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Composites.optional(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local inner: Type = (node :: any).inner
 
 	-- unknown carries its own presence bit, so nil is already a value it holds
@@ -88,7 +106,8 @@ end
     to the type that local takes it as when one is given
 --]]
 
-function Composites:nested(
+function Composites.nested(
+	self: Emit,
 	node: Type,
 	write: Block,
 	read: Block,
@@ -116,7 +135,7 @@ end
     Returns what writes a zero-based index and the expression reading it
 --]]
 
-function Composites:tag(count: number, write: Block, read: Block): ((string) -> (), string)
+function Composites.tag(_: Emit, count: number, write: Block, read: Block): ((string) -> (), string)
 	local bits: number, bytes: number = Sizes.discriminant(count)
 	if bytes > 0 then
 		local index: number = write:reserve(bytes)
@@ -148,7 +167,15 @@ end
     carries the variant's fields in a block of its own per branch
 --]]
 
-function Composites:enum(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Composites.enum(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local tag: string? = (node :: any).tag
 	local variants: { Variant } = (node :: any).variants
 	local printed: string = Print.type(node)
@@ -257,7 +284,15 @@ end
     all unit enums flatten into one enum of every variant
 --]]
 
-function Composites:union(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Composites.union(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local members: { Type } = (node :: any).members
 	local variants: { Variant }? = Sizes.flattened(members)
 

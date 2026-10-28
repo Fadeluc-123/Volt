@@ -11,7 +11,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
-local Promise = require(ReplicatedStorage.Packages.Promise)
+local Promise: any = require(ReplicatedStorage.Packages.Promise)
 
 type Bot = Volt.Bot
 

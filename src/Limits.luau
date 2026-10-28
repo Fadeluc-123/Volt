@@ -8,7 +8,7 @@
 
 --!strict
 --!native
-local Limits = {} :: any
+local Limits = {}
 
 local Config = require("./Config/Runtime")
 local Hub = require("./Hub")
@@ -16,8 +16,10 @@ local Types = require("./Config/Types/Runtime")
 
 type Bucket = Types.Bucket
 type Failure = Types.Failure
+type Joined = Types.Joined
 type Limit = Types.Limit
 type Message = Types.Message
+type Runtime = Types.Runtime
 type Stats = Types.Stats
 
 local HANDSHAKE_BYTES: number = Config.handshakeBytes
@@ -60,15 +62,14 @@ function Limits.fresh(): Stats
 end
 
 -- The limit of every incoming message that has one, by id, which the wrapper may change while the game runs
-function Limits:limits(messages: { [number]: Message })
-	local limits: { [number]: Limit } = {}
+function Limits.limits(self: Runtime, messages: { [number]: Message })
+	local limits: { [number]: Limit } = self._limits
 	for id: number, message: Message in messages do
 		local rate: number? = message.rate
 		if rate then
 			limits[id] = { rate = rate, burst = rate }
 		end
 	end
-	self._limits = limits
 end
 
 --[[
@@ -77,7 +78,7 @@ end
     server checks against its own before it reads anything else
 --]]
 
-function Limits:handshake(hash: number)
+function Limits.handshake(self: Runtime, hash: number)
 	local offset: number, out: buffer = self.reliable.begin(HANDSHAKE_BYTES)
 	buffer.writeu8(out, offset, HANDSHAKE_ID)
 	buffer.writeu32(out, offset + 1, hash)
@@ -92,10 +93,10 @@ end
     starts, or nil for a packet that is dropped
 --]]
 
-function Limits:admit(player: any, packet: buffer): number?
+function Limits.admit(self: Runtime, player: any, packet: buffer): number?
 	local length: number = buffer.len(packet)
 	local now: number = os.clock()
-	local state = self._players[player]
+	local state: Joined? = self._players[player]
 
 	self._now = now
 
@@ -162,8 +163,8 @@ end
     packet goes on without it
 --]]
 
-function Limits:allow(player: any, id: number, limit: Limit): boolean
-	local state = self._players[player]
+function Limits.allow(self: Runtime, player: any, id: number, limit: Limit): boolean
+	local state: Joined? = self._players[player]
 	if not state then
 		return false
 	end
@@ -181,20 +182,20 @@ function Limits:allow(player: any, id: number, limit: Limit): boolean
 end
 
 -- Reports a message past its rate, unless its player left part way through the packet, when it just goes
-function Limits:_limited(player: any, name: string, limit: Limit)
+function Limits._limited(self: Runtime, player: any, name: string, limit: Limit)
 	if self._players[player] then
 		self:fail(player, "rate", `over {limit.rate} a second`, name)
 	end
 end
 
 -- The counters of the runtime, or of one player, who has none when they are not here
-function Limits:stats(player: any): Stats
+function Limits.stats(self: Runtime, player: any): Stats
 	if player == nil then
 		return self._stats
 	end
 
-	local state = self._players[player]
-	return state and state.stats or Limits.fresh()
+	local state: Joined? = self._players[player]
+	return state and state.stats or self.fresh()
 end
 
 --[[
@@ -204,8 +205,8 @@ end
     goes before a detail that does not already begin with it
 --]]
 
-function Limits:fail(player: any, kind: string, detail: string, name: string?)
-	local state = self._players[player]
+function Limits.fail(self: Runtime, player: any, kind: string, detail: string, name: string?)
+	local state: Joined? = self._players[player]
 
 	if name and detail:sub(1, #name + 2) ~= `{name}: ` then
 		detail = `{name}: {detail}`
@@ -224,20 +225,23 @@ function Limits:fail(player: any, kind: string, detail: string, name: string?)
 end
 
 -- Replaces the failure handler for every kind and returns the one it replaced, the runtime's own the first time
-function Limits:onFailure(handler: Failure): Failure
+function Limits.onFailure(self: Runtime, handler: Failure): Failure
 	local replaced: Failure = self._failure
 	self._failure = handler
 	return replaced
 end
 
 -- Adds to one counter of the runtime and of the player it concerns
-function Limits:_count(player: any, key: string, amount: number)
-	local state = self._players[player]
+function Limits._count(self: Runtime, player: any, key: string, amount: number)
+	local state: Joined? = self._players[player]
+	-- Stats names each counter, so one named by a string is reached through the counters as a map
+	local total: { [string]: number } = self._stats :: any
 
-	self._stats[key] += amount
+	total[key] += amount
 
 	if state then
-		state.stats[key] += amount
+		local mine: { [string]: number } = state.stats :: any
+		mine[key] += amount
 	end
 end
 
@@ -249,7 +253,7 @@ end
     never kicked and its name never read, so it is warned about instead
 --]]
 
-function Limits:_report(player: any, kind: string, detail: string)
+function Limits._report(self: Runtime, player: any, kind: string, detail: string)
 	if kind == "departed" then
 		return
 	end
@@ -260,7 +264,7 @@ function Limits:_report(player: any, kind: string, detail: string)
 		return player:Kick(detail)
 	end
 
-	local state = self._players[player]
+	local state: Joined? = self._players[player]
 	local warned: { [string]: number } = state and state.warned or self._warned
 	local last: number? = warned[kind]
 	local now: number = os.clock()

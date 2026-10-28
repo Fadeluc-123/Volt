@@ -6,7 +6,7 @@
 --]]
 
 --!strict
-local Diagnostics = {} :: any
+local Diagnostics = {}
 Diagnostics.__index = Diagnostics
 
 local Source = require("./Source")
@@ -17,19 +17,16 @@ type Source = Source.Source
 export type Span = { start: number, finish: number }
 export type Diagnostic = { severity: string, code: string, message: string, span: Span }
 
-export type Diagnostics = {
+type Fields = {
 	source: Source,
 	list: { Diagnostic },
 	errors: number,
-	error: (self: Diagnostics, code: string, message: string, span: Span) -> (),
-	warn: (self: Diagnostics, code: string, message: string, span: Span) -> (),
-	render: (self: Diagnostics) -> string,
 }
 
-function Diagnostics.new(source: Source)
+function Diagnostics.new(source: Source): Self
 	return setmetatable({
 		source = source,
-		list = {},
+		list = {} :: { Diagnostic },
 		errors = 0,
 	}, Diagnostics)
 end
@@ -39,7 +36,7 @@ end
     offsets, which every token and every parsed node does
 --]]
 
-function Diagnostics:error(code: string, message: string, span: Span)
+function Diagnostics.error(self: Self, code: string, message: string, span: Span)
 	self.errors += 1
 	table.insert(self.list, { severity = "error", code = code, message = message, span = span })
 end
@@ -48,7 +45,7 @@ end
     Records a warning, which never fails a build
 --]]
 
-function Diagnostics:warn(code: string, message: string, span: Span)
+function Diagnostics.warn(self: Self, code: string, message: string, span: Span)
 	table.insert(self.list, { severity = "warning", code = code, message = message, span = span })
 end
 
@@ -58,7 +55,7 @@ end
     span clipped to that line, with a blank line between entries
 --]]
 
-function Diagnostics:render(): string
+function Diagnostics.render(self: Self): string
 	local source: Source = self.source
 	local rendered: { string } = {}
 
@@ -83,5 +80,8 @@ function Diagnostics:render(): string
 
 	return table.concat(rendered, "\n\n")
 end
+
+export type Diagnostics = Self
+type Self = typeof(setmetatable({} :: Fields, Diagnostics))
 
 return Diagnostics

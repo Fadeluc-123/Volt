@@ -32,13 +32,20 @@ local function nobody(): { any }
 	return {}
 end
 
--- Connects a callback to every frame and returns what disconnects it
-local function heartbeat(callback: () -> ()): () -> ()
-	local connection: RBXScriptConnection = game:GetService("RunService").Heartbeat:Connect(callback)
+-- Connects a callback to every frame and returns what disconnects it, as the hub takes it
+local function connect(callback: () -> ()): () -> ()
+	local connection: RBXScriptConnection = game:GetService("RunService").Heartbeat:Connect(function ()
+		callback()
+	end)
 
 	return function ()
 		connection:Disconnect()
 	end
+end
+
+-- Connects a callback to every frame for as long as the place runs, as a transport takes it
+local function heartbeat(callback: () -> ())
+	connect(callback)
 end
 
 -- A child by name, made when it is missing, so a second server VM attaches to the same remotes
@@ -185,7 +192,7 @@ function Remotes.hub(): Hub
 	assert(RunService:IsServer() and RunService:IsRunning(), "Volt: bots belong to the server of a running game")
 
 	if not Shared then
-		Shared = Hub.new(task.spawn, heartbeat)
+		Shared = Hub.new(task.spawn, connect)
 	end
 
 	return Shared :: Hub

@@ -11,7 +11,7 @@
 local luau = require("@lune/luau")
 
 local Environment = require("./Environment")
-local Promise = require("./Promise")
+local Promise: any = require("./Promise")
 local Volt = require("@volt")
 local Analyse = require("@volt/Compiler/Analyse")
 local Blocks = require("@volt/Compiler/Blocks")

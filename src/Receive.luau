@@ -7,30 +7,20 @@
 
 --!strict
 --!native
-local Receive = {} :: any
+local Receive = {}
 
 local Config = require("./Config/Runtime")
 local Types = require("./Config/Types/Runtime")
 
+type Channel = Types.Channel
+type Entry = Types.Entry
+type Joined = Types.Joined
 type Limit = Types.Limit
 type Message = Types.Message
+type Runtime = Types.Runtime
 type Stats = Types.Stats
 
-type Entry = { n: number, [number]: any } -- A queued message: the player, then its values
-
-type Channel = {
-	name: string,
-	kind: string, -- sync, async or polling
-	single: boolean, -- Whether one listener is the most the event allows
-	depth: number, -- How many messages the queue holds before the oldest is dropped
-	listeners: { (...any) -> () },
-	queue: { Entry },
-	head: number,
-	tail: number,
-	warned: boolean, -- An overflow is reported once per event
-}
-
-local NO_SLOTS: { any } = table.freeze({}) -- What a reader indexes when the packet carried no instances
+local NO_SLOTS: { any } = table.freeze({} :: { any }) -- What a reader indexes when the packet carried no instances
 local POSITION: string = Config.position
 
 -- Calls a listener with the player first on the server and with the values alone on the client
@@ -65,7 +55,7 @@ end
     a queue come through here, and nothing else sits before the listener
 --]]
 
-local function run(self: any, channel: Channel, listener: (...any) -> (), player: any, ...: any)
+local function run(self: Runtime, channel: Channel, listener: (...any) -> (), player: any, ...: any)
 	if channel.kind ~= "sync" then
 		self._spawn(invoke, listener, player, ...)
 		return
@@ -95,13 +85,13 @@ end
     drops the rest of the packet, and the id being read says whose it is
 --]]
 
-local function loop(self: any, player: any, packet: buffer, side: { any }, start: number)
+local function loop(self: Runtime, player: any, packet: buffer, side: { any }, start: number)
 	local length: number = buffer.len(packet)
 	local idBytes: number = self._idBytes
 	local readId = self._readId
 	local messages: { [number]: Message } = self._messages
 	local total: Stats = self._stats
-	local state = self._players[player]
+	local state: Joined? = self._players[player]
 	local mine: Stats? = state and state.stats
 	local cursor: number, sideCursor: number = start, 1
 
@@ -131,8 +121,8 @@ local function loop(self: any, player: any, packet: buffer, side: { any }, start
 end
 
 -- The dispatch state of every incoming event, by id; a call is dispatched by its own concern
-function Receive:channels(messages: { [number]: Message })
-	local channels: { [number]: Channel } = {}
+function Receive.channels(self: Runtime, messages: { [number]: Message })
+	local channels: { [number]: Channel } = self._channels
 
 	for id: number, message: Message in messages do
 		local mode: string? = message.mode
@@ -151,8 +141,6 @@ function Receive:channels(messages: { [number]: Message })
 			}
 		end
 	end
-
-	self._channels = channels
 end
 
 --[[
@@ -163,7 +151,7 @@ end
     short or naming no message is the packet's failure and names none
 --]]
 
-function Receive:packet(player: any, packet: any, side: any)
+function Receive.packet(self: Runtime, player: any, packet: any, side: any)
 	if typeof(packet) ~= "buffer" or (side ~= nil and typeof(side) ~= "table") then
 		return self:fail(player, "packet", "not a packet")
 	end
@@ -197,7 +185,14 @@ end
     so a reader's tail is this one call
 --]]
 
-function Receive:deliver(id: number, player: any, cursor: number, sideCursor: number, ...: any): (number, number)
+function Receive.deliver(
+	self: Runtime,
+	id: number,
+	player: any,
+	cursor: number,
+	sideCursor: number,
+	...: any
+): (number, number)
 	local channel: Channel = self._channels[id]
 	local limit: Limit? = self._limits[id]
 	local listeners = channel.listeners
@@ -229,7 +224,7 @@ end
     it, in arrival order
 --]]
 
-function Receive:on(id: number, listener: (...any) -> ()): () -> ()
+function Receive.on(self: Runtime, id: number, listener: (...any) -> ()): () -> ()
 	local channel: Channel = self._channels[id]
 	local listeners = table.clone(channel.listeners) -- A copy, so a delivery in flight keeps its list
 
@@ -262,7 +257,7 @@ end
     values
 --]]
 
-function Receive:iter(id: number): () -> ...any
+function Receive.iter(self: Runtime, id: number): () -> ...any
 	local channel: Channel = self._channels[id]
 	local index: number = 0
 
@@ -284,7 +279,7 @@ function Receive._trace(message: any): string
 end
 
 -- Queues a message behind the others, dropping the oldest when the queue is full
-function Receive:_push(channel: Channel, player: any, ...: any)
+function Receive._push(self: Runtime, channel: Channel, player: any, ...: any)
 	if channel.tail - channel.head + 1 >= channel.depth then
 		channel.queue[channel.head] = nil
 		channel.head += 1

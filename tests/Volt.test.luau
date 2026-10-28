@@ -184,7 +184,7 @@ describe("Volt", function ()
 		local mock = Volt.mock(task.spawn)
 		local _, client = mock:join("Alice")
 		local options: { [string]: any } = table.clone(OPTIONS)
-		
+
 		options.maxPacket = SMALL_PACKET
 
 		local runtime: Runtime = Volt.start(schema("client", options), client)

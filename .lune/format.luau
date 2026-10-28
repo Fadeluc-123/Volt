@@ -8,7 +8,7 @@
 local fs = require("@lune/fs")
 local process = require("@lune/process")
 
-local ROOTS: { string } = { "src", "tests", "tools", "place", "benchmark" }
+local ROOTS: { string } = { "src", "tests", ".lune", "place", "benchmark" }
 
 -- Vendored and generated
 local SKIPPED: { [string]: boolean } = {

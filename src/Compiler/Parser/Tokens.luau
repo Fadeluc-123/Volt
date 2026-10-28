@@ -6,11 +6,13 @@
 --]]
 
 --!strict
-local Tokens = {} :: any
+local Tokens = {}
 
 local Lexer = require("../Lexer")
 local Reserved = require("../Config/Reserved")
+local Types = require("../Config/Types/Parser")
 
+type Parser = Types.Parser
 type Token = Lexer.Token
 
 -- Consumed brackets move the depth, so a resync can tell which body it is in
@@ -29,7 +31,7 @@ local NESTING: { [string]: number } = {
     How a token reads in a message
 --]]
 
-function Tokens:describe(token: Token): string
+function Tokens.describe(_: Parser, token: Token): string
 	return token.kind == "eof" and "end of file"
 		or token.kind == "string" and `string "{token.value}"`
 		or `"{token.value}"`
@@ -40,7 +42,7 @@ end
     end it is always the eof token
 --]]
 
-function Tokens:peek(ahead: number?): Token
+function Tokens.peek(self: Parser, ahead: number?): Token
 	return self._tokens[math.min(self._index + (ahead or 0), #self._tokens)]
 end
 
@@ -49,7 +51,7 @@ end
     punctuation. A string token never matches, whatever it holds
 --]]
 
-function Tokens:at(value: string): boolean
+function Tokens.at(self: Parser, value: string): boolean
 	local token: Token = self:peek()
 	return token.kind ~= "string" and token.value == value
 end
@@ -59,7 +61,7 @@ end
     never passed, so every loop over the cursor ends
 --]]
 
-function Tokens:consume(): Token
+function Tokens.consume(self: Parser): Token
 	local token: Token = self:peek()
 	if token.kind ~= "eof" then
 		self._index += 1
@@ -70,7 +72,7 @@ function Tokens:consume(): Token
 	return token
 end
 
-function Tokens:previous(): Token
+function Tokens.previous(self: Parser): Token
 	return self._tokens[self._index - 1]
 end
 
@@ -79,7 +81,7 @@ end
     one is given, or abandons the declaration
 --]]
 
-function Tokens:expect(kind: Lexer.Kind, value: string?): Token
+function Tokens.expect(self: Parser, kind: Lexer.Kind, value: string?): Token
 	local token: Token = self:peek()
 	if token.kind ~= kind or (value ~= nil and token.value ~= value) then
 		local wanted: string = value and `"{value}"` or `a {kind}`
@@ -93,7 +95,7 @@ end
     keys, such as type
 --]]
 
-function Tokens:key(): Token
+function Tokens.key(self: Parser): Token
 	local token: Token = self:peek()
 	if token.kind ~= "name" and token.kind ~= "keyword" then
 		self:fail("V2001", `expected a name, got {self:describe(token)}`, token)
@@ -106,7 +108,7 @@ end
     a reserved word is reported, though the parse carries on
 --]]
 
-function Tokens:name(): Token
+function Tokens.name(self: Parser): Token
 	local token: Token = self:key()
 	if Reserved.luau[token.value] then
 		self._diagnostics:error("V2006", `"{token.value}" is a Luau reserved word and cannot be a name`, token)
@@ -119,7 +121,7 @@ end
     to the next comma or closing brace at this depth inside a record
 --]]
 
-function Tokens:skip(close: string?)
+function Tokens.skip(self: Parser, close: string?)
 	local depth: number = self._depth
 	repeat
 		self:consume()
@@ -131,7 +133,7 @@ end
     trailing comma, and consumes the bracket
 --]]
 
-function Tokens:list(close: string, item: () -> ())
+function Tokens.list(self: Parser, close: string, item: () -> ())
 	while not self:at(close) and self:peek().kind ~= "eof" do
 		item()
 

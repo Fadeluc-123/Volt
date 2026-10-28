@@ -6,7 +6,7 @@
 --]]
 
 --!strict
-local Messages = {} :: any
+local Messages = {}
 
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
@@ -14,40 +14,20 @@ local Emit = require("../Emit")
 local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local TargetsTypes = require("../Config/Types/Targets")
 local Types = require("./Types")
 local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
 type Event = Schema.Event
+type Exchanged = TargetsTypes.Exchanged
 type Field = Schema.Field
 type Function = Schema.Function
 type Pack = Schema.Pack
+type Targets = TargetsTypes.Targets
 type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
-
--- What an event's API entry is built from once it is walked: its ids on this side, its writer's signature and its listener's
-export type Walked = {
-	id: number?, -- Heard as
-	out: number?, -- Sent as
-	label: string,
-	typed: string,
-	arguments: string,
-	listener: string,
-	iterator: string,
-	pack: string, -- The types it carries, as a handle type takes them
-}
-
--- What a function's API entry is built from once it is walked: this side's id, the call's signature, what it returns and the handler's
-export type Exchanged = {
-	id: number,
-	label: string,
-	typed: string,
-	arguments: string,
-	result: string, -- What invoke is annotated as returning: the error tuple, or nothing said for a promise
-	handler: string,
-	pack: string, -- The types the call carries, as a handle type takes them
-	returns: string, -- And the types it returns, likewise
-}
+type Walked = TargetsTypes.Walked
 
 local SLOT_BYTES: number = Wire.slotBytes
 local STATUS_BYTES: number = Wire.statusBytes
@@ -157,7 +137,7 @@ end
     Both blocks are walked either way, since the emitter fills both at once
 --]]
 
-function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
+function Messages.walk(self: Targets, event: Event, fires: boolean, hears: boolean): Walked
 	local server: boolean = self._server
 	local path: string = event.path :: string
 	local label: string = path:gsub("%.", "_")
@@ -240,7 +220,7 @@ end
     the runtime's reply, or its refused. Both are walked on both sides
 --]]
 
-function Messages:exchange(declaration: Function): Exchanged
+function Messages.exchange(self: Targets, declaration: Function): Exchanged
 	local server: boolean = self._server
 	local path: string = declaration.path :: string
 	local label: string = path:gsub("%.", "_")

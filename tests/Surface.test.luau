@@ -97,11 +97,11 @@ describe("Surface", function ()
 			local sides: { { server: boolean, module: any } } = {
 				{
 					server = true,
-					module = harness.server
+					module = harness.server,
 				},
 				{
 					server = false,
-					module = harness.client
+					module = harness.client,
 				},
 			}
 
