@@ -58,7 +58,7 @@ local function setup(): Harness
 		client.Damage.on(function (hit: Hit)
 			table.insert(heard[name], hit.amount)
 		end)
-		
+
 		table.insert(players, player)
 	end
 

@@ -172,7 +172,7 @@ function Hub:remove(bot: Bot)
 
 		table.clear(side.queue)
 		table.clear(side.waiting)
-		
+
 		side.receive = nil
 	end
 end

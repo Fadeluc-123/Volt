@@ -134,7 +134,7 @@ describe("Mock", function ()
 		mock:connectBot(second).heartbeat(function ()
 			table.insert(beats, "second")
 		end)
-		
+
 		mock.server.heartbeat(function ()
 			table.insert(beats, "server")
 		end)
