@@ -1,7 +1,7 @@
 --[[
-    Runs luau-lsp analyze over the source, tests and tools with the Roblox
-    definitions the runtime's transport needs, fetched once at the pinned
-    version into Definitions/, and over the modules every test schema
+    Runs luau-lsp analyze over the source, tests and Lune scripts with the
+    Roblox definitions the runtime's transport needs, fetched once at the
+    pinned version into Definitions/, and over the modules every test schema
     compiles to, as a game sees them, under the old checker and the new
 --]]
 
@@ -85,7 +85,7 @@ for _, name: string in fs.readDir(SCHEMAS) do
 end
 
 -- Volt's own code is held to the default checker, the modules a game commits to both
-local old: boolean = analyze({}, { "src", "tests", "tools", MODULES })
+local old: boolean = analyze({}, { "src", "tests", ".lune", MODULES })
 local new: boolean = analyze({ SOLVER, "--ignore=src/**", "--ignore=tests/**" }, { MODULES })
 
 process.exit((old and new) and 0 or 1)

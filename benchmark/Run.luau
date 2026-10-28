@@ -1,7 +1,7 @@
 --[[
     What run-in-roblox runs inside Studio: it waits for the report the
     server leaves under the DataModel and prints it after a marker line,
-    which is what tools/bench reads back. In edit mode it first asks for
+    which is what lune run bench reads back. In edit mode it first asks for
     F5, and the report never arrives there, which holds the script open
     until Studio closes; the play session's copy of the script finds it
 --]]

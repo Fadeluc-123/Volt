@@ -10,7 +10,7 @@ Handoffs/
 # Third-party source snapshots (Blink, Zap) kept locally for design reference; re-fetch from GitHub
 Reference/
 
-# Roblox definitions luau-lsp analyzes the runtime against; lune run tools/analyze fetches them
+# Roblox definitions luau-lsp analyzes the runtime against; lune run analyze fetches them
 Definitions/
 
 # Wally packages, the luau-lsp sourcemap and built place files

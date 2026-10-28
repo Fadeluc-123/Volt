@@ -1,6 +1,6 @@
 # Volt benchmark, Server & Clients
 
-Runs started by hand from the Test tab, Clients and Servers with one player, and pasted from the client's Output, since run-in-roblox captures only the Studio it launched. `lune run tools/bench` rewrites `Results.md` whole and never touches this file. Oldest first.
+Runs started by hand from the Test tab, Clients and Servers with one player, and pasted from the client's Output, since run-in-roblox captures only the Studio it launched. `lune run bench` rewrites `Results.md` whole and never touches this file. Oldest first.
 
 ## Server & Clients, one player
 

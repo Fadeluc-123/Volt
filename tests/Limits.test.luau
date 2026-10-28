@@ -370,7 +370,7 @@ describe("Limits", function ()
 			server.Echo.on(function (_, value: number): number
 				return value
 			end)
-			
+
 			server.rate("Echo", 1)
 
 			for index: number = 1, 2 do
