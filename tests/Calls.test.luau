@@ -213,7 +213,7 @@ describe("Calls", function ()
 		expect(box.line).is("false no handler")
 	end)
 
-	test("reports a handler's error as a handler failure and refuses the call with its first line", function ()
+	test("reports a handler's error as a handler failure and refuses the call with its first line alone", function ()
 		local harness: Harness = setup()
 
 		harness.server:handle(ID, function ()
@@ -223,11 +223,8 @@ describe("Calls", function ()
 		local box: Box = call(harness, 5)
 		roundTrip(harness.mock)
 
-		expect((box.line:find("false ", 1, true))).is(1)
-		expect(box.line:find("boom", 1, true) ~= nil).is(true)
-		expect((box.line:find("\n", 1, true))).is(nil)
-		expect(#harness.failures.server).is(1)
-		expect(harness.failures.server[1].kind).is("handler")
+		expect(box.line).is("false boom")
+		expect(`{#harness.failures.server} {harness.failures.server[1].kind}`).is("1 handler")
 		expect((harness.failures.server[1].detail:find("Double: ", 1, true))).is(1)
 	end)
 
@@ -259,13 +256,12 @@ describe("Calls", function ()
 	test("a reply for a slot no call is in is a decode failure", function ()
 		local harness: Harness = setup()
 
+		-- Held until the client's handshake reaches the server, which takes a step more than a reply to a call does
 		harness.server:target(harness.player)
 		harness.reply(9, STATUS.ok, 1)
-		harness.mock:step()
-		harness.mock:step()
+		roundTrip(harness.mock)
 
-		expect(#harness.failures.client).is(1)
-		expect(harness.failures.client[1].kind).is("decode")
+		expect(`{#harness.failures.client} {harness.failures.client[1].kind}`).is("1 decode")
 		expect(harness.failures.client[1].detail).is("Double: no call in slot 9")
 	end)
 
@@ -279,9 +275,8 @@ describe("Calls", function ()
 		local offset: number, out: buffer = harness.server.reliable.allocate(2)
 		buffer.writeu16(out, offset, 300)
 
-		-- Two steps deliver the bad reply; a third would deliver the server's own refusal of the unhandled call
-		harness.mock:step()
-		harness.mock:step()
+		-- The bad reply is held for the handshake and goes ahead of the server's refusal of the call, which it drops
+		roundTrip(harness.mock)
 
 		expect(box.line).is("pending")
 		expect(harness.failures.client[1].detail).is("Double: truncated")
@@ -318,6 +313,20 @@ describe("Calls", function ()
 
 		expect(`{rejection[1]} {rejection[2]}`).is("false no handler")
 		expect(`{resolution[1]} {resolution[2]}`).is("true 10")
+	end)
+
+	test("rejects a promise with exactly the first line of a handler's error", function ()
+		local harness: Harness = setup(nil, Promise)
+
+		harness.server:handle(ID, function ()
+			error("boom", 0)
+		end)
+
+		local promise: Promise.Promise = harness.client:invoke(ID, harness.write, 5)
+		roundTrip(harness.mock)
+
+		local settled = assert(promise.settled, "the call never settled")
+		expect(`{settled[1]} {settled[2]}`).is("false boom")
 	end)
 
 	test("fails at once in edit mode, on the thread and on a promise, writing nothing", function ()

@@ -2,8 +2,8 @@
     Proves the mock transport: a joined player reaches the server's list
     and signals and gets a client side of their own, a packet is copied
     when fired and delivered on the next step to the side it names, one
-    for a player who left is dropped, and every Heartbeat fires once per
-    step
+    for a player who left is dropped, every Heartbeat still connected
+    fires once per step, and a bot connects to the scope once
 --]]
 
 --!strict
@@ -117,5 +117,42 @@ describe("Mock", function ()
 		mock:step()
 
 		expect(beats).is(4)
+	end)
+
+	test("a Heartbeat that removes bots skips no other, and a bot removed before its turn does not fire", function ()
+		local mock = Volt.mock(task.spawn)
+		local first: Volt.Bot, second: Volt.Bot = mock:addBot("First"), mock:addBot("Second")
+		local beats: { string } = {}
+
+		-- The first bot's frame takes both away, its own and the one after it
+		mock:connectBot(first).heartbeat(function ()
+			table.insert(beats, "first")
+			mock:removeBot(first)
+			mock:removeBot(second)
+		end)
+
+		mock:connectBot(second).heartbeat(function ()
+			table.insert(beats, "second")
+		end)
+		
+		mock.server.heartbeat(function ()
+			table.insert(beats, "server")
+		end)
+
+		mock:step()
+
+		expect(table.concat(beats, ",")).is("first,server")
+	end)
+
+	test("connects a bot to its scope once", function ()
+		local mock = Volt.mock(task.spawn)
+		local bot: Volt.Bot = mock:addBot("Helper")
+
+		mock:connectBot(bot)
+
+		local ok: boolean, message: any = pcall(mock.connectBot, mock, bot)
+
+		expect(ok).is(false)
+		expect(tostring(message):find("Volt: connected a bot to Mock a second time", 1, true) ~= nil).is(true)
 	end)
 end)

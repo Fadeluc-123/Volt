@@ -162,12 +162,12 @@ describe("Parser", function ()
 
 	test("options carry each value kind and a span per key", function ()
 		local text: string =
-			`option clientOutput = "../Net.luau"\noption flush = 2\noption scope = Game\noption casing = pascal\noption writeValidation = false\noption rate = unlimited`
+			`option clientOutput = "../Network.luau"\noption flush = 2\noption scope = Game\noption casing = pascal\noption writeValidation = false\noption rate = unlimited`
 		local file: Schema.File, diagnostics = parse(text)
 		local start: number?, finish: number? = text:find("flush", 1, true)
 
 		expect(diagnostics:render()).is("")
-		expect(file.options.clientOutput).is("../Net.luau")
+		expect(file.options.clientOutput).is("../Network.luau")
 		expect(file.options.flush).is(2)
 		expect(file.options.scope).is("Game")
 		expect(file.options.casing).is("pascal")
@@ -327,6 +327,21 @@ describe("Parser", function ()
 			)
 			expect(file.options.flush).is(2)
 		end)
+
+		test("V2010 reports an option in a second file at the first it sets, naming the options file", function ()
+			local source: Source.Source = Source.new("Types.volt", "type Id = u8\n")
+			source:add("Game.volt", "option flush = 2\n")
+			source:add("Extra.volt", "option queue = 8\noption casing = snake\n")
+
+			local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(source)
+			local file: Schema.File = Parser.schema(source, diagnostics)
+			local location: string =
+				`Extra.volt:1:8: error V2010: option "queue" is in a second file; options are set in Game.volt`
+
+			expect(diagnostics:render()).is(`{location}\n    1 | option queue = 8\n      |        ^^^^^`)
+			expect(file.options.flush).is(2)
+			expect(file.options.queue).is(nil)
+		end)
 	end)
 
 	describe("recovery", function ()
@@ -357,6 +372,27 @@ describe("Parser", function ()
 
 			expect(diagnostics.errors).is(1)
 			expect(printed(file.declarations[1])).is("event B { from: Client, type: Reliable, call: Polling }")
+		end)
+
+		test("a brace left open in one file of a schema closes at that file's end", function ()
+			local source: Source.Source = Source.new("Types.volt", "type Id = u8\n")
+			source:add("Game.volt", "option flush = 2\ntype Name = string\n")
+			source:add("Round.volt", "namespace Round {\n")
+			source:add("Score.volt", "type Score = u16\n")
+
+			local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(source)
+			local file: Schema.File = Parser.schema(source, diagnostics)
+			local location: string = `Round.volt:2:1: error V2001: expected "}", got end of file`
+			local names: { string } = {}
+
+			for _, declaration: Declaration in file.declarations do
+				table.insert(names, declaration.name)
+			end
+
+			-- The options file's declarations come first, then the others' in the order they were read
+			expect(table.concat(names, " ")).is("Name Id Score")
+			expect(source.path).is("Game.volt")
+			expect(diagnostics:render()).is(`{location}\n    2 | \n      | ^`)
 		end)
 	end)
 end)

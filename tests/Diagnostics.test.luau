@@ -1,7 +1,8 @@
 --[[
     Proves a diagnostic renders as the location line and underlined excerpt
-    the design shows, that the underline stays aligned past tabs and stops
-    at the end of the line, and that warnings never count as errors
+    the design shows, in the file its span falls in, that the underline
+    stays aligned past tabs and stops at the end of the line, and that
+    warnings never count as errors
 --]]
 
 --!strict
@@ -44,6 +45,22 @@ describe("Diagnostics", function ()
 
 		expect(diagnostics:render()).is(`{location}\n{excerpt}\n{underline}`)
 		expect(diagnostics.errors).is(0)
+	end)
+
+	test("renders a span in a second file with that file's path and its own line", function ()
+		local source: Source.Source = Source.new("Game.volt", "option a = 1\n")
+		source:add("Types.volt", "type A = u8\ntype B = u9\n")
+
+		local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(source)
+		local start: number = source.text:find("u9", 1, true) :: number
+
+		diagnostics:error("V0003", "unknown type", { start = start, finish = start + 1 })
+
+		local location: string = "Types.volt:2:10: error V0003: unknown type"
+		local excerpt: string = "    2 | type B = u9"
+		local underline: string = "      |          ^^"
+
+		expect(diagnostics:render()).is(`{location}\n{excerpt}\n{underline}`)
 	end)
 
 	test("separates entries with a blank line and counts only errors", function ()

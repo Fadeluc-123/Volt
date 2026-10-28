@@ -20,45 +20,48 @@ type TypeDeclaration = Schema.TypeDeclaration
 type Variant = Schema.Variant
 
 -- A handle type: the side whose API has entries of its shape, or neither, and its lines with each member name in braces
-type Handle = { name: string, side: string?, lines: { string } }
+type Handle = { side: string?, lines: { string } }
 
 local VERSION: string = Contract.version
+local BOT: string = "export type Bot = { Name: string }" -- What a bot is to the types module; a realm module takes Volt's
 
 -- The handle types over the packs of the message they fit, which a service field takes an API entry as
 local HANDLES: { Handle } = {
 	{
-		name = "ServerEvent",
 		side = "server",
 		lines = {
 			"export type ServerEvent<A...> = {",
-			"\t{fire}: (player: Player, A...) -> (),",
+			"\t{fire}: (player: Player | Bot, A...) -> (),",
 			"\t{fireAll}: (A...) -> (),",
-			"\t{fireList}: (players: { Player }, A...) -> (),",
-			"\t{fireExcept}: (player: Player, A...) -> (),",
-			"\t{fireSet}: (players: { [Player]: true }, A...) -> (),",
+			"\t{fireList}: (players: { Player | Bot }, A...) -> (),",
+			"\t{fireExcept}: (player: Player | Bot, A...) -> (),",
+			"\t{fireSet}: (players: { [Player | Bot]: true }, A...) -> (),",
 			"}",
 		},
 	},
 	{
-		name = "ServerListener",
 		side = "server",
 		lines = {
 			"export type ServerListener<A...> = {",
-			"\t{on}: (listener: (player: Player, A...) -> ()) -> () -> (),",
-			"\t{iter}: () -> () -> (number, Player, A...),",
+			"\t{on}: (listener: (player: Player | Bot, A...) -> ()) -> () -> (),",
+			"\t{iter}: () -> () -> (number, Player | Bot, A...),",
 			"}",
 		},
 	},
 	{
-		name = "ServerFunction",
+		side = "server",
+		lines = { "export type ServerPolling<A...> = { {iter}: () -> () -> (number, Player | Bot, A...) }" },
+	},
+	{
 		side = "server",
 		lines = {
-			"export type ServerFunction<A..., R...> = { {on}: (handler: (player: Player, A...) -> R...) -> () -> () }",
+			"export type ServerFunction<A..., R...> = {",
+			"\t{on}: (handler: (player: Player | Bot, A...) -> R...) -> () -> (),",
+			"}",
 		},
 	},
-	{ name = "ClientEvent", side = "client", lines = { "export type ClientEvent<A...> = { {fire}: (A...) -> () }" } },
+	{ side = "client", lines = { "export type ClientEvent<A...> = { {fire}: (A...) -> () }" } },
 	{
-		name = "ClientListener",
 		side = "client",
 		lines = {
 			"export type ClientListener<A...> = {",
@@ -67,18 +70,10 @@ local HANDLES: { Handle } = {
 			"}",
 		},
 	},
+	{ side = "client", lines = { "export type ClientPolling<A...> = { {iter}: () -> () -> (number, A...) }" } },
+	{ side = "client", lines = { "export type ClientFunction<A..., R...> = { {invoke}: (A...) -> (boolean, R...) }" } },
+	{ side = "client", lines = { "export type ClientPromise<A...> = { {invoke}: (A...) -> any }" } },
 	{
-		name = "ClientFunction",
-		side = "client",
-		lines = { "export type ClientFunction<A..., R...> = { {invoke}: (A...) -> (boolean, R...) }" },
-	},
-	{
-		name = "ClientPromise",
-		side = "client",
-		lines = { "export type ClientPromise<A...> = { {invoke}: (A...) -> any }" },
-	},
-	{
-		name = "Exported",
 		lines = {
 			"export type Exported<T> = {",
 			"\t{write}: (value: T) -> (buffer, { any }?),",
@@ -119,6 +114,14 @@ local function record(inside: string): string
 	return inside == "" and "{}" or `\{ {inside} }`
 end
 
+-- A tagged enum's variant as the table type its values take: the tag holding the variant's name, then its fields
+function Types.variant(tag: string, variant: Variant): string
+	local own: string = variant.fields and fields(variant.fields) or ""
+	local name: string = `{tag}: "{variant.name}"`
+
+	return record(own == "" and name or `{name}, {own}`)
+end
+
 --[[
     The Luau type a value of a schema type is annotated as: a named type
     by its label, a struct or a tagged variant as a table type, a unit
@@ -156,14 +159,7 @@ function Types.annotation(node: Type): string
 
 	if node.kind == "enum" then
 		for _, variant: Variant in node.variants do
-			local name: string = `"{variant.name}"`
-
-			if node.tag then
-				local own: string = variant.fields and fields(variant.fields) or ""
-				name = record(own == "" and `{node.tag}: {name}` or `{node.tag}: {name}, {own}`)
-			end
-
-			table.insert(members, name)
+			table.insert(members, node.tag and Types.variant(node.tag, variant) or `"{variant.name}"`)
 		end
 	else
 		for _, member: Type in node.members do
@@ -188,19 +184,21 @@ end
 
 --[[
     The handle types of one side, or of both when none is given, each
-    with its members in the schema's casing, one text each
+    with its members in the schema's casing, one text each; exported, or
+    local to a module whose schema keeps them in a types module
 --]]
 
-function Types.handles(side: string?, casing: string): { string }
+function Types.handles(side: string?, casing: string, exported: boolean): { string }
 	local texts: { string } = {}
 
 	for _, handle: Handle in HANDLES do
 		if side == nil or handle.side == nil or handle.side == side then
 			local text: string = table.concat(handle.lines, "\n")
-
-			table.insert(texts, (text:gsub("{(%a+)}", function (name: string)
+			local cased: string = text:gsub("{(%a+)}", function (name: string)
 				return Types.cased(name, casing)
-			end)))
+			end)
+
+			table.insert(texts, exported and cased or (cased:gsub("^export ", "")))
 		end
 	end
 
@@ -208,8 +206,8 @@ function Types.handles(side: string?, casing: string): { string }
 end
 
 --[[
-    The standalone types module: every named type, then every handle
-    type, for code shared between the client and the server
+    The standalone types module: every named type, then the bot and every
+    handle type, for code shared between the client and the server
 --]]
 
 function Types.module(file: File, name: string): string
@@ -230,7 +228,9 @@ function Types.module(file: File, name: string): string
 		table.insert(parts, `{table.concat(named, "\n")}\n`)
 	end
 
-	for _, handle: string in Types.handles(nil, casing) do
+	table.insert(parts, `{BOT}\n`)
+
+	for _, handle: string in Types.handles(nil, casing, true) do
 		table.insert(parts, `{handle}\n`)
 	end
 

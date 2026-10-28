@@ -1,10 +1,9 @@
 --[[
-    Proves the assembled modules: each side of the Events and Broadcasts
-    schemas and their types render as their golden files, and over the
-    mock the generated API carries every call mode, every fire variant, a
-    two-way event, an instance in the side array and unreliable fires
-    batched to the budget; casing renames the members, a name the API
-    owns is refused
+    Proves the assembled modules: each side of Events, Broadcasts and Shared
+    renders as its golden file, both sides carry the runtime's version, and
+    over the mock the API carries every call mode and fire variant, a
+    two-way event, an instance and batched unreliable fires; casing renames
+    the members
 --]]
 
 --!strict
@@ -16,8 +15,9 @@ local Environment = require("./Environment")
 local Generated = require("./Generated")
 local golden = require("./Expected")
 local Volt = require("@volt")
+local Config = require("@volt/Config/Runtime")
 local Contract = require("@volt/Compiler/Config/Contract")
-local Targets = require("@volt/Compiler/Targets")
+local Wire = require("@volt/Compiler/Config/Wire")
 
 local describe = Suite.describe
 local test = Suite.test
@@ -38,7 +38,9 @@ type Modules = { schema: string, client: string, server: string, types: string }
 
 local Instance = Environment.Instance
 
-local SCHEMAS: { string } = { "Events", "Broadcasts" } -- The client-fired forms and the two-way event, then the server-fired forms
+-- The client-fired forms and the two-way event, the server-fired forms, then shared types each carried one way
+local SCHEMAS: { string } = { "Events", "Broadcasts", "Shared" }
+
 local SIDES: { string } = { "Client", "Server", "Types" }
 local SPRAYS: number = 400 -- Unreliable fires of three bytes in one frame, more than one packet of the budget holds
 local BUDGET: number = 900 -- The schema's unreliable budget, which every packet must fit
@@ -80,6 +82,12 @@ local function exchange(mock: Mock)
 	mock:step()
 end
 
+-- A server fire before a client's handshake is held for it, which reaches the server a step after it is flushed
+local function held(mock: Mock)
+	exchange(mock)
+	mock:step()
+end
+
 describe("Targets", function ()
 	for _, name: string in SCHEMAS do
 		for _, side: string in SIDES do
@@ -90,22 +98,23 @@ describe("Targets", function ()
 		end
 	end
 
-	test("stamps the schema table with the runtime's version", function ()
+	test("stamps the schema table and the API on both sides with the runtime's version", function ()
+		local harness: Harness = setup("Events")
+
 		expect(Contract.version).is(Volt.version)
 		expect(MODULES.Events.server:find(`version = "{Volt.version}"`, 1, true) ~= nil).is(true)
+		expect(harness.server.version).is(Volt.version)
+		expect(harness.clients.alice.version).is(Volt.version)
 	end)
 
-	test("refuses a top-level name the API owns, in the schema's casing", function ()
-		local text: string =
-			`option casing = pascal\n{MODULES.Events.schema}\nevent OnFailure \{ from: Client, type: Reliable, call: SingleSync }`
-		local file, hash, diagnostics = Generated.compile("Bad", text)
+	test("holds a client's reliable messages to maxPacket with the handshake the runtime writes", function ()
+		local harness: Harness = setup("Events")
 
-		Targets.modules(file, diagnostics, hash)
+		-- The first Heartbeat flushes a client's frame, which holds the handshake alone
+		harness.mock:step()
 
-		expect(diagnostics.errors).is(1)
-		expect(diagnostics:render():find('error V4001: "OnFailure" is a member of the generated API', 1, true) ~= nil).is(
-			true
-		)
+		expect(harness.clients.alice.stats().bytesOut).is(Wire.handshakeBytes)
+		expect(Config.handshakeBytes).is(Wire.handshakeBytes)
 	end)
 
 	test("renames every member in the casing asked for, the handle types with them", function ()
@@ -126,7 +135,8 @@ describe("Targets", function ()
 		end
 
 		expect(pascal:find("BeforeSend = runtime.beforeSend", 1, true) ~= nil).is(true)
-		expect(pascal:find("net.Events = table.freeze", 1, true) ~= nil).is(true)
+		expect(pascal:find("Network.Events = table.freeze", 1, true) ~= nil).is(true)
+
 		expect(pascalTypes:find("\tFireAll: (A...) -> (),", 1, true) ~= nil).is(true)
 	end)
 
@@ -228,7 +238,7 @@ describe("Targets", function ()
 			harness.server.Damage.fireList({ players.bob }, { target = 1, amount = 3 })
 			harness.server.Damage.fireExcept(players.alice, { target = 1, amount = 4 })
 			harness.server.Damage.fireSet({ [players.alice] = true }, { target = 1, amount = 5 })
-			exchange(harness.mock)
+			held(harness.mock)
 
 			expect(table.concat(heard.Alice, ",")).is("1,2,5")
 			expect(table.concat(heard.Bob, ",")).is("2,3,4")
@@ -239,7 +249,7 @@ describe("Targets", function ()
 			local rows: { string } = {}
 
 			harness.server.Match.Start.fireAll()
-			exchange(harness.mock)
+			held(harness.mock)
 
 			for index: number, extra: any in harness.clients.alice.Match.Start.iter() do
 				table.insert(rows, `{index} {extra}`)
@@ -285,6 +295,9 @@ describe("Targets", function ()
 				heard += 1
 			end)
 
+			-- Unreliable fires before a client's handshake are dropped, so hers goes first
+			exchange(mock)
+
 			for index: number = 1, SPRAYS do
 				serverNet.Spray.fire(alice, index % 256, 0)
 			end
@@ -313,10 +326,24 @@ describe("Targets", function ()
 
 			harness.clients.alice.Sync.fire(1)
 			harness.server.Sync.fire(harness.players.alice, 2)
-			exchange(harness.mock)
+			held(harness.mock)
 
 			expect(serverHeard).is("Alice 1")
 			expect(clientHeard).is(2)
+		end)
+
+		test("a struct field named like a global the writer calls round-trips", function ()
+			local harness: Harness = setup("Shared")
+			local heard: string? = nil
+
+			harness.server.Submit.on(function (_, commands: { { name: string, type: number } })
+				heard = `{commands[1].name} {commands[1].type}`
+			end)
+
+			harness.clients.alice.Submit.fire({ { name = "kick", type = 3 } })
+			exchange(harness.mock)
+
+			expect(heard).is("kick 3")
 		end)
 
 		test("flush sends what was fired before the Heartbeat would", function ()

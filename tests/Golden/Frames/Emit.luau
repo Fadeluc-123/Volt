@@ -3,7 +3,6 @@ local beginReliable, refuseReliable = ...
 -- The 24 rotations whose axes lie along the world axes, in the one order both sides share
 local ALIGNED: { CFrame } = {}
 local AXES: { Vector3 } = { Vector3.xAxis, -Vector3.xAxis, Vector3.yAxis, -Vector3.yAxis, Vector3.zAxis, -Vector3.zAxis }
-local ALIGNED_TOLERANCE: number = 1e-5 -- How far a rotation may drift from an aligned one and still count
 
 for _, right: Vector3 in AXES do
 	for _, up: Vector3 in AXES do
@@ -12,6 +11,8 @@ for _, right: Vector3 in AXES do
 		end
 	end
 end
+
+local ALIGNED_TOLERANCE: number = 1e-5 -- How far a rotation may drift from an aligned one and still count
 
 --[[
     The index of the aligned rotation a CFrame carries, or nil when its
@@ -140,9 +141,9 @@ local function writeFrames(a: CFrame, b: CFrame, c: CFrame, d: CFrame)
 		refuseReliable("Frames.c: expected AlignedCFrame<q16(-512..512)>")
 	end
 
-	local cRotation: number? = alignedIndex(c)
+	local cRotation: number = alignedIndex(c) or -1
 
-	if not cRotation then
+	if cRotation < 0 then
 		refuseReliable("Frames.c: expected an axis-aligned rotation")
 	end
 

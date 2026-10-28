@@ -1,6 +1,6 @@
-option clientOutput = "../src/Client/Net.luau"
-option serverOutput = "../src/Server/Net.luau"
-option typesOutput = "../src/Shared/Config/Types/Net.luau"
+option clientOutput = "../src/Shared/Network/Client.luau"
+option serverOutput = "../src/Shared/Network/Server.luau"
+option typesOutput = "../src/Shared/Network/Types.luau"
 option yield = promise
 option promise = "ReplicatedStorage.Packages.Promise"
 

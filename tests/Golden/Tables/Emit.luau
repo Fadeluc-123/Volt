@@ -2,7 +2,7 @@ local beginReliable, allocateReliable, slotReliable, refuseReliable = ...
 
 export type Team = "Red" | "Blue"
 
-local TEAM: { string } = { "Red", "Blue" }
+local TEAM: { "Red" | "Blue" } = { "Red", "Blue" }
 
 local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
@@ -17,13 +17,13 @@ local function writeTeam(allocate: (number) -> (number, buffer), _: (any) -> (),
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+local function readTeam(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number, Team)
 	if cursor + 1 > length then
 		error("Team: truncated")
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local value: string? = TEAM[bit32.extract(flags, 0, 1) + 1]
+	local value: ("Red" | "Blue")? = TEAM[bit32.extract(flags, 0, 1) + 1]
 
 	if not value then
 		error("Team: out of range")
@@ -189,7 +189,7 @@ local function readTables(packet: buffer, cursor: number, side: { any }, sideCur
 		error("Tables.a: truncated")
 	end
 
-	local a = {}
+	local a: { [number]: string } = {}
 
 	for _ = 1, aLength do
 		if cursor + 2 > length then
@@ -223,7 +223,7 @@ local function readTables(packet: buffer, cursor: number, side: { any }, sideCur
 		error("Tables.b: truncated")
 	end
 
-	local b = {}
+	local b: { [string]: true } = {}
 
 	for _ = 1, bLength do
 		if cursor + 1 > length then
@@ -256,14 +256,14 @@ local function readTables(packet: buffer, cursor: number, side: { any }, sideCur
 		error("Tables.c: truncated")
 	end
 
-	local c = {}
+	local c: { [Team]: number } = {}
 
 	for _ = 1, cLength do
 		if cursor + 2 > length then
 			error("Tables.c: truncated")
 		end
 
-		local cKey
+		local cKey: Team
 		local cValue: number = buffer.readu16(packet, cursor)
 		cursor += 2
 		cursor, sideCursor, cKey = readTeam(packet, cursor, side, sideCursor, length)
@@ -279,7 +279,7 @@ local function readTables(packet: buffer, cursor: number, side: { any }, sideCur
 		error("Tables.d: truncated")
 	end
 
-	local d = {}
+	local d: { [number]: true } = {}
 
 	for _ = 1, 3 do
 		local dKey: number = buffer.readu8(packet, cursor)

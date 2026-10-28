@@ -6,20 +6,26 @@
 --]]
 
 --!strict
+export type Bot = { Name: string }
+
 export type ServerEvent<A...> = {
-	fire: (player: Player, A...) -> (),
+	fire: (player: Player | Bot, A...) -> (),
 	fireAll: (A...) -> (),
-	fireList: (players: { Player }, A...) -> (),
-	fireExcept: (player: Player, A...) -> (),
-	fireSet: (players: { [Player]: true }, A...) -> (),
+	fireList: (players: { Player | Bot }, A...) -> (),
+	fireExcept: (player: Player | Bot, A...) -> (),
+	fireSet: (players: { [Player | Bot]: true }, A...) -> (),
 }
 
 export type ServerListener<A...> = {
-	on: (listener: (player: Player, A...) -> ()) -> () -> (),
-	iter: () -> () -> (number, Player, A...),
+	on: (listener: (player: Player | Bot, A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, Player | Bot, A...),
 }
 
-export type ServerFunction<A..., R...> = { on: (handler: (player: Player, A...) -> R...) -> () -> () }
+export type ServerPolling<A...> = { iter: () -> () -> (number, Player | Bot, A...) }
+
+export type ServerFunction<A..., R...> = {
+	on: (handler: (player: Player | Bot, A...) -> R...) -> () -> (),
+}
 
 export type ClientEvent<A...> = { fire: (A...) -> () }
 
@@ -27,6 +33,8 @@ export type ClientListener<A...> = {
 	on: (listener: (A...) -> ()) -> () -> (),
 	iter: () -> () -> (number, A...),
 }
+
+export type ClientPolling<A...> = { iter: () -> () -> (number, A...) }
 
 export type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
 

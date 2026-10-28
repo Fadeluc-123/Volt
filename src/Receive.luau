@@ -81,9 +81,9 @@ local function run(self: any, channel: Channel, listener: (...any) -> (), player
 	end
 
 	if not ok then
-		self:fail(player, "listener", `{channel.name}: {message}`)
+		self:fail(player, "listener", tostring(message), channel.name)
 	elseif self.frame ~= frame then
-		self:fail(player, "listener", `{channel.name}: a sync listener yielded`)
+		self:fail(player, "listener", "a sync listener yielded", channel.name)
 	end
 end
 
@@ -92,7 +92,7 @@ end
     decode left off: the id, then the reader, which decodes the bytes and
     delivers the values in one call and returns the cursors past them.
     Runs under the packet's pcall, so an error anywhere in a message
-    drops the rest of the packet
+    drops the rest of the packet, and the id being read says whose it is
 --]]
 
 local function loop(self: any, player: any, packet: buffer, side: { any }, start: number)
@@ -107,6 +107,7 @@ local function loop(self: any, player: any, packet: buffer, side: { any }, start
 
 	while cursor < length do
 		if cursor + idBytes > length then
+			self._reading = nil
 			error("truncated message id")
 		end
 
@@ -114,9 +115,11 @@ local function loop(self: any, player: any, packet: buffer, side: { any }, start
 		local message: Message? = messages[id]
 
 		if not message then
+			self._reading = nil
 			error(`unknown message {id}`)
 		end
 
+		self._reading = id -- Every error a reader raises comes before its listeners run, so this names the message
 		total.messagesIn += 1
 
 		if mine then
@@ -156,7 +159,8 @@ end
     Handles one packet from a player, or from the server on the client:
     the checks before decode, then the loop. A message that fails to
     decode leaves the cursor nowhere, so the rest of the packet is
-    dropped with it and reported once
+    dropped with it and reported once, named for that message; an id cut
+    short or naming no message is the packet's failure and names none
 --]]
 
 function Receive:packet(player: any, packet: any, side: any)
@@ -170,8 +174,17 @@ function Receive:packet(player: any, packet: any, side: any)
 	end
 
 	local ok: boolean, message: any = pcall(loop, self, player, packet, side or NO_SLOTS, start)
-	if not ok then
-		self:fail(player, "decode", (tostring(message):gsub(POSITION, "")))
+	if ok then
+		return
+	end
+
+	local id: number? = self._reading
+	local detail: string = (tostring(message):gsub(POSITION, ""))
+
+	if id then
+		self:fail(player, "decode", detail, self._messages[id].name)
+	else
+		self:fail(player, "packet", detail)
 	end
 end
 
@@ -189,7 +202,8 @@ function Receive:deliver(id: number, player: any, cursor: number, sideCursor: nu
 	local limit: Limit? = self._limits[id]
 	local listeners = channel.listeners
 
-	if limit and not self:allow(player, id, channel.name, limit) then
+	if limit and not self:allow(player, id, limit) then
+		self:_limited(player, channel.name, limit)
 		return cursor, sideCursor
 	end
 

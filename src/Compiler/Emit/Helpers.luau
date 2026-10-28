@@ -1,13 +1,15 @@
 --[[
-    The helper functions a generated module carries when a type needs
-    them, by the name the emitter records: the IEEE half pair, the CFrame
-    fold and rebuild, the aligned rotation table and lookup, and the enum
-    table an untyped item finds its way back through
+    The helpers a generated module carries when a type needs them, by the
+    name the emitter records: the IEEE half pair, the CFrame fold and
+    rebuild, the aligned rotations and their lookup, and the enum table an
+    untyped item finds its way back through, each a list of pieces that
+    declare one name apiece, so a module keeps only the pieces it calls
 --]]
 
 --!strict
-local Helpers: { [string]: string } = {
-	f16 = [=[
+local Helpers: { [string]: { string } } = {
+	f16 = {
+		[=[
 --[[
     Writes a number as an IEEE half: sign, five exponent bits and ten
     fraction bits, rounding to the nearest half and past 65504 to
@@ -29,7 +31,8 @@ local function writef16(target: buffer, offset: number, value: number)
 
 	buffer.writeu16(target, offset, value < 0 and 32768 + encoded or encoded)
 end
-
+]=],
+		[=[
 --[[
     Reads an IEEE half back into a number
 --]]
@@ -51,8 +54,10 @@ local function readf16(source: buffer, offset: number): number
 	return encoded >= 32768 and -magnitude or magnitude
 end
 ]=],
+	},
 
-	cframe = [=[
+	cframe = {
+		[=[
 --[[
     A CFrame's rotation as an axis and an angle no wider than a half
     turn, since a wider turn is the same rotation the other way about
@@ -66,7 +71,8 @@ local function axisAngle(value: CFrame): (Vector3, number)
 	end
 	return axis, angle
 end
-
+]=],
+		[=[
 --[[
     Rebuilds a CFrame from its position and a rotation vector whose
     direction is the axis and whose length is the angle
@@ -80,12 +86,13 @@ local function cframe(x: number, y: number, z: number, rx: number, ry: number, r
 	return CFrame.fromAxisAngle(Vector3.new(rx / angle, ry / angle, rz / angle), angle) + Vector3.new(x, y, z)
 end
 ]=],
+	},
 
-	aligned = [=[
+	aligned = {
+		[=[
 -- The 24 rotations whose axes lie along the world axes, in the one order both sides share
 local ALIGNED: { CFrame } = {}
 local AXES: { Vector3 } = { Vector3.xAxis, -Vector3.xAxis, Vector3.yAxis, -Vector3.yAxis, Vector3.zAxis, -Vector3.zAxis }
-local ALIGNED_TOLERANCE: number = 1e-5 -- How far a rotation may drift from an aligned one and still count
 
 for _, right: Vector3 in AXES do
 	for _, up: Vector3 in AXES do
@@ -94,6 +101,9 @@ for _, right: Vector3 in AXES do
 		end
 	end
 end
+]=],
+		[=[
+local ALIGNED_TOLERANCE: number = 1e-5 -- How far a rotation may drift from an aligned one and still count
 
 --[[
     The index of the aligned rotation a CFrame carries, or nil when its
@@ -110,14 +120,17 @@ local function alignedIndex(value: CFrame): number?
 	return nil
 end
 ]=],
+	},
 
-	enums = [=[
+	enums = {
+		[=[
 -- Every enum by the name its items report, so an untyped item finds its way back
 local ENUMS: { [string]: Enum } = {}
 for _, enum: Enum in Enum:GetEnums() do
 	ENUMS[tostring(enum)] = enum
 end
-
+]=],
+		[=[
 --[[
     Finds an item of any enum by the enum's name and the item's value, or
     nil when either is unknown
@@ -139,6 +152,7 @@ local function enumItem(name: string, value: number): EnumItem?
 	return nil
 end
 ]=],
+	},
 }
 
 return Helpers

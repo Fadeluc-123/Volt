@@ -2,15 +2,16 @@
     Types shared across the runtime: the transport a runtime drives,
     which the real remotes and the mock both provide, the schema table a
     generated module hands to Volt.start and the messages in it, the
-    failure handler, the hooks, the counters, and the limit and bucket a
-    rate is kept in
+    failure handler, the hooks, the counters, a bot, a player's byte count,
+    and the limit and bucket a rate is kept in
 --]]
 
 --!strict
+export type Bot = { Name: string } -- A connection a harness adds that the server treats as a player; no UserId and no Kick
 export type Fire = (target: any, packet: buffer, side: { any }?) -> ()
 export type Handler = (player: any, packet: buffer, side: { any }?) -> ()
 export type Spawn = (callback: (...any) -> (), ...any) -> ...any
-export type Failure = (player: any, kind: string, detail: string) -> ()
+export type Failure = (player: (Player | Bot)?, kind: string, detail: string) -> () -- Nil on the client
 export type Hook = (target: any, ...any) -> boolean -- Before a send with its target, or after a receive with the player; false vetoes
 export type Limit = { rate: number, burst: number } -- What a player is allowed a second, and the most they may save up
 export type Reader = (
@@ -22,6 +23,13 @@ export type Reader = (
 	length: number
 ) -> (number, number)
 
+-- One player's byte count, shared by every runtime of a VM: the bytes sent in each slice of the last second, and their states
+export type Record = {
+	slices: { number },
+	stamps: { number }, -- Which slice of time each slice was last counted in
+	states: { [any]: boolean }, -- The player's send states in every runtime, whose cursors are what is not yet flushed
+}
+
 export type Transport = {
 	reliable: Fire,
 	unreliable: Fire,
@@ -32,6 +40,8 @@ export type Transport = {
 	players: (() -> { any })?, -- The server's transport carries the player list and its two signals
 	playerAdded: ((callback: (player: any) -> ()) -> ())?,
 	playerRemoving: ((callback: (player: any) -> ()) -> ())?,
+	present: ((player: any) -> boolean)?, -- Whether a player is listed, so a fire before Volt's own join can set them up
+	traffic: ((player: any) -> Record)?, -- The player's byte count, one per VM, from the hub that serves the transport
 }
 
 export type Message = {

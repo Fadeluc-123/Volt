@@ -14,6 +14,7 @@ local Expressions = require("./Expressions")
 local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
+local Types = require("../Targets/Types")
 
 type Block = Blocks.Block
 type Range = Schema.Range
@@ -85,7 +86,9 @@ function Collections:array(node: Type, write: Block, read: Block, value: string,
 	local position: string = read:name("index")
 	local writeEntry: Block, readEntry: Block = self:run(write, read, hint, path, { element }, extent, count)
 
-	read:tail(`local {result} = table.create({count})`)
+	-- The new checker makes table.create's entries unknown, which only the cast tells it otherwise
+	local annotation: string = Types.annotation(node)
+	read:tail(`local {result}: {annotation} = table.create({count}) :: {annotation}`)
 	write:open(`for {index} = 1, {extent} do`)
 	read:open(`for {position} = 1, {count} do`)
 
@@ -216,7 +219,7 @@ function Collections:bitset(range: Range?, write: Block, read: Block, value: str
 		local test: string = `bit32.btest(buffer.readu8({source}, {rest}), bit32.lshift(1, ({position} - 1) % 8))`
 
 		return Blocks.paragraphs({
-			`local {result}: \{ boolean } = table.create({count})`,
+			`local {result}: \{ boolean } = table.create({count}) :: \{ boolean }`,
 			`for {readByte} = 0, {count} // 8 - 1 do\n{Blocks.indent(1, whole)}\nend`,
 			`for {position} = {count} // 8 * 8 + 1, {count} do\n\t{result}[{position}] = {test}\nend`,
 		})
@@ -250,7 +253,8 @@ function Collections:map(node: Type, write: Block, read: Block, value: string, h
 	local result: string = read:name(hint)
 	local writeEntry: Block, readEntry: Block = self:run(write, read, hint, path, nodes, extent, count)
 
-	read:tail(`local {result} = \{}`)
+	-- Typed where it is made, or a set's entries read as boolean rather than the true its type promises
+	read:tail(`local {result}: {Types.annotation(node)} = \{}`)
 	write:open(isSet and `for {entryKey} in {value} do` or `for {entryKey}, {entryValue} in {value} do`)
 	read:open(`for _ = 1, {count} do`)
 

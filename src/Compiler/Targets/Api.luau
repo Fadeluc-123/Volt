@@ -1,14 +1,15 @@
 --[[
     The API tables of a generated module: an entry per event, per function
-    and per exported type, nested per namespace and frozen, then the
-    members every module has, and the registry that lists every entry by
-    its full name, which the wrapper binds by
+    and per exported type, nested per namespace, frozen and cast to its
+    handle type, then the members every module has, and the registry that
+    lists every entry by its full name, which the wrapper binds by
 --]]
 
 --!strict
 local Api = {} :: any
 
 local Blocks = require("../Blocks")
+local Contract = require("../Config/Contract")
 local Messages = require("./Messages")
 local Schema = require("../Config/Types/Schema")
 local Types = require("./Types")
@@ -20,13 +21,18 @@ type Function = Schema.Function
 type TypeDeclaration = Schema.TypeDeclaration
 type Walked = Messages.Walked
 
+local VERSION: string = Contract.version
+
 -- The fire variants a server event has beside fire, each one broadcast with the targets and the exception it names
 local BROADCASTS: { { name: string, target: string, arguments: string } } = {
 	{ name = "fireAll", target = "", arguments = "nil, nil" },
-	{ name = "fireList", target = "players: { Player }", arguments = "players, nil" },
-	{ name = "fireExcept", target = "player: Player", arguments = "nil, player" },
-	{ name = "fireSet", target = "players: { [Player]: true }", arguments = "players, nil" },
+	{ name = "fireList", target = "players: { Player | Bot }", arguments = "players, nil" },
+	{ name = "fireExcept", target = "player: Player | Bot", arguments = "nil, player" },
+	{ name = "fireSet", target = "players: { [Player | Bot]: true }", arguments = "players, nil" },
 }
+
+-- The player callbacks a server module has, each handed to the runtime's method of the same name
+local CALLBACKS: { string } = { "onJoin", "onLeave", "onHandshake" }
 
 local REGISTRIES: { string } = { "events", "functions", "exports" } -- The flat maps, in the order they are written
 
@@ -46,7 +52,17 @@ local function member(name: string, signature: string, ...: string): string
 	return `{name} = function {signature}\n\t{table.concat({ ... }, "\n\t")}\nend,`
 end
 
--- The API table's entries: every message's and exported type's, nested per namespace, then the members every module has
+-- An entry's members as a frozen table, cast to the handle type it fits so a checker holds every call to it
+local function entry(name: string, members: { string }, handle: string): string
+	return `{name} = table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs(members))}\n}) :: {handle},`
+end
+
+--[[
+    The API table's entries: every message's and exported type's, nested
+    per namespace, then the members every module has, and on the server
+    the player callbacks, the byte count and the bot test after them
+--]]
+
 function Api:api(): string
 	local entries: { string } = self:declarations(self._file.declarations)
 	local hooks: { string } = {
@@ -56,11 +72,29 @@ function Api:api(): string
 		"}),",
 	}
 
+	table.insert(entries, `{self:method("version")} = "{VERSION}",`)
 	table.insert(entries, table.concat(hooks, "\n"))
 	table.insert(entries, `{self:method("rate")} = runtime.rate,`)
 	table.insert(entries, member(self:method("flush"), "()", "runtime:flush()"))
-	table.insert(entries, member(self:method("onFailure"), "(handler: Volt.Failure)", "runtime:onFailure(handler)"))
-	table.insert(entries, member(self:method("stats"), "(player: Player?): Volt.Stats", "return runtime:stats(player)"))
+
+	local failure: string = "(handler: Volt.Failure): Volt.Failure"
+	table.insert(entries, member(self:method("onFailure"), failure, "return runtime:onFailure(handler)"))
+
+	local stats: string = "(player: (Player | Bot)?): Volt.Stats"
+	table.insert(entries, member(self:method("stats"), stats, "return runtime:stats(player)"))
+
+	if not self._server then
+		return Blocks.paragraphs(entries)
+	end
+
+	for _, callback: string in CALLBACKS do
+		local signature: string = "(callback: (player: Player | Bot) -> ()): () -> ()"
+		table.insert(entries, member(self:method(callback), signature, `return runtime:{callback}(callback)`))
+	end
+
+	local traffic: string = "(player: Player | Bot): (number, number)"
+	table.insert(entries, member(self:method("traffic"), traffic, "return runtime:traffic(player)"))
+	table.insert(entries, `{self:method("isBot")} = runtime.isBot,`)
 
 	return Blocks.paragraphs(entries)
 end
@@ -93,7 +127,7 @@ end
     The API entry of one event on this side: fire, asking the hook before
     its send first, with the broadcast variants on the server, when the
     side fires it; on, unless the event is polled, and iter when it hears
-    it
+    it. A two-way entry is cast to both handles it fits
 --]]
 
 function Api:event(event: Event): string
@@ -101,7 +135,9 @@ function Api:event(event: Event): string
 	local fires: boolean = event.from == "Both" or (event.from == "Server") == server
 	local hears: boolean = event.from == "Both" or (event.from == "Server") ~= server
 	local walked: Walked = self:walk(event, fires, hears)
+	local realm: string = server and "Server" or "Client"
 	local members: { string } = {}
+	local handles: { string } = {}
 
 	if fires then
 		local id: number = walked.out :: number
@@ -115,7 +151,7 @@ function Api:event(event: Event): string
 		local allowed: string = `before[{id}] == nil or before[{id}]({joined(target, walked.arguments)})`
 
 		if server then
-			local guarded: string = `({joined("player: Player", walked.typed)})`
+			local guarded: string = `({joined("player: Player | Bot", walked.typed)})`
 			local condition: string = `if ({allowed}) and runtime:target(player) then`
 
 			table.insert(members, member(self:method("fire"), guarded, condition, `\t{call}`, "end"))
@@ -132,6 +168,8 @@ function Api:event(event: Event): string
 				member(self:method("fire"), `({walked.typed})`, `if {allowed} then`, `\t{call}`, "end")
 			)
 		end
+
+		table.insert(handles, `{realm}Event<{walked.pack}>`)
 	end
 
 	if hears and event.call ~= "Polling" then
@@ -141,12 +179,15 @@ function Api:event(event: Event): string
 
 	if hears then
 		local signature: string = `(): {walked.iterator}`
+		local polled: boolean = event.call == "Polling"
+
 		table.insert(members, member(self:method("iter"), signature, `return runtime:iter({walked.id})`))
+		table.insert(handles, `{realm}{polled and "Polling" or "Listener"}<{walked.pack}>`)
 	end
 
 	table.insert(self._registry.events, event.path :: string)
 
-	return `{event.name} = table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs(members))}\n}),`
+	return entry(event.name, members, table.concat(handles, " & "))
 end
 
 --[[
@@ -157,21 +198,26 @@ end
 
 function Api:call(declaration: Function): string
 	local exchanged: Exchanged = self:exchange(declaration)
-	local entry: string
+	local packs: string = `<{exchanged.pack}, {exchanged.returns}>`
+	local handle: string
+	local body: string
 
 	if self._server then
 		local signature: string = `(handler: {exchanged.handler}): () -> ()`
-		entry = member(self:method("on"), signature, `return runtime:handle({exchanged.id}, handler)`)
+
+		handle = `ServerFunction{packs}`
+		body = member(self:method("on"), signature, `return runtime:handle({exchanged.id}, handler)`)
 	else
 		local signature: string = `({exchanged.typed}){exchanged.result}`
 		local passed: string = joined(`write{exchanged.label}`, exchanged.arguments)
 
-		entry = member(self:method("invoke"), signature, `return runtime:invoke({exchanged.id}, {passed})`)
+		handle = declaration.yield == "Promise" and `ClientPromise<{exchanged.pack}>` or `ClientFunction{packs}`
+		body = member(self:method("invoke"), signature, `return runtime:invoke({exchanged.id}, {passed})`)
 	end
 
 	table.insert(self._registry.functions, declaration.path :: string)
 
-	return `{declaration.name} = table.freeze(\{\n{Blocks.indent(1, entry)}\n}),`
+	return entry(declaration.name, { body }, handle)
 end
 
 --[[
@@ -196,21 +242,26 @@ function Api:export(declaration: TypeDeclaration): string
 	)
 
 	table.insert(self._registry.exports, declaration.path :: string)
-	return `{declaration.name} = table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs({ write, read }))}\n}),`
+	return entry(declaration.name, { write, read }, `Exported<{annotation}>`)
 end
 
--- The registry: every event, function and exported type by its full name, each the same handle as its entry
+--[[
+    The registry: every event, function and exported type by its full
+    name, each the same handle as its entry, cast to a map a binder can
+    index with a name it holds and walk
+--]]
+
 function Api:registry(): string
 	local maps: { string } = {}
 
 	for _, kind: string in REGISTRIES do
 		local entries: { string } = {}
 		for _, path: string in self._registry[kind] do
-			table.insert(entries, `\t["{path}"] = net.{path},`)
+			table.insert(entries, `\t["{path}"] = Network.{path},`)
 		end
 
 		local inside: string = #entries == 0 and "{}" or `\{\n{table.concat(entries, "\n")}\n}`
-		table.insert(maps, `net.{self:method(kind)} = table.freeze({inside})`)
+		table.insert(maps, `Network.{self:method(kind)} = table.freeze({inside}) :: \{ [string]: any }`)
 	end
 
 	return Blocks.paragraphs(maps)

@@ -12,20 +12,26 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
+type Bot = Volt.Bot
+
 export type ServerEvent<A...> = {
-	fire: (player: Player, A...) -> (),
+	fire: (player: Player | Bot, A...) -> (),
 	fireAll: (A...) -> (),
-	fireList: (players: { Player }, A...) -> (),
-	fireExcept: (player: Player, A...) -> (),
-	fireSet: (players: { [Player]: true }, A...) -> (),
+	fireList: (players: { Player | Bot }, A...) -> (),
+	fireExcept: (player: Player | Bot, A...) -> (),
+	fireSet: (players: { [Player | Bot]: true }, A...) -> (),
 }
 
 export type ServerListener<A...> = {
-	on: (listener: (player: Player, A...) -> ()) -> () -> (),
-	iter: () -> () -> (number, Player, A...),
+	on: (listener: (player: Player | Bot, A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, Player | Bot, A...),
 }
 
-export type ServerFunction<A..., R...> = { on: (handler: (player: Player, A...) -> R...) -> () -> () }
+export type ServerPolling<A...> = { iter: () -> () -> (number, Player | Bot, A...) }
+
+export type ServerFunction<A..., R...> = {
+	on: (handler: (player: Player | Bot, A...) -> R...) -> () -> (),
+}
 
 export type Exported<T> = {
 	write: (value: T) -> (buffer, { any }?),
@@ -36,7 +42,7 @@ local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
 local refuseReliable: (string) -> never
 
-local function readInput(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readInput(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 2 > length then
 		error("Input: truncated")
 	end
@@ -53,7 +59,7 @@ local function readInput(player: Player?, packet: buffer, cursor: number, _: { a
 	return runtime:deliver(1, player, cursor, sideCursor, dir, bit32.btest(flags, 1))
 end
 
-local function readChat(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readChat(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Chat: truncated")
 	end
@@ -76,11 +82,11 @@ local function readChat(player: Player?, packet: buffer, cursor: number, _: { an
 	return runtime:deliver(2, player, cursor, sideCursor, value)
 end
 
-local function readReady(player: Player?, _: buffer, cursor: number, _: { any }, sideCursor: number, _: number): (number, number)
+local function readReady(player: (Player | Bot)?, _: buffer, cursor: number, _: { any }, sideCursor: number, _: number): (number, number)
 	return runtime:deliver(3, player, cursor, sideCursor)
 end
 
-local function readGrab(player: Player?, _: buffer, cursor: number, side: { any }, sideCursor: number, _: number): (number, number)
+local function readGrab(player: (Player | Bot)?, _: buffer, cursor: number, side: { any }, sideCursor: number, _: number): (number, number)
 	local value: Instance? = side[sideCursor]
 	sideCursor += 1
 
@@ -91,7 +97,7 @@ local function readGrab(player: Player?, _: buffer, cursor: number, side: { any 
 	return runtime:deliver(4, player, cursor, sideCursor, value)
 end
 
-local function readPing(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readPing(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 4 > length then
 		error("Ping: truncated")
 	end
@@ -113,7 +119,7 @@ local function writeSync(value: number)
 	buffer.writeu8(out, offset + 1, value)
 end
 
-local function readSync(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readSync(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 1 > length then
 		error("Sync: truncated")
 	end
@@ -159,55 +165,55 @@ refuseReliable = runtime.reliable.refuse
 
 local before: { [number]: Volt.Hook } = runtime.before
 
-local net = {
+local Network = {
 	Input = table.freeze({
-		on = function (listener: (player: Player, dir: number, jump: boolean) -> ()): () -> ()
+		on = function (listener: (player: Player | Bot, dir: number, jump: boolean) -> ()): () -> ()
 			return runtime:on(1, listener)
 		end,
 
-		iter = function (): () -> (number, Player, number, boolean)
+		iter = function (): () -> (number, Player | Bot, number, boolean)
 			return runtime:iter(1)
 		end,
-	}),
+	}) :: ServerListener<(number, boolean)>,
 
 	Chat = table.freeze({
-		on = function (listener: (player: Player, value: string) -> ()): () -> ()
+		on = function (listener: (player: Player | Bot, value: string) -> ()): () -> ()
 			return runtime:on(2, listener)
 		end,
 
-		iter = function (): () -> (number, Player, string)
+		iter = function (): () -> (number, Player | Bot, string)
 			return runtime:iter(2)
 		end,
-	}),
+	}) :: ServerListener<(string)>,
 
 	Ready = table.freeze({
-		on = function (listener: (player: Player) -> ()): () -> ()
+		on = function (listener: (player: Player | Bot) -> ()): () -> ()
 			return runtime:on(3, listener)
 		end,
 
-		iter = function (): () -> (number, Player)
+		iter = function (): () -> (number, Player | Bot)
 			return runtime:iter(3)
 		end,
-	}),
+	}) :: ServerListener<()>,
 
 	Grab = table.freeze({
-		on = function (listener: (player: Player, value: Instance) -> ()): () -> ()
+		on = function (listener: (player: Player | Bot, value: Instance) -> ()): () -> ()
 			return runtime:on(4, listener)
 		end,
 
-		iter = function (): () -> (number, Player, Instance)
+		iter = function (): () -> (number, Player | Bot, Instance)
 			return runtime:iter(4)
 		end,
-	}),
+	}) :: ServerListener<(Instance)>,
 
 	Ping = table.freeze({
-		iter = function (): () -> (number, Player, number)
+		iter = function (): () -> (number, Player | Bot, number)
 			return runtime:iter(5)
 		end,
-	}),
+	}) :: ServerPolling<(number)>,
 
 	Sync = table.freeze({
-		fire = function (player: Player, value: number)
+		fire = function (player: Player | Bot, value: number)
 			if (before[1] == nil or before[1](player, value)) and runtime:target(player) then
 				writeSync(value)
 			end
@@ -217,26 +223,28 @@ local net = {
 			runtime:broadcast(1, nil, nil, writeSync, value)
 		end,
 
-		fireList = function (players: { Player }, value: number)
+		fireList = function (players: { Player | Bot }, value: number)
 			runtime:broadcast(1, players, nil, writeSync, value)
 		end,
 
-		fireExcept = function (player: Player, value: number)
+		fireExcept = function (player: Player | Bot, value: number)
 			runtime:broadcast(1, nil, player, writeSync, value)
 		end,
 
-		fireSet = function (players: { [Player]: true }, value: number)
+		fireSet = function (players: { [Player | Bot]: true }, value: number)
 			runtime:broadcast(1, players, nil, writeSync, value)
 		end,
 
-		on = function (listener: (player: Player, value: number) -> ()): () -> ()
+		on = function (listener: (player: Player | Bot, value: number) -> ()): () -> ()
 			return runtime:on(6, listener)
 		end,
 
-		iter = function (): () -> (number, Player, number)
+		iter = function (): () -> (number, Player | Bot, number)
 			return runtime:iter(6)
 		end,
-	}),
+	}) :: ServerEvent<(number)> & ServerListener<(number)>,
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -249,25 +257,43 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
+
+	onJoin = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onJoin(callback)
+	end,
+
+	onLeave = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onLeave(callback)
+	end,
+
+	onHandshake = function (callback: (player: Player | Bot) -> ()): () -> ()
+		return runtime:onHandshake(callback)
+	end,
+
+	traffic = function (player: Player | Bot): (number, number)
+		return runtime:traffic(player)
+	end,
+
+	isBot = runtime.isBot,
 }
 
-net.events = table.freeze({
-	["Input"] = net.Input,
-	["Chat"] = net.Chat,
-	["Ready"] = net.Ready,
-	["Grab"] = net.Grab,
-	["Ping"] = net.Ping,
-	["Sync"] = net.Sync,
-})
+Network.events = table.freeze({
+	["Input"] = Network.Input,
+	["Chat"] = Network.Chat,
+	["Ready"] = Network.Ready,
+	["Grab"] = Network.Grab,
+	["Ping"] = Network.Ping,
+	["Sync"] = Network.Sync,
+}) :: { [string]: any }
 
-net.functions = table.freeze({})
-net.exports = table.freeze({})
+Network.functions = table.freeze({}) :: { [string]: any }
+Network.exports = table.freeze({}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

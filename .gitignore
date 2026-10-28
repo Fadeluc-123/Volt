@@ -1,6 +1,8 @@
-# Claude Code per-session hook state and personal overrides
+# Claude Code's hooks, settings and instructions, the knowledge base and the open decisions, all local-only
 .claude/
+CLAUDE.md
 KB/
+Open-Decisions.md
 
 # Inbox for handoff bundles awaiting ingestion into KB/
 Handoffs/
@@ -23,3 +25,6 @@ place/Server.luau
 
 # The benchmark: the modules every library compiles and the variants derived from the definitions
 benchmark/Generated/
+
+# Graphify's knowledge graph of the code; /graphify rebuilds it
+graphify-out/

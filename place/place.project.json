@@ -1,5 +1,6 @@
 {
 	"name": "Smoke",
+	"servePort": 34873,
 	"tree": {
 		"$className": "DataModel",
 		"ReplicatedStorage": {
@@ -7,10 +8,10 @@
 				"$className": "Folder",
 				"Volt": { "$path": "../default.project.json" }
 			},
-			"Net": { "$path": "Client.luau" }
+			"Network": { "$path": "Client.luau" }
 		},
 		"ServerScriptService": {
-			"Net": { "$path": "Server.luau" },
+			"Network": { "$path": "Server.luau" },
 			"Smoke": { "$path": "Smoke.server.luau" }
 		},
 		"StarterPlayer": {

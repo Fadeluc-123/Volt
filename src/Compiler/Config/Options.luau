@@ -25,7 +25,7 @@ local Options = {
 		{ key = "serverOutput", kind = "string", required = true },
 		{ key = "typesOutput", kind = "string" },
 		{ key = "runtime", kind = "string", default = "ReplicatedStorage.Packages.Volt" },
-		{ key = "scope", kind = "name" }, -- Defaults to the schema file's own name
+		{ key = "scope", kind = "name" }, -- Defaults to the options file's own name
 		{ key = "casing", values = { "camel", "pascal", "snake" }, default = "camel" },
 		{ key = "writeValidation", kind = "boolean", default = true },
 		{ key = "manualReplication", kind = "boolean", default = false },

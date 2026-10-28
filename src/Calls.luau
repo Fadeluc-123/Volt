@@ -31,6 +31,7 @@ type Call = {
 local SLOTS: number = Config.slots
 local MESSAGE_BYTES: number = Config.messageBytes
 local STATUS = Config.status
+local POSITION: string = Config.position
 
 local PREFIX_BYTES: number = 2 -- The u16 a reason's length is carried in, as far as its bound reaches
 
@@ -190,10 +191,10 @@ end
 --[[
     Runs a call from a player: the handler on a thread of its own, since
     most yield, with its returns as the reply; a call past the function's
-    rate or with no handler is refused at once, and one a hook vetoes is
-    dropped, so its caller waits out the timeout, since a veto that must
-    answer is the handler's to make. Returns the cursors, so a reader's
-    tail is this one call
+    rate, answered before it is reported, or with no handler is refused
+    at once, and one a hook vetoes is dropped, so its caller waits out the
+    timeout, since a veto that must answer is the handler's to make.
+    Returns the cursors, so a reader's tail is this one call
 --]]
 
 function Calls:call(
@@ -208,8 +209,9 @@ function Calls:call(
 	local limit: Limit? = self._limits[id]
 	local handler = self._handlers[id]
 
-	if limit and not self:allow(player, id, message.name, limit) then
+	if limit and not self:allow(player, id, limit) then
 		self:_reply(id, player, slot, STATUS.limited, "rate limited")
+		self:_limited(player, message.name, limit)
 	elseif self._hooked and not self:guard(id, player, ...) then
 		return cursor, sideCursor
 	elseif handler then
@@ -221,7 +223,13 @@ function Calls:call(
 	return cursor, sideCursor
 end
 
--- Serves one call: the handler's returns become the reply; its error is reported, and its first line refuses the call
+--[[
+    Serves one call: the handler's returns become the reply. Its error's
+    first line refuses the call, cut of its source position so no script
+    path reaches a client, and then the whole of it, traceback and all,
+    is reported
+--]]
+
 function Calls:_serve(id: number, player: any, slot: number, handler: (...any) -> ...any, ...: any)
 	local results = table.pack(xpcall(handler, self._trace, player, ...))
 	if results[1] then
@@ -229,9 +237,10 @@ function Calls:_serve(id: number, player: any, slot: number, handler: (...any) -
 	end
 
 	local message: string = tostring(results[2])
+	local first: string = message:match("^[^\n]*") :: string
 
-	self:fail(player, "handler", `{self._messages[id].name}: {message}`)
-	self:_reply(id, player, slot, STATUS.failed, message:match("^[^\n]*"))
+	self:_reply(id, player, slot, STATUS.failed, (first:gsub(POSITION, "")))
+	self:fail(player, "handler", message, self._messages[id].name)
 end
 
 --[[
@@ -239,7 +248,8 @@ end
     ok, or after any other the reason, cut to what a refusal carries. A
     return the function's return type cannot carry is the handler's
     bug: the writer refuses it and undoes the reply, which then fails
-    the call with the refusal. Nothing is sent to a caller who has left
+    the call with the refusal before the failure is reported, named for
+    the function. Nothing is sent to a caller who has left
 --]]
 
 function Calls:_reply(id: number, player: any, slot: number, status: number, ...: any)
@@ -258,8 +268,8 @@ function Calls:_reply(id: number, player: any, slot: number, status: number, ...
 
 		local reason: string = self.reliable:undo(message.name, refused) -- A refusal names the return itself
 
-		self:fail(player, "handler", reason)
-		return self:_reply(id, player, slot, STATUS.failed, reason)
+		self:_reply(id, player, slot, STATUS.failed, reason)
+		return self:fail(player, "handler", reason, message.name)
 	end
 
 	local reason: string = ...

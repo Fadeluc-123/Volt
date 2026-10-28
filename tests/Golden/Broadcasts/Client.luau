@@ -14,12 +14,16 @@ local Volt = require(ReplicatedStorage.Packages.Volt)
 
 export type Hit = { target: number, amount: number }
 
+type Bot = Volt.Bot
+
 export type ClientEvent<A...> = { fire: (A...) -> () }
 
 export type ClientListener<A...> = {
 	on: (listener: (A...) -> ()) -> () -> (),
 	iter: () -> () -> (number, A...),
 }
+
+export type ClientPolling<A...> = { iter: () -> () -> (number, A...) }
 
 export type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
 
@@ -32,7 +36,7 @@ export type Exported<T> = {
 
 local runtime: Volt.Runtime
 
-local function readDamage(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readDamage(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Damage: truncated")
 	end
@@ -45,7 +49,7 @@ local function readDamage(player: Player?, packet: buffer, cursor: number, _: { 
 	return runtime:deliver(1, player, cursor, sideCursor, value)
 end
 
-local function readSpray(player: Player?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readSpray(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 2 > length then
 		error("Spray: truncated")
 	end
@@ -57,7 +61,7 @@ local function readSpray(player: Player?, packet: buffer, cursor: number, _: { a
 	return runtime:deliver(2, player, cursor, sideCursor, x, y)
 end
 
-local function readMatch_Start(player: Player?, _: buffer, cursor: number, _: { any }, sideCursor: number, _: number): (number, number)
+local function readMatch_Start(player: (Player | Bot)?, _: buffer, cursor: number, _: { any }, sideCursor: number, _: number): (number, number)
 	return runtime:deliver(3, player, cursor, sideCursor)
 end
 
@@ -86,7 +90,7 @@ runtime = Volt.start({
 	outgoing = {},
 })
 
-local net = {
+local Network = {
 	Damage = table.freeze({
 		on = function (listener: (value: Hit) -> ()): () -> ()
 			return runtime:on(1, listener)
@@ -95,7 +99,7 @@ local net = {
 		iter = function (): () -> (number, Hit)
 			return runtime:iter(1)
 		end,
-	}),
+	}) :: ClientListener<(Hit)>,
 
 	Spray = table.freeze({
 		on = function (listener: (x: number, y: number) -> ()): () -> ()
@@ -105,15 +109,17 @@ local net = {
 		iter = function (): () -> (number, number, number)
 			return runtime:iter(2)
 		end,
-	}),
+	}) :: ClientListener<(number, number)>,
 
 	Match = table.freeze({
 		Start = table.freeze({
 			iter = function (): () -> (number)
 				return runtime:iter(3)
 			end,
-		}),
+		}) :: ClientPolling<()>,
 	}),
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -126,22 +132,22 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
 }
 
-net.events = table.freeze({
-	["Damage"] = net.Damage,
-	["Spray"] = net.Spray,
-	["Match.Start"] = net.Match.Start,
-})
+Network.events = table.freeze({
+	["Damage"] = Network.Damage,
+	["Spray"] = Network.Spray,
+	["Match.Start"] = Network.Match.Start,
+}) :: { [string]: any }
 
-net.functions = table.freeze({})
-net.exports = table.freeze({})
+Network.functions = table.freeze({}) :: { [string]: any }
+Network.exports = table.freeze({}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

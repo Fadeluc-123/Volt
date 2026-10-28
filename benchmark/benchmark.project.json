@@ -1,5 +1,6 @@
 {
 	"name": "Benchmark",
+	"servePort": 34874,
 	"tree": {
 		"$className": "DataModel",
 		"Players": {

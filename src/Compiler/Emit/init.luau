@@ -124,9 +124,10 @@ function Emit:shared(target: TypeDeclaration): string
 	self._known = known
 
 	table.insert(self.functions, `local function write{name}({Emit.parameters(writeBody, taken)})\n{writeBody}end\n`)
+	-- The reader returns the type the module exports under the pair's name, or a checker widens what it built
 	table.insert(
 		self.functions,
-		`local function read{name}({Emit.parameters(readBody, Contract.read)})\n{readBody}end\n`
+		`local function read{name}({Emit.parameters(readBody, Contract.read)}): (number, number, {name})\n{readBody}end\n`
 	)
 
 	return name
@@ -150,7 +151,7 @@ function Emit:call(target: TypeDeclaration, write: Block, read: Block, value: st
 	table.insert(passed, value)
 	write:tail(`write{name}({table.concat(passed, ", ")})`)
 
-	read:line(`local {result}`)
+	read:line(`local {result}: {name}`)
 	read:tail(`cursor, sideCursor, {result} = read{name}(packet, cursor, side, sideCursor, length)`)
 
 	return result
@@ -172,10 +173,12 @@ function Emit:type(node: Type, write: Block, read: Block, value: string, hint: s
 	end
 
 	-- A value reached through a field or an index is read into a local first, so the checks and the write after
-	-- it cost one lookup rather than one each; a number or boolean nothing checks is read once, as it is
+	-- it cost one lookup rather than one each, and a cast to a member is spelled once; a number or boolean
+	-- nothing checks is read once, as it is
 	local scalar: boolean = node.kind == "primitive" and (Primitives[node.name].bytes ~= nil or node.name == "boolean")
+	local reached: boolean = value:find("[.%[]") ~= nil or value:find("::", 1, true) ~= nil
 
-	if value:find("[.%[]") and (self._validate or not scalar) then
+	if reached and (self._validate or not scalar) then
 		local name: string = write:name(hint)
 		write:line(`local {name} = {value}`)
 		value = name

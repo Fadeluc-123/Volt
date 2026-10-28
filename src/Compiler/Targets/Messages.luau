@@ -34,6 +34,7 @@ export type Walked = {
 	arguments: string,
 	listener: string,
 	iterator: string,
+	pack: string, -- The types it carries, as a handle type takes them
 }
 
 -- What a function's API entry is built from once it is walked: this side's id, the call's signature, what it returns and the handler's
@@ -44,6 +45,8 @@ export type Exchanged = {
 	arguments: string,
 	result: string, -- What invoke is annotated as returning: the error tuple, or nothing said for a promise
 	handler: string,
+	pack: string, -- The types the call carries, as a handle type takes them
+	returns: string, -- And the types it returns, likewise
 }
 
 local SLOT_BYTES: number = Wire.slotBytes
@@ -73,6 +76,11 @@ end
 -- The values a reader hands on after the cursors, as the tail of an argument list
 local function handed(values: { string }): string
 	return #values == 0 and "" or `, {table.concat(values, ", ")}`
+end
+
+-- Some types as a type pack
+local function packed(types: { string }): string
+	return `({table.concat(types, ", ")})`
 end
 
 -- Whether a walk of a type calls a shared named type's pair, which takes its bytes from the allocator itself
@@ -206,8 +214,8 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 	local yielded: { string } = table.clone(types)
 
 	if server then
-		table.insert(heard, 1, "player: Player")
-		table.insert(yielded, 1, "Player")
+		table.insert(heard, 1, "player: Player | Bot")
+		table.insert(yielded, 1, "Player | Bot")
 	end
 
 	table.insert(yielded, 1, "number")
@@ -220,6 +228,7 @@ function Messages:walk(event: Event, fires: boolean, hears: boolean): Walked
 		arguments = table.concat(names, ", "),
 		listener = `({table.concat(heard, ", ")}) -> ()`,
 		iterator = `() -> ({table.concat(yielded, ", ")})`,
+		pack = packed(types),
 	}
 end
 
@@ -290,7 +299,7 @@ function Messages:exchange(declaration: Function): Exchanged
 	returnsRead:done(`return runtime:reply({replyId}, slot, cursor, sideCursor{handed(yields)})`)
 	replyRead:close("end")
 
-	local annotated: { string } = typed(names, declaration.data)
+	local annotated: { string }, types: { string } = typed(names, declaration.data)
 	local returned: { string }, returnTypes: { string } = typed(results, returns)
 
 	if server then
@@ -331,15 +340,17 @@ function Messages:exchange(declaration: Function): Exchanged
 	local heard: { string } = table.clone(annotated)
 	local tuple: { string } = { "boolean", table.unpack(returnTypes) }
 
-	table.insert(heard, 1, "player: Player")
+	table.insert(heard, 1, "player: Player | Bot")
 
 	return {
 		id = server and callId or replyId,
 		label = label,
 		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),
-		result = declaration.yield == "Promise" and "" or `: ({table.concat(tuple, ", ")})`,
-		handler = `({table.concat(heard, ", ")}) -> ({table.concat(returnTypes, ", ")})`,
+		result = declaration.yield == "Promise" and "" or `: {packed(tuple)}`,
+		handler = `({table.concat(heard, ", ")}) -> {packed(returnTypes)}`,
+		pack = packed(types),
+		returns = packed(returnTypes),
 	}
 end
 

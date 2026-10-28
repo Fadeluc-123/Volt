@@ -136,7 +136,7 @@ describe("Wrapper", function ()
 			harness.server.Damage.fireAll({ target = 1, amount = 2 })
 			harness.server.Damage.fireExcept(player, { target = 1, amount = 0 })
 			harness.server.Damage.fireSet(set, { target = 1, amount = 3 })
-			exchange(harness.mock)
+			roundTrip(harness.mock) -- Held until the client's handshake arrives, a step after it is flushed
 
 			expect(seen[1] == player and seen[2] == players and seen[5] == set).is(true)
 			expect(`{seen[3]} {seen[4]}`).is("nil nil")
@@ -288,7 +288,7 @@ describe("Wrapper", function ()
 			end
 
 			exchange(events.mock)
-			exchange(broadcasts.mock)
+			roundTrip(broadcasts.mock) -- The server's fires wait for the client's handshake
 
 			expect(ready).is(2)
 			expect(damage).is(3)

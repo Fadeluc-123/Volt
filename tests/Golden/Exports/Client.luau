@@ -13,12 +13,33 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Volt = require(ReplicatedStorage.Packages.Volt)
 
 export type Save = { version: number, names: { string }, owner: Instance? }
+export type Hit = { part: BasePart, model: Model? }
 export type Inventory_Kind = "Bag" | "Chest"
+
+type Bot = Volt.Bot
+
+type ClientEvent<A...> = { fire: (A...) -> () }
+
+type ClientListener<A...> = {
+	on: (listener: (A...) -> ()) -> () -> (),
+	iter: () -> () -> (number, A...),
+}
+
+type ClientPolling<A...> = { iter: () -> () -> (number, A...) }
+
+type ClientFunction<A..., R...> = { invoke: (A...) -> (boolean, R...) }
+
+type ClientPromise<A...> = { invoke: (A...) -> any }
+
+type Exported<T> = {
+	write: (value: T) -> (buffer, { any }?),
+	read: (packet: buffer, side: { any }?) -> T,
+}
 
 local runtime: Volt.Runtime
 local beginReliable: (number) -> (number, buffer)
 
-local INVENTORY_KIND: { string } = { "Bag", "Chest" }
+local INVENTORY_KIND: { "Bag" | "Chest" } = { "Bag", "Chest" }
 
 local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(4)
@@ -76,7 +97,7 @@ local function writeSave(allocate: (number) -> (number, buffer), slot: (any) -> 
 	end
 end
 
-local function readSave(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
+local function readSave(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number, Save)
 	if cursor + 4 > length then
 		error("Save: truncated")
 	end
@@ -89,14 +110,14 @@ local function readSave(packet: buffer, cursor: number, side: { any }, sideCurso
 		error("Save.names: length out of range")
 	end
 
-	local owner
+	local owner: Instance?
 	cursor += 4
 
 	if cursor + namesLength > length then
 		error("Save.names: truncated")
 	end
 
-	local names = table.create(namesLength)
+	local names: { string } = table.create(namesLength) :: { string }
 
 	for index = 1, namesLength do
 		if cursor + 1 > length then
@@ -136,6 +157,47 @@ local function readSave(packet: buffer, cursor: number, side: { any }, sideCurso
 	return cursor, sideCursor, value
 end
 
+local function writeHit(_: (number) -> (number, buffer), slot: (any) -> (), refuse: (string) -> never, value: any)
+	if type(value) ~= "table" then
+		refuse("Hit: expected table")
+	end
+
+	local part = value.part
+
+	if typeof(part) ~= "Instance" or not (part :: Instance):IsA("BasePart") then
+		refuse("Hit.part: expected Instance(BasePart)")
+	end
+
+	slot(part)
+	local model = value.model
+
+	if typeof(model) ~= "Instance" or not (model :: Instance):IsA("Model") then
+		refuse("Hit.model: expected StreamedInstance(Model)")
+	end
+
+	slot(model)
+end
+
+local function readHit(_: buffer, cursor: number, side: { any }, sideCursor: number, _: number): (number, number, Hit)
+	local part: BasePart? = side[sideCursor]
+	sideCursor += 1
+
+	if typeof(part) ~= "Instance" or not part:IsA("BasePart") then
+		error("Hit.part: expected Instance(BasePart)")
+	end
+
+	local model: Model? = side[sideCursor]
+	sideCursor += 1
+
+	if model ~= nil and not model:IsA("Model") then
+		error("Hit.model: expected StreamedInstance(Model)")
+	end
+
+	local value = { part = part, model = model }
+
+	return cursor, sideCursor, value
+end
+
 local function writeInventory_Kind(allocate: (number) -> (number, buffer), _: (any) -> (), refuse: (string) -> never, value: any)
 	local offset: number, out: buffer = allocate(1)
 	local flags: number = 0
@@ -149,13 +211,13 @@ local function writeInventory_Kind(allocate: (number) -> (number, buffer), _: (a
 	buffer.writeu8(out, offset, flags)
 end
 
-local function readInventory_Kind(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number)
+local function readInventory_Kind(packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number, Inventory_Kind)
 	if cursor + 1 > length then
 		error("Inventory.Kind: truncated")
 	end
 
 	local flags: number = buffer.readu8(packet, cursor)
-	local value: string? = INVENTORY_KIND[bit32.extract(flags, 0, 1) + 1]
+	local value: ("Bag" | "Chest")? = INVENTORY_KIND[bit32.extract(flags, 0, 1) + 1]
 
 	if not value then
 		error("Inventory.Kind: out of range")
@@ -173,7 +235,7 @@ end
 
 runtime = Volt.start({
 	version = "0.1.0",
-	hash = 0x4EA0F775,
+	hash = 0x0BD2572B,
 	scope = "Exports",
 	side = "client",
 	idBytes = 1,
@@ -198,7 +260,7 @@ beginReliable = runtime.reliable.begin
 
 local before: { [number]: Volt.Hook } = runtime.before
 
-local net = {
+local Network = {
 	Save = table.freeze({
 		write = function (value: Save): (buffer, { any }?)
 			return runtime:encode("Save", writeSave, value)
@@ -207,7 +269,17 @@ local net = {
 		read = function (packet: buffer, side: { any }?): Save
 			return runtime:decode(readSave, packet, side)
 		end,
-	}),
+	}) :: Exported<Save>,
+
+	Hit = table.freeze({
+		write = function (value: Hit): (buffer, { any }?)
+			return runtime:encode("Hit", writeHit, value)
+		end,
+
+		read = function (packet: buffer, side: { any }?): Hit
+			return runtime:decode(readHit, packet, side)
+		end,
+	}) :: Exported<Hit>,
 
 	Inventory = table.freeze({
 		Kind = table.freeze({
@@ -218,7 +290,7 @@ local net = {
 			read = function (packet: buffer, side: { any }?): Inventory_Kind
 				return runtime:decode(readInventory_Kind, packet, side)
 			end,
-		}),
+		}) :: Exported<Inventory_Kind>,
 	}),
 
 	Ping = table.freeze({
@@ -227,7 +299,9 @@ local net = {
 				writePing()
 			end
 		end,
-	}),
+	}) :: ClientEvent<()>,
+
+	version = "0.1.0",
 
 	hooks = table.freeze({
 		beforeSend = runtime.beforeSend,
@@ -240,24 +314,25 @@ local net = {
 		runtime:flush()
 	end,
 
-	onFailure = function (handler: Volt.Failure)
-		runtime:onFailure(handler)
+	onFailure = function (handler: Volt.Failure): Volt.Failure
+		return runtime:onFailure(handler)
 	end,
 
-	stats = function (player: Player?): Volt.Stats
+	stats = function (player: (Player | Bot)?): Volt.Stats
 		return runtime:stats(player)
 	end,
 }
 
-net.events = table.freeze({
-	["Ping"] = net.Ping,
-})
+Network.events = table.freeze({
+	["Ping"] = Network.Ping,
+}) :: { [string]: any }
 
-net.functions = table.freeze({})
+Network.functions = table.freeze({}) :: { [string]: any }
 
-net.exports = table.freeze({
-	["Save"] = net.Save,
-	["Inventory.Kind"] = net.Inventory.Kind,
-})
+Network.exports = table.freeze({
+	["Save"] = Network.Save,
+	["Hit"] = Network.Hit,
+	["Inventory.Kind"] = Network.Inventory.Kind,
+}) :: { [string]: any }
 
-return table.freeze(net)
+return table.freeze(Network)

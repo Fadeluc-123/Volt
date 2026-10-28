@@ -40,7 +40,7 @@ local function writeStack(allocate: (number) -> (number, buffer), slot: (any) ->
 	buffer.writestring(itemOut, itemOffset, item)
 end
 
-local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number)
+local function readStack(packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number, Stack)
 	if cursor + 4 > length then
 		error("Stack: truncated")
 	end
@@ -258,7 +258,7 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.a: truncated")
 	end
 
-	local a = table.create(aLength)
+	local a: { number } = table.create(aLength) :: { number }
 
 	for index = 1, aLength do
 		local aEntry: number = buffer.readu8(packet, cursor)
@@ -270,7 +270,7 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.b: truncated")
 	end
 
-	local b = table.create(2)
+	local b: { string } = table.create(2) :: { string }
 
 	for index_2 = 1, 2 do
 		if cursor + 1 > length then
@@ -298,7 +298,7 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.d: truncated")
 	end
 
-	local d: { boolean } = table.create(dLength)
+	local d: { boolean } = table.create(dLength) :: { boolean }
 
 	for byte = 0, dLength // 8 - 1 do
 		local packed: number = buffer.readu8(packet, cursor + byte)
@@ -323,10 +323,10 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.e: truncated")
 	end
 
-	local e = table.create(eLength)
+	local e: { Stack } = table.create(eLength) :: { Stack }
 
 	for index_4 = 1, eLength do
-		local eEntry
+		local eEntry: Stack
 		cursor, sideCursor, eEntry = readStack(packet, cursor, side, sideCursor, length)
 		e[index_4] = eEntry
 	end
@@ -335,7 +335,7 @@ local function readLists(packet: buffer, cursor: number, side: { any }, sideCurs
 		error("Lists.f: truncated")
 	end
 
-	local f = table.create(fLength)
+	local f: { number } = table.create(fLength) :: { number }
 
 	for index_5 = 1, fLength do
 		local fEntry: number = buffer.readu8(packet, cursor)

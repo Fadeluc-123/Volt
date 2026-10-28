@@ -1,9 +1,9 @@
 --[[
     Proves functions end to end: each side of the Functions schema renders
-    as its golden file, the compiler and the runtime agree on what a
-    refusal carries, and over the mock a call reaches its handler and its
-    returns come back, a missing or failing handler refuses it, a promise
-    settles either way, and the handler disconnects
+    as its golden file, the runtime agrees on what a refusal carries, and
+    over the mock a call reaches its handler and its returns come back, a
+    missing or failing handler refuses it, a promise settles either way or
+    refuses at the call, a handler's fires come first, and it disconnects
 --]]
 
 --!strict
@@ -37,6 +37,8 @@ type Box = { line: string }
 
 local SCHEMA: string = fs.readFile("tests/Schemas/Functions.volt")
 local CLIENT: string, SERVER: string, TYPES: string = Generated.modules("Functions", SCHEMA)
+local EXAMPLE_CLIENT: string, EXAMPLE_SERVER: string =
+	Generated.modules("Example", fs.readFile("tests/Schemas/Example.volt"))
 local SIDES: { { name: string, text: string } } =
 	{ { name = "Client", text = CLIENT }, { name = "Server", text = SERVER }, { name = "Types", text = TYPES } }
 
@@ -163,8 +165,7 @@ describe("Functions", function ()
 			local box: Box = call(harness.client.Echo.invoke, 1)
 			roundTrip(harness.mock)
 
-			expect((box.line:find("false ", 1, true))).is(1)
-			expect(box.line:find("boom", 1, true) ~= nil).is(true)
+			expect(box.line).is("false boom")
 			expect(#harness.failures).is(1)
 			expect(harness.failures[1].kind).is("handler")
 			expect((harness.failures[1].detail:find("Echo: ", 1, true))).is(1)
@@ -204,6 +205,55 @@ describe("Functions", function ()
 				table.concat({ tostring(resolved.settled[1]), tostring(resolved.settled[2]), resolved.settled[3] }, " ")
 			).is("true true moved 3")
 		end)
+
+		test("a promise rejects with exactly the handler's error, its position cut", function ()
+			local harness: Harness = setup()
+
+			harness.server.Inventory.Transfer.on(function ()
+				error("boom")
+			end)
+
+			local promise = harness.client.Inventory.Transfer.invoke(1, 2, 3)
+			roundTrip(harness.mock)
+
+			expect(`{promise.settled[1]} {promise.settled[2]}`).is("false boom")
+			expect(harness.failures[1].kind).is("handler")
+		end)
+
+		test("an argument the call's writer refuses raises at invoke, before a promise exists", function ()
+			local harness: Harness = setup()
+			local ok: boolean, message: any = pcall(harness.client.Inventory.Transfer.invoke, 300, 2, 3)
+
+			expect(ok).is(false)
+			expect(message).is("Inventory.Transfer.source: expected u8")
+		end)
+
+		test(
+			"a handler's fires at its caller arrive before its reply, so the listener has run when it settles",
+			function ()
+				local mock: Mock = Volt.mock(task.spawn)
+				local _, transport = mock:join("Alice")
+				local server: any = Generated.module("Server", EXAMPLE_SERVER, mock.server)
+				local client: any = Generated.module("Client", EXAMPLE_CLIENT, transport)
+				local seen: { string } = {}
+				local promise: any = nil
+
+				client.Inventory.Patch.on(function (patch: { version: number })
+					table.insert(seen, `{patch.version} {promise.settled == nil}`)
+				end)
+				server.Inventory.Transfer.on(function (player: any): (boolean, string?)
+					server.Inventory.Patch.fire(player, { version = 1, set = {}, cleared = {} })
+					server.Inventory.Patch.fire(player, { version = 2, set = {}, cleared = {} })
+					return true, nil
+				end)
+
+				promise = client.Inventory.Transfer.invoke("bag", "chest", 1, 1)
+				roundTrip(mock)
+
+				expect(table.concat(seen, ",")).is("1 true,2 true")
+				expect(promise.settled[1]).is(true)
+			end
+		)
 
 		test("the handler's disconnect leaves the next call unhandled", function ()
 			local harness: Harness = setup()

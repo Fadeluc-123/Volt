@@ -174,6 +174,21 @@ describe("Resolve", function ()
 			end
 		)
 
+		test("V3004 reports at the top of the options file of a schema, which names its scope", function ()
+			local source: Source.Source = Source.new("Types.volt", "type Id = u8\n")
+			source:add("Game.volt", `option serverOutput = "Server.luau"\n`)
+
+			local diagnostics: Diagnostics.Diagnostics = Diagnostics.new(source)
+			local file: Schema.File = Parser.schema(source, diagnostics)
+			local location: string = "Game.volt:1:1: error V3004: missing option clientOutput"
+			local excerpt: string = `    1 | option serverOutput = "Server.luau"`
+
+			Resolve.file(file, diagnostics)
+
+			expect(diagnostics:render()).is(`{location}\n{excerpt}\n      | ^`)
+			expect(file.options.scope).is("Game")
+		end)
+
 		test("V3005 reports a number that is not positive, or not whole where it must be", function ()
 			local text: string = schema(
 				"option flush = 0\noption timeout = 0.5\noption queue = 1.5\nevent E { from: Client, type: Reliable, call: Polling, rate: -1 }\nfunction F { timeout: 0 }"

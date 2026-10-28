@@ -1,9 +1,8 @@
 --[[
-    Proves the emitter's writers: every event of every test schema renders
-    to its golden file byte for byte, every value written reads back the
-    same at its bounds and at random, every writer refuses a bad value,
-    and with write validation off only the checks that keep a packet
-    whole are left
+    Proves the emitter's writers: every event of every family renders to
+    its golden file, reads back what was written at its bounds and at
+    random, and refuses a bad value; with validation off only the checks
+    that keep a packet whole are left, and every global called is reserved
 --]]
 
 --!strict
@@ -16,6 +15,7 @@ local Generated = require("./Generated")
 local golden = require("./Expected")
 local Values = require("./Values")
 local Messages = require("@volt/Compiler/Targets/Messages")
+local Reserved = require("@volt/Compiler/Config/Reserved")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 
 local describe = Suite.describe
@@ -31,6 +31,7 @@ local Instance = Environment.Instance
 local Vector3 = Environment.Vector3
 
 local ROUNDS: number = 200 -- Random values written and read back per event
+local SCHEMAS: string = "tests/Schemas"
 
 local valueOf = Values.valueOf
 local near = Values.near
@@ -100,6 +101,10 @@ local REFUSALS: { [string]: { { any } } } = {
 
 	Unions = {
 		{ "Unions", 1, {}, "Unions.a: expected u8 | string(0..4) | boolean" },
+	},
+
+	Choices = {
+		{ "Members", 1, { team = "Red", perks = {}, floor = Enum.KeyCode.A }, "Members.floor: expected Enum.Material" },
 	},
 
 	Lists = {
@@ -247,5 +252,51 @@ describe("Emit", function ()
 			ok, message = fire(loose.Unions, "Unions", "Unions", written)
 			failure(ok, message, "Unions.a: expected u8 | string(0..4) | boolean")
 		end)
+	end)
+
+	test("reserves every global a generated function calls, so no field or parameter local shadows one", function ()
+		local reserved: { [string]: boolean } = {}
+		local texts: { string } = {}
+		local unreserved: { string } = {}
+
+		for _, name: string in Reserved.generated do
+			reserved[name] = true
+		end
+
+		for _, schema: string in Families.schemas do
+			table.insert(texts, Families.texts[schema])
+		end
+
+		for _, name: string in fs.readDir(SCHEMAS) do
+			local schema: string? = name:match("^(.+)%.volt$")
+			if schema then
+				local client: string, server: string = Generated.modules(schema, fs.readFile(`{SCHEMAS}/{name}`))
+				table.insert(texts, client)
+				table.insert(texts, server)
+			end
+		end
+
+		for _, text: string in texts do
+			-- Comments and strings call nothing, and a name the text declares is its own
+			local code: string =
+				text:gsub("%-%-%[%[.-%]%]", ""):gsub("%-%-[^\n]*", ""):gsub("\\.", ""):gsub('"[^"]*"', "")
+			local declared: { [string]: boolean } = {}
+
+			for name: string in code:gmatch("local ([%a_][%w_]*)") do
+				declared[name] = true
+			end
+			for name: string in code:gmatch("local function ([%a_][%w_]*)") do
+				declared[name] = true
+			end
+
+			-- A call not reached through a dot or a colon is a call of a global or of a local
+			for name: string in (`\n{code}`):gmatch("[^%w_.:]([%a_][%w_]*)%(") do
+				if not declared[name] and not reserved[name] and not table.find(unreserved, name) then
+					table.insert(unreserved, name)
+				end
+			end
+		end
+
+		expect(table.concat(unreserved, ", ")).is("")
 	end)
 end)
