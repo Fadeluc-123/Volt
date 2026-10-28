@@ -6,7 +6,7 @@
 --]]
 
 --!strict
-local Runtime = {} :: any
+local Runtime = {}
 Runtime.__index = Runtime
 
 local Calls = require("@self/Calls")
@@ -85,7 +85,14 @@ export type Runtime = {
 	traffic: (self: Runtime, player: any) -> (number, number),
 }
 
+type Call = Types.Call
+type Callback = Types.Callback
+type Channel = Types.Channel
+type Fields = Types.Fields
+type Joined = Types.Joined
+type Limit = Types.Limit
 type Outgoing = Types.Outgoing
+type Self = Types.Runtime
 
 local Volt = {
 	version = "0.1.0", -- Shared with the compiler; a schema from another major or minor is refused at start
@@ -113,39 +120,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local server: boolean = schema.side == "server"
 	local live: Transport = transport or Remotes.open(schema.scope, server)
 	local stats: Stats = Limits.fresh()
-
-	local self = setmetatable({
-		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
-		_messages = schema.messages,
-		_outgoing = schema.outgoing,
-		_checked = options.writeValidation ~= false, -- Whether the module's writers check their values before a byte is written
-		_server = server,
-		_idBytes = schema.idBytes,
-		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
-		_hash = schema.hash,
-		_maxPacket = options.maxPacket,
-		_maxPackets = options.maxPacketsPerSecond,
-		_spawn = live.spawn,
-		_inert = live.inert == true, -- Outside a running game, where a call would never be answered
-		_now = 0, -- The clock when the last packet arrived, which the buckets its messages spend from refill to
-		_reading = nil :: number?, -- The id of the message the receive loop is on, which names a decode failure
-		_players = {} :: { [any]: any },
-		_left = setmetatable({}, { __mode = "k" }) :: any, -- Players this runtime let go, never set up again
-		_present = live.present, -- Whether the transport lists a player, which a fire before Volt's own join reads
-		_record = live.traffic or Traffic.records(), -- Each player's byte count, the VM's when a hub serves the transport
-		_joins = {}, -- The callbacks of each kind a game or a package subscribed, by a token each
-		_leaves = {},
-		_handshakes = {},
-		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
-		_failure = nil :: any, -- The failure handler, the runtime's own until a game replaces it
-		_stats = stats,
-		_warned = {} :: { [string]: number }, -- When the runtime's own handler last warned of each kind on the client
-	}, Runtime)
-
-	-- A plain function, so onFailure can hand it to a game for the kinds the game leaves to the runtime
-	self._failure = function (player: any, kind: string, detail: string)
-		self:_report(player, kind, detail)
-	end
+	local self: Self -- The runtime, which the closures below call into once it is made
 
 	-- A message a target's frame has no room for is dropped and reported; the client's one target is nobody to name
 	local function dropping(cap: string): (target: any) -> ()
@@ -161,13 +136,68 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local reliableCap: number = server and maxOutgoing or math.min(maxOutgoing, options.maxPacket)
 	local reliableName: string = reliableCap < maxOutgoing and MAX_PACKET or MAX_OUTGOING
 
-	self.reliable = Send.new(live.reliable, stats, dropping(reliableName), reliableCap)
-	self.unreliable = Send.new(live.unreliable, stats, dropping(MAX_OUTGOING), maxOutgoing, options.unreliableBudget)
+	local fields: Fields = {
+		reliable = Send.new(live.reliable, stats, dropping(reliableName), reliableCap),
+		unreliable = Send.new(live.unreliable, stats, dropping(MAX_OUTGOING), maxOutgoing, options.unreliableBudget),
+		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
+		before = {} :: { [number]: Hook? }, -- The hook before a send, by the id of the message sent
+
+		-- What a game registers hooks and rates through: plain functions, as the generated API hands them out
+		beforeSend = function (name: string, hook: Hook?)
+			self:_beforeSend(name, hook)
+		end,
+
+		afterReceive = function (name: string?, hook: Hook?)
+			self:_afterReceive(name, hook)
+		end,
+
+		rate = function (name: string, perSecond: number, burst: number?)
+			self:_rate(name, perSecond, burst)
+		end,
+
+		_messages = schema.messages,
+		_outgoing = schema.outgoing,
+		_checked = options.writeValidation ~= false, -- Whether the module's writers check their values before a byte is written
+		_server = server,
+		_idBytes = schema.idBytes,
+		_readId = schema.idBytes == 2 and buffer.readu16 or buffer.readu8,
+		_hash = schema.hash,
+		_maxPacket = options.maxPacket,
+		_maxPackets = options.maxPacketsPerSecond,
+		_spawn = live.spawn,
+		_inert = live.inert == true, -- Outside a running game, where a call would never be answered
+		_now = 0, -- The clock when the last packet arrived, which the buckets its messages spend from refill to
+		_reading = nil :: number?, -- The id of the message the receive loop is on, which names a decode failure
+		_players = {} :: { [any]: Joined },
+		_left = setmetatable({}, { __mode = "k" }) :: any, -- Players this runtime let go, never set up again
+		_present = live.present, -- Whether the transport lists a player, which a fire before Volt's own join reads
+		_record = live.traffic or Traffic.records(), -- Each player's byte count, the VM's when a hub serves the transport
+		_joins = {} :: { [{}]: Callback }, -- The callbacks of each kind a game or a package subscribed, by a token each
+		_leaves = {} :: { [{}]: Callback },
+		_handshakes = {} :: { [{}]: Callback },
+		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
+
+		-- The runtime's own failure handler until a game replaces it, a plain function so onFailure can hand it on
+		_failure = function (player: any, kind: string, detail: string)
+			self:_report(player, kind, detail)
+		end,
+
+		_stats = stats,
+		_warned = {} :: { [string]: number }, -- When the runtime's own handler last warned of each kind on the client
+		_channels = {} :: { [number]: Channel }, -- The dispatch state of every incoming event, by id
+		_calls = {} :: { [number]: Call }, -- Every function this side calls, by the id its replies arrive with
+		_limits = {} :: { [number]: Limit }, -- The limit of every incoming message that has one, which rate may change
+		_after = {} :: { [number]: Hook? }, -- The hook after a receive, by id, and over every message at 0
+		_hooked = false, -- Whether any hook is registered on the receive side, so an unhooked receive asks nothing
+	}
+
+	-- Through a typed local, since a local assigned straight from a cast would be read as any from here on
+	local runtime: Self = setmetatable(fields, Runtime) :: any
+	self = runtime
 
 	self:channels(schema.messages)
 	self:functions(schema.messages)
 	self:limits(schema.messages)
-	self:hooks()
 
 	if server then
 		local players, added, removing = live.players, live.playerAdded, live.playerRemoving
@@ -209,6 +239,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		end
 	end)
 
+	-- The public Runtime lists no fields, so neither checker takes the instance as one
 	return self :: any
 end
 
@@ -239,7 +270,7 @@ end
     message behind and reaches whoever fired named for the message
 --]]
 
-function Runtime:write(id: number, write: (...any) -> (), ...: any)
+function Runtime.write(self: Self, id: number, write: (...any) -> (), ...: any)
 	local ok: boolean, message: any = pcall(write, ...)
 	if ok then
 		return
@@ -258,7 +289,14 @@ end
     API is this one call with the message's writer and its arguments
 --]]
 
-function Runtime:broadcast(id: number, targets: { [any]: any }?, except: any?, write: (...any) -> (), ...: any)
+function Runtime.broadcast(
+	self: Self,
+	id: number,
+	targets: { [any]: any }?,
+	except: any?,
+	write: (...any) -> (),
+	...: any
+)
 	local hook: Hook? = self.before[id]
 	if hook and not hook(targets, ...) then
 		return
@@ -291,14 +329,19 @@ function Runtime:broadcast(id: number, targets: { [any]: any }?, except: any?, w
 end
 
 -- Fails the calls past their deadline, then sends every target's accumulated bytes; the Heartbeat does this every flush-th frame
-function Runtime:flush()
+function Runtime.flush(self: Self)
 	self:_sweep()
 	self.reliable:flush()
 	self.unreliable:flush()
 end
 
+local _: Types.Own, _: Types.Calls, _: Types.Limits, _: Types.Players, _: Types.Receive, _: Types.Wrapper =
+	Runtime, Calls, Limits, Players, Receive, Wrapper
+
 -- The receive side, the calls, the limits, the players and the wrapper's hooks are a sibling each; a name defined twice is a bug
-for _, part in { Calls, Limits, Players, Receive, Wrapper } do
+local parts: { any } = { Calls, Limits, Players, Receive, Wrapper }
+
+for _, part in parts do
 	for name: string, method in part do
 		assert(Runtime[name] == nil, `Runtime.{name} is defined twice`)
 		Runtime[name] = method

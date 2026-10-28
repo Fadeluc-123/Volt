@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local Resolve = {} :: any
+local Resolve = {}
 Resolve.__index = Resolve
 
 local Diagnostics = require("./Diagnostics")
@@ -29,6 +29,13 @@ type TypeDeclaration = Schema.TypeDeclaration
 
 local KINDS: { [string]: string } = { event = "an event", ["function"] = "a function", namespace = "a namespace" }
 
+type Fields = {
+	_diagnostics: Diagnostics,
+	_names: { [string]: Declaration },
+	_state: { [TypeDeclaration]: string },
+	_promise: Span?,
+}
+
 --[[
     Fills the keys of a message that default from a file option, as the
     shape names them
@@ -49,7 +56,7 @@ end
 --]]
 
 function Resolve.file(file: File, diagnostics: Diagnostics)
-	local self = setmetatable({
+	local self: Self = setmetatable({
 		_diagnostics = diagnostics,
 		_names = {} :: { [string]: Declaration },
 		_state = {} :: { [TypeDeclaration]: string }, -- Cycle search: visiting or done
@@ -76,21 +83,22 @@ end
     and a missing option is reported at the top of that file
 --]]
 
-function Resolve:options(options: Options, source: Source)
+function Resolve.options(self: Self, options: Options, source: Source)
 	local top: Span = { start = source.start, finish = source.start }
 	local path: string = source.path
+	local keyed: { [string]: any } = options :: { [string]: any } -- Read and filled by key, as the shape lists them
 
 	for _, spec: Spec in Options.file do
-		if options[spec.key] ~= nil then
+		if keyed[spec.key] ~= nil then
 			continue
 		elseif spec.required then
 			self._diagnostics:error("V3004", `missing option {spec.key}`, top)
 		end
 
-		options[spec.key] = spec.default
+		keyed[spec.key] = spec.default
 	end
 
-	self:positive(options, Options.file)
+	self:positive(keyed, Options.file)
 
 	options.scope = options.scope or path:match("([^/\\]+)%.volt$") or path
 
@@ -104,7 +112,7 @@ end
     is needed, fractional. A key the target does not carry is skipped
 --]]
 
-function Resolve:positive(target: { [string]: any }, shape: { Spec })
+function Resolve.positive(self: Self, target: { [string]: any }, shape: { Spec })
 	for _, spec: Spec in shape do
 		local value: any = target[spec.key]
 
@@ -128,7 +136,7 @@ end
     resolves, and keeps the first of two declarations with the same path
 --]]
 
-function Resolve:declare(declarations: { Declaration }, prefix: string)
+function Resolve.declare(self: Self, declarations: { Declaration }, prefix: string)
 	for _, declaration: Declaration in declarations do
 		local path: string = prefix == "" and declaration.name or `{prefix}.{declaration.name}`
 		if self._names[path] then
@@ -152,29 +160,30 @@ end
     the defaults its keys did not set, after checking the keys it did
 --]]
 
-function Resolve:bind(declarations: { Declaration }, prefix: string, options: Options)
+function Resolve.bind(self: Self, declarations: { Declaration }, prefix: string, options: Options)
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
 			self:type(declaration.type, prefix)
 		elseif declaration.kind == "namespace" then
 			self:bind(declaration.declarations, declaration.path :: string, options)
 		elseif declaration.kind == "event" then
-			self:positive(declaration, Options.event)
+			local rate: Span? = declaration.spans.rate
+			self:positive(declaration :: { [string]: any }, Options.event)
 
-			if declaration.from == "Server" and declaration.spans.rate then
+			if declaration.from == "Server" and rate then
 				local message: string =
 					"rate on a Server event has no effect; only client-to-server messages are limited"
-				self._diagnostics:warn("V3006", message, declaration.spans.rate)
+				self._diagnostics:warn("V3006", message, rate)
 			end
 
-			defaults(declaration, Options.event, options)
+			defaults(declaration :: { [string]: any }, Options.event, options)
 
 			if declaration.data then
 				self:type(declaration.data, prefix)
 			end
 		else
-			self:positive(declaration, Options["function"])
-			defaults(declaration, Options["function"], options)
+			self:positive(declaration :: { [string]: any }, Options["function"])
+			defaults(declaration :: { [string]: any }, Options["function"], options)
 
 			-- The file's yield is spelled in lower case and a function's in upper, so it is not a plain default
 			declaration.yield = declaration.yield or (options.yield == "promise" and "Promise" or "Coroutine")
@@ -199,7 +208,7 @@ end
     the namespace it is written in, and counts the reference on its target
 --]]
 
-function Resolve:type(node: Type | Pack, prefix: string)
+function Resolve.type(self: Self, node: Type | Pack, prefix: string)
 	if node.kind == "reference" then
 		local found: Declaration? = self:lookup(prefix, node.name)
 
@@ -226,7 +235,7 @@ end
     written with a namespace prefix reaches into any namespace from anywhere
 --]]
 
-function Resolve:lookup(prefix: string, name: string): Declaration?
+function Resolve.lookup(self: Self, prefix: string, name: string): Declaration?
 	local scope: string = prefix
 
 	while true do
@@ -245,7 +254,7 @@ end
     reference that closes it
 --]]
 
-function Resolve:cycles(declarations: { Declaration })
+function Resolve.cycles(self: Self, declarations: { Declaration })
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" and not self._state[declaration] then
 			self:visit(declaration)
@@ -255,13 +264,13 @@ function Resolve:cycles(declarations: { Declaration })
 	end
 end
 
-function Resolve:visit(declaration: TypeDeclaration)
+function Resolve.visit(self: Self, declaration: TypeDeclaration)
 	self._state[declaration] = "visiting"
 	self:follow(declaration.type)
 	self._state[declaration] = "done"
 end
 
-function Resolve:follow(node: Type)
+function Resolve.follow(self: Self, node: Type)
 	if node.kind == "reference" then
 		local target: TypeDeclaration? = node.target
 
@@ -279,5 +288,7 @@ function Resolve:follow(node: Type)
 		self:follow(child)
 	end
 end
+
+type Self = typeof(setmetatable({} :: Fields, Resolve))
 
 return Resolve

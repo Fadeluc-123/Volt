@@ -7,26 +7,16 @@
 --]]
 
 --!strict
-local Calls = {} :: any
+local Calls = {}
 
 local Config = require("./Config/Runtime")
 local Types = require("./Config/Types/Runtime")
 
+type Call = Types.Call
 type Limit = Types.Limit
 type Message = Types.Message
-
--- A call in flight: when it fails, and what settles it, gone once it has been settled
-type Pending = { deadline: number, settle: ((ok: boolean, ...any) -> ())? }
-
--- What the client keeps per function: its calls in flight by slot, the slots freed for reuse and the highest given
-type Call = {
-	name: string,
-	timeout: number,
-	promise: any?, -- The promise library, when the function yields one
-	pending: { [number]: Pending },
-	free: { number },
-	last: number,
-}
+type Pending = Types.Pending
+type Runtime = Types.Runtime
 
 local SLOTS: number = Config.slots
 local MESSAGE_BYTES: number = Config.messageBytes
@@ -55,8 +45,8 @@ local function settle(pending: Pending, ok: boolean, ...: any)
 end
 
 -- The state of every function this side calls, by the id its replies arrive with
-function Calls:functions(messages: { [number]: Message })
-	local calls: { [number]: Call } = {}
+function Calls.functions(self: Runtime, messages: { [number]: Message })
+	local calls: { [number]: Call } = self._calls
 
 	for id: number, message: Message in messages do
 		if message.kind == "reply" then
@@ -70,8 +60,6 @@ function Calls:functions(messages: { [number]: Message })
 			}
 		end
 	end
-
-	self._calls = calls
 end
 
 --[[
@@ -82,7 +70,7 @@ end
     slot is in flight
 --]]
 
-function Calls:invoke(id: number, write: (slot: number, ...any) -> (), ...: any): ...any
+function Calls.invoke(self: Runtime, id: number, write: (slot: number, ...any) -> (), ...: any): ...any
 	local call: Call = self._calls[id]
 	if self._inert then
 		return failed(call, "edit mode")
@@ -132,7 +120,14 @@ end
     Returns the cursors, so a reader's tail is this one call
 --]]
 
-function Calls:reply(id: number, slot: number, cursor: number, sideCursor: number, ...: any): (number, number)
+function Calls.reply(
+	self: Runtime,
+	id: number,
+	slot: number,
+	cursor: number,
+	sideCursor: number,
+	...: any
+): (number, number)
 	self:_release(id, slot, true, ...)
 	return cursor, sideCursor
 end
@@ -143,7 +138,8 @@ end
     settled with it. Returns the cursors past the reason
 --]]
 
-function Calls:refused(
+function Calls.refused(
+	self: Runtime,
 	id: number,
 	slot: number,
 	packet: buffer,
@@ -174,7 +170,7 @@ end
     one is connected is an error rather than a silent replacement
 --]]
 
-function Calls:handle(id: number, handler: (...any) -> ...any): () -> ()
+function Calls.handle(self: Runtime, id: number, handler: (...any) -> ...any): () -> ()
 	local handlers = self._handlers
 
 	assert(handlers[id] == nil, `{self._messages[id].name}: a handler is already connected`)
@@ -197,7 +193,8 @@ end
     Returns the cursors, so a reader's tail is this one call
 --]]
 
-function Calls:call(
+function Calls.call(
+	self: Runtime,
 	id: number,
 	player: any,
 	slot: number,
@@ -230,7 +227,7 @@ end
     is reported
 --]]
 
-function Calls:_serve(id: number, player: any, slot: number, handler: (...any) -> ...any, ...: any)
+function Calls._serve(self: Runtime, id: number, player: any, slot: number, handler: (...any) -> ...any, ...: any)
 	local results = table.pack(xpcall(handler, self._trace, player, ...))
 	if results[1] then
 		return self:_reply(id, player, slot, STATUS.ok, table.unpack(results, 2, results.n))
@@ -252,7 +249,7 @@ end
     the function. Nothing is sent to a caller who has left
 --]]
 
-function Calls:_reply(id: number, player: any, slot: number, status: number, ...: any)
+function Calls._reply(self: Runtime, id: number, player: any, slot: number, status: number, ...: any)
 	if not self:target(player) then
 		return
 	end
@@ -282,7 +279,7 @@ function Calls:_reply(id: number, player: any, slot: number, status: number, ...
 end
 
 -- Settles a call in flight and frees its slot; a call that timed out kept its slot for this, and one never made is a decode failure
-function Calls:_release(id: number, slot: number, ok: boolean, ...: any)
+function Calls._release(self: Runtime, id: number, slot: number, ok: boolean, ...: any)
 	local call: Call = self._calls[id]
 	local pending: Pending? = call.pending[slot]
 
@@ -302,7 +299,7 @@ end
     settled, since a resumed caller may call again into the same table
 --]]
 
-function Calls:_sweep()
+function Calls._sweep(self: Runtime)
 	local now: number = os.clock()
 
 	for _, call: Call in self._calls do

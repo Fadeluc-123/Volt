@@ -6,7 +6,7 @@
 --]]
 
 --!strict
-local Hub = {} :: any
+local Hub = {}
 Hub.__index = Hub
 
 local Traffic = require("./Traffic")
@@ -29,24 +29,25 @@ type Scope = { receive: Handler?, added: { Callback }, removing: { Callback } }
 -- A bot's client side of a scope: its runtime's receive, what the server sent it, what waits for the server, its frames
 type Side = { receive: Handler?, queue: { Packet }, waiting: { Packet }, disconnects: { () -> () } }
 
-export type Hub = {
-	serve: (self: Hub, scope: string, transport: Transport) -> Transport,
-	add: (self: Hub, name: string) -> Bot,
-	remove: (self: Hub, bot: Bot) -> (),
-	connect: (self: Hub, bot: Bot, scope: string) -> Transport,
+type Fields = {
+	_spawn: Spawn,
+	_heartbeat: Connect,
+	_scopes: { [string]: Scope },
+	_bots: { [Bot]: { [string]: Side } },
+	_record: (player: any) -> Record,
 }
 
 local BOT: {} = table.freeze({}) -- The metatable that marks a bot, which nothing else carries
 
 -- A hub over the scheduler and the frame of its VM
-function Hub.new(spawn: Spawn, heartbeat: Connect): Hub
+function Hub.new(spawn: Spawn, heartbeat: Connect): Self
 	return setmetatable({
 		_spawn = spawn,
 		_heartbeat = heartbeat,
 		_scopes = {} :: { [string]: Scope },
 		_bots = {} :: { [Bot]: { [string]: Side } }, -- Every bot, with its client side of each scope a harness connected
 		_record = Traffic.records(),
-	}, Hub) :: any
+	}, Hub)
 end
 
 -- Whether a value is a bot rather than a player
@@ -68,7 +69,7 @@ end
     connected one, and presence and the byte count answer for both
 --]]
 
-function Hub:serve(name: string, transport: Transport): Transport
+function Hub.serve(self: Self, name: string, transport: Transport): Transport
 	local scope: Scope = self:_scope(name)
 	local bots: { [Bot]: { [string]: Side } } = self._bots
 
@@ -131,7 +132,7 @@ function Hub:serve(name: string, transport: Transport): Transport
 end
 
 -- Adds a bot, which every scope served now joins at once and every scope served later lists among its players
-function Hub:add(name: string): Bot
+function Hub.add(self: Self, name: string): Bot
 	local bot: Bot = table.freeze(setmetatable({ Name = name }, BOT)) :: any
 
 	self._bots[bot] = {}
@@ -151,7 +152,7 @@ end
     queued for them or by them dropped
 --]]
 
-function Hub:remove(bot: Bot)
+function Hub.remove(self: Self, bot: Bot)
 	local sides: { [string]: Side }? = self._bots[bot]
 	if not sides then
 		return
@@ -185,7 +186,7 @@ end
     sent since the last; a bot connects to a scope once
 --]]
 
-function Hub:connect(bot: Bot, name: string): Transport
+function Hub.connect(self: Self, bot: Bot, name: string): Transport
 	local sides: { [string]: Side }? = self._bots[bot]
 	assert(sides, "Volt: connected a bot this hub does not have")
 	assert(sides[name] == nil, `Volt: connected a bot to {name} a second time`)
@@ -251,7 +252,7 @@ function Hub:connect(bot: Bot, name: string): Transport
 end
 
 -- A scope's record, made the first time a transport is served for it or a bot is connected to it
-function Hub:_scope(name: string): Scope
+function Hub._scope(self: Self, name: string): Scope
 	local scope: Scope? = self._scopes[name]
 	if scope then
 		return scope
@@ -262,5 +263,8 @@ function Hub:_scope(name: string): Scope
 
 	return made
 end
+
+export type Hub = Self
+type Self = typeof(setmetatable({} :: Fields, Hub))
 
 return Hub

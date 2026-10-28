@@ -6,31 +6,18 @@
 --]]
 
 --!strict
-local Players = {} :: any
+local Players = {}
 
 local Hub = require("./Hub")
 local Limits = require("./Limits")
-local Send = require("./Send")
 local Traffic = require("./Traffic")
 local Types = require("./Config/Types/Runtime")
 
-type Bucket = Types.Bucket
+type Callback = Types.Callback
+type Joined = Types.Joined
 type Record = Types.Record
-type State = Send.State
+type Runtime = Types.Runtime
 type Stats = Types.Stats
-
-type Callback = (player: any) -> ()
-
--- What the server keeps per player: their send states, counters and rate buckets, whether they have handshaken
-type Player = {
-	reliable: State,
-	unreliable: State,
-	stats: Stats,
-	packets: Bucket,
-	buckets: { [number]: Bucket },
-	handshaken: boolean,
-	warned: { [string]: number },
-}
 
 -- Keeps a callback under a token of its own and returns the closure that takes it out again
 local function subscribe(bucket: { [{}]: Callback }, callback: Callback): () -> ()
@@ -54,14 +41,14 @@ Players.isBot = Hub.isBot -- A plain function, since the generated API hands it 
     or whose handshake failed, so the fire writes nothing for them
 --]]
 
-function Players:target(player: any): boolean
+function Players.target(self: Runtime, player: any): boolean
 	if player == nil then
 		self.reliable.current = self.reliable.scratch
 		self.unreliable.current = self.unreliable.scratch
 		return true
 	end
 
-	local states: Player? = self._players[player]
+	local states: Joined? = self._players[player]
 	local present: ((player: any) -> boolean)? = self._present
 
 	if not states and present and present(player) then
@@ -91,8 +78,8 @@ end
     the transport's scheduler and the closure returned disconnects it
 --]]
 
-function Players:onJoin(callback: Callback): () -> ()
-	local present: { [any]: Player } = table.clone(self._players) -- Who is here now, before a callback can add to it
+function Players.onJoin(self: Runtime, callback: Callback): () -> ()
+	local present: { [any]: Joined } = table.clone(self._players) -- Who is here now, before a callback can add to it
 	local disconnect: () -> () = subscribe(self._joins, callback)
 
 	for player: any in present do
@@ -103,12 +90,12 @@ function Players:onJoin(callback: Callback): () -> ()
 end
 
 -- Calls back as a player or bot leaves, before their states and counters go
-function Players:onLeave(callback: Callback): () -> ()
+function Players.onLeave(self: Runtime, callback: Callback): () -> ()
 	return subscribe(self._leaves, callback)
 end
 
 -- Calls back when a player's or bot's handshake is accepted, which is when what was held for them goes out
-function Players:onHandshake(callback: Callback): () -> ()
+function Players.onHandshake(self: Runtime, callback: Callback): () -> ()
 	return subscribe(self._handshakes, callback)
 end
 
@@ -118,12 +105,12 @@ end
     hub serves, or this runtime alone on a transport without one
 --]]
 
-function Players:traffic(player: any): (number, number)
+function Players.traffic(self: Runtime, player: any): (number, number)
 	return Traffic.read(self._record(player))
 end
 
 -- States for a player who joined, with their packet bucket full on arrival; one known or let go keeps what they have
-function Players:_join(player: any)
+function Players._join(self: Runtime, player: any)
 	if self._players[player] or self._left[player] then
 		return
 	end
@@ -146,7 +133,7 @@ function Players:_join(player: any)
 end
 
 -- Frees a player's states once the callbacks have heard it, and never sets them up again, so a late fire recreates nothing
-function Players:_leave(player: any)
+function Players._leave(self: Runtime, player: any)
 	self._left[player] = true
 
 	if not self._players[player] then
@@ -161,7 +148,7 @@ function Players:_leave(player: any)
 end
 
 -- Runs every callback of a bucket for a player, each on the transport's scheduler so one that yields holds up nothing
-function Players:_announce(bucket: { [{}]: Callback }, player: any)
+function Players._announce(self: Runtime, bucket: { [{}]: Callback }, player: any)
 	-- A copy, so a callback that subscribes or disconnects leaves the list this announce walks as it was
 	for _, callback: Callback in table.clone(bucket) do
 		self._spawn(callback, player)

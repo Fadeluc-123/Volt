@@ -7,11 +7,13 @@
 --]]
 
 --!strict
-local Records = {} :: any
+local Records = {}
 
 local Lexer = require("../Lexer")
 local Options = require("../Config/Options")
+local Types = require("../Config/Types/Parser")
 
+type Parser = Types.Parser
 type Spec = Options.Spec
 type Token = Lexer.Token
 
@@ -60,7 +62,7 @@ end
     requires that never appeared, all at the record's name
 --]]
 
-function Records:record(target: { [string]: any }, shape: { Spec }, label: string)
+function Records.record(self: Parser, target: { [string]: any }, shape: { Spec }, label: string)
 	self:expect("punctuation", "{")
 	self:list("}", function ()
 		local key: Token = self:key()
@@ -82,7 +84,14 @@ end
     value of the wrong shape abandons the declaration
 --]]
 
-function Records:entry(target: { [string]: any }, shape: { Spec }, key: Token, label: string, close: string?)
+function Records.entry(
+	self: Parser,
+	target: { [string]: any },
+	shape: { Spec },
+	key: Token,
+	label: string,
+	close: string?
+)
 	local spec: Spec? = specOf(shape, key.value)
 	if not spec then
 		self._diagnostics:error("V2003", `unknown key "{key.value}" in {label}; keys are {keysOf(shape)}`, key)
@@ -105,7 +114,7 @@ end
     parameter pack where data and return go
 --]]
 
-function Records:value(spec: Spec, key: string): any
+function Records.value(self: Parser, spec: Spec, key: string): any
 	local token: Token = self:peek()
 
 	if spec.kind == "data" then

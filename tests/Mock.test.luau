@@ -59,7 +59,7 @@ describe("Mock", function ()
 		expect(#received).is(1)
 		expect(received[1].player).is(alice)
 		expect(buffer.readu8(received[1].packet, 0)).is(7)
-		expect((received[1].side :: any)[1]).is("kept")
+		expect((received[1].side :: { any })[1]).is("kept")
 	end)
 
 	test("delivers a server packet to the client it names and drops one for a player who left", function ()

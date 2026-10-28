@@ -11,7 +11,7 @@ local process = require("@lune/process")
 
 local Suite = require("../tests/Suite")
 
-local filter: string? = nil
+local filter: string = "" -- Every name contains the empty string, so with no argument every file is kept
 
 for _, argument: string in process.args do
 	if argument:sub(1, 2) ~= "--" then
@@ -21,9 +21,11 @@ end
 
 -- Requiring a test file registers its describes on the shared instance
 local ok, tests = pcall(Suite.collect_tests, function ()
+	local plain: boolean = true -- The filter is a piece of the name, not a pattern
+
 	for _, name: string in fs.readDir("tests") do
 		local isTest: boolean = name:match("%.test%.luau$") ~= nil
-		local isWanted: boolean = filter == nil or name:find(filter, 1, true) ~= nil
+		local isWanted: boolean = name:find(filter, 1, plain) ~= nil
 
 		if isTest and isWanted then
 			(require :: any)(`../tests/{(name:gsub("%.luau$", ""))}`)

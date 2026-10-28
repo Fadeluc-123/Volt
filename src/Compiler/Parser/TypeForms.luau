@@ -7,15 +7,17 @@
 --]]
 
 --!strict
-local TypeForms = {} :: any
+local TypeForms = {}
 
 local Lexer = require("../Lexer")
 local Reserved = require("../Config/Reserved")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
+local Types = require("../Config/Types/Parser")
 
 type Field = Schema.Field
 type Pack = Schema.Pack
+type Parser = Types.Parser
 type Range = Schema.Range
 type Roblox = Schema.Roblox
 type Token = Lexer.Token
@@ -26,7 +28,7 @@ type Variant = Schema.Variant
     Parses a full type: members joined by | and an optional ? outside them
 --]]
 
-function TypeForms:type(): Type
+function TypeForms.type(self: Parser): Type
 	local start: number = self:peek().start
 	local members: { Type } = { self:postfix() }
 
@@ -52,7 +54,7 @@ end
     An atom followed by any number of array suffixes
 --]]
 
-function TypeForms:postfix(): Type
+function TypeForms.postfix(self: Parser): Type
 	local result: Type = self:atom()
 
 	while self:at("[") do
@@ -64,13 +66,16 @@ function TypeForms:postfix(): Type
 		end
 		self:expect("punctuation", "]")
 
-		result = {
+		-- Built in its own annotated local, since a set has the same shape and the literal alone could be either
+		local array: Type = {
 			kind = "array",
 			element = result,
 			range = range,
 			start = result.start,
 			finish = self:previous().finish,
 		}
+
+		result = array
 	end
 
 	return result
@@ -82,7 +87,7 @@ end
     reference to a named type
 --]]
 
-function TypeForms:atom(): Type
+function TypeForms.atom(self: Parser): Type
 	local token: Token = self:peek()
 
 	if token.kind == "primitive" then
@@ -165,7 +170,7 @@ end
     Which of those the type accepts is checked in analysis
 --]]
 
-function TypeForms:roblox(token: Token): Type
+function TypeForms.roblox(self: Parser, token: Token): Type
 	local node: Roblox = {
 		kind = "roblox",
 		name = token.value,
@@ -196,7 +201,7 @@ function TypeForms:roblox(token: Token): Type
 	return node
 end
 
-function TypeForms:struct(start: number): Type
+function TypeForms.struct(self: Parser, start: number): Type
 	local fields: { Field } = self:fields("{", "}")
 	return {
 		kind = "struct",
@@ -212,7 +217,7 @@ end
     inside the value
 --]]
 
-function TypeForms:enum(start: number): Type
+function TypeForms.enum(self: Parser, start: number): Type
 	local tag: Token? = self:peek().kind == "string" and self:consume() or nil
 	local variants: { Variant } = {}
 	local seen: { [string]: boolean } = {}
@@ -262,7 +267,7 @@ end
     and a parameter pack in parentheses
 --]]
 
-function TypeForms:fields(open: string, close: string): { Field }
+function TypeForms.fields(self: Parser, open: string, close: string): { Field }
 	local fields: { Field } = {}
 	local seen: { [string]: boolean } = {}
 
@@ -288,7 +293,7 @@ function TypeForms:fields(open: string, close: string): { Field }
 	return fields
 end
 
-function TypeForms:pack(): Pack
+function TypeForms.pack(self: Parser): Pack
 	local start: number = self:peek().start
 	local parameters: { Field } = self:fields("(", ")")
 
@@ -304,7 +309,7 @@ end
     The optional parenthesised range after a primitive, a map or a set
 --]]
 
-function TypeForms:bounds(): Range?
+function TypeForms.bounds(self: Parser): Range?
 	if not self:at("(") then
 		return nil
 	end
@@ -322,7 +327,7 @@ end
     number meaning exactly that
 --]]
 
-function TypeForms:range(): Range
+function TypeForms.range(self: Parser): Range
 	local first: Token = self:peek()
 	local min: number? = nil
 	local max: number? = nil

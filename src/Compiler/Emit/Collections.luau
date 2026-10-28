@@ -7,9 +7,10 @@
 --]]
 
 --!strict
-local Collections = {} :: any
+local Collections = {}
 
 local Blocks = require("../Blocks")
+local EmitTypes = require("../Config/Types/Emit")
 local Expressions = require("./Expressions")
 local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
@@ -17,6 +18,7 @@ local Sizes = require("../Analyse/Sizes")
 local Types = require("../Targets/Types")
 
 type Block = Blocks.Block
+type Emit = EmitTypes.Emit
 type Range = Schema.Range
 type Region = Blocks.Region
 type Size = Sizes.Size
@@ -67,7 +69,15 @@ end
     packed as a bitset instead
 --]]
 
-function Collections:array(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Collections.array(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local element: Type = (node :: any).element
 	local range: Range? = (node :: any).range
 
@@ -112,7 +122,8 @@ end
     could need is there
 --]]
 
-function Collections:run(
+function Collections.run(
+	_: Emit,
 	write: Block,
 	read: Block,
 	hint: string,
@@ -155,7 +166,15 @@ end
     by bit
 --]]
 
-function Collections:bitset(range: Range?, write: Block, read: Block, value: string, hint: string, path: string): string
+function Collections.bitset(
+	self: Emit,
+	range: Range?,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	self:shape(write, value, "table", path)
 
 	local measured: string = `#{value}`
@@ -234,7 +253,15 @@ end
     refuses a key it has already seen
 --]]
 
-function Collections:map(node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
+function Collections.map(
+	self: Emit,
+	node: Type,
+	write: Block,
+	read: Block,
+	value: string,
+	hint: string,
+	path: string
+): string
 	local isSet: boolean = node.kind == "set"
 	local key: Type = isSet and (node :: any).element or (node :: any).key
 	local nodes: { Type } = isSet and { key } or { key, (node :: any).value }

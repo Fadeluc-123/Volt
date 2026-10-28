@@ -14,12 +14,14 @@ local Suite = require("./Suite")
 local Generated = require("./Generated")
 local handshake = require("./Handshake")
 local Volt = require("@volt")
+local Types = require("@volt/Config/Types/Runtime")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
 
 type Mock = Volt.Mock
+type Reader = Types.Reader
 type Runtime = Volt.Runtime
 type Stats = Volt.Stats
 type Transport = Volt.Transport
@@ -70,7 +72,7 @@ local function setup(): Harness
 	local runtime: Runtime
 
 	-- A reader per event, each a byte of value, delivering it
-	local function reader(id: number)
+	local function reader(id: number): Reader
 		return function (from: any, bytes: buffer, cursor: number, _: { any }, sideCursor: number, _: number)
 			return runtime:deliver(id, from, cursor + 1, sideCursor, buffer.readu8(bytes, cursor))
 		end

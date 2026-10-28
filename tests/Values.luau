@@ -51,7 +51,7 @@ local function bounds(node: any): (number, number)
 end
 
 local function randomBytes(count: number): string
-	local bytes: { string } = table.create(count)
+	local bytes: { string } = {}
 	for index: number = 1, count do
 		bytes[index] = string.char(math.random(0, 255))
 	end

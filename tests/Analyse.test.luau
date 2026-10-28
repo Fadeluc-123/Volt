@@ -123,7 +123,7 @@ describe("Analyse", function ()
 		for _, row: { any } in SIZES do
 			test(row[1], function ()
 				local file: Schema.File, diagnostics = compile(schema(`{NAMED}type T = {row[1]}`))
-				local size: Sizes.Size = Sizes.size((file.declarations[3] :: any).type)
+				local size: Sizes.Size = Sizes.size((file.declarations[3] :: Schema.TypeDeclaration).type)
 
 				expect(diagnostics:render()).is("")
 				expect(size.min).is(row[2])
@@ -135,7 +135,7 @@ describe("Analyse", function ()
 
 		test("a named type shared by two references is a block of its own", function ()
 			local file: Schema.File = compile(schema(`{NAMED}type A = Stack\ntype B = Stack`))
-			local size: Sizes.Size = Sizes.size((file.declarations[3] :: any).type)
+			local size: Sizes.Size = Sizes.size((file.declarations[3] :: Schema.TypeDeclaration).type)
 
 			expect(size.min).is(5)
 			expect(size.max).is(36)

@@ -12,16 +12,13 @@ Source.__index = Source
 -- One file of the source: where its text starts and ends, and the index of its first line
 export type File = { path: string, start: number, finish: number, line: number }
 
-export type Source = typeof(setmetatable(
-	{} :: {
-		path: string,
-		start: number,
-		text: string,
-		files: { File },
-		_lineStarts: { number },
-	},
-	Source
-))
+type Fields = {
+	path: string,
+	start: number,
+	text: string,
+	files: { File },
+	_lineStarts: { number },
+}
 
 --[[
     Records where every line after a newline starts, from the given offset
@@ -37,7 +34,7 @@ local function lines(lineStarts: { number }, text: string, from: number)
 	end
 end
 
-function Source.new(path: string, text: string): Source
+function Source.new(path: string, text: string): Self
 	local lineStarts: { number } = { 1 }
 	lines(lineStarts, text, 1)
 
@@ -56,7 +53,7 @@ end
     of file points, and no token can run from one file into the next
 --]]
 
-function Source:add(path: string, text: string): File
+function Source.add(self: Self, path: string, text: string): File
 	local start: number = #self.text + 2
 	local file: File = { path = path, start = start, finish = start + #text - 1, line = #self._lineStarts + 1 }
 
@@ -73,7 +70,7 @@ end
     which is where an end-of-file diagnostic points
 --]]
 
-function Source:position(offset: number): (number, number)
+function Source.position(self: Self, offset: number): (number, number)
 	local line: number = #self._lineStarts
 	while self._lineStarts[line] > offset do
 		line -= 1
@@ -85,7 +82,7 @@ end
     The file a byte offset falls in, the end of file after its text included
 --]]
 
-function Source:file(offset: number): File
+function Source.file(self: Self, offset: number): File
 	local index: number = #self.files
 	while self.files[index].start > offset do
 		index -= 1
@@ -97,8 +94,11 @@ end
     The text of one line without its line ending, for excerpts
 --]]
 
-function Source:lineText(line: number): string
+function Source.lineText(self: Self, line: number): string
 	return self.text:match("[^\r\n]*", self._lineStarts[line]) :: string
 end
+
+export type Source = Self
+type Self = typeof(setmetatable({} :: Fields, Source))
 
 return Source

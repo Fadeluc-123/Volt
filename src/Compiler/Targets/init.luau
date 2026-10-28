@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local Targets = {} :: any
+local Targets = {}
 Targets.__index = Targets
 
 -- An init file stands for its folder, so its siblings are reached through the folder's name
@@ -21,12 +21,15 @@ local Messages = require("./Targets/Messages")
 local Reserved = require("./Config/Reserved")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
+local TargetsTypes = require("./Config/Types/Targets")
 local Types = require("./Targets/Types")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
+type Fields = TargetsTypes.Fields
 type File = Schema.File
 type Parameter = Contract.Parameter
+type Self = TargetsTypes.Targets
 
 -- A send function of the runtime as a writer names it, and where it is taken from once the runtime exists
 type Send = { name: string, type: string, from: string }
@@ -139,8 +142,8 @@ function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (s
 	return client, server, Types.module(file, name)
 end
 
-function Targets.new(file: File, side: string)
-	local self = setmetatable({
+function Targets.new(file: File, side: string): Self
+	local fields: Fields = {
 		_file = file,
 		_side = side,
 		_server = side == "server",
@@ -153,8 +156,9 @@ function Targets.new(file: File, side: string)
 		_messages = {} :: { [number]: string }, -- The schema row of every message heard, by id
 		_outgoing = {} :: { [number]: string }, -- The schema row of every message sent, by id
 		_registry = { events = {}, functions = {}, exports = {} } :: { [string]: { string } }, -- Every entry's full name, by kind
-	}, Targets)
+	}
 
+	local self: Self = setmetatable(fields, Targets) :: any
 	self:count(file.declarations)
 
 	return self
@@ -168,7 +172,7 @@ end
     always spelled out, the handles local when a types module exports them
 --]]
 
-function Targets:render(hash: number, name: string): string
+function Targets.render(self: Self, hash: number, name: string): string
 	local emitter = self._emitter
 	local file: File = self._file
 	local api: string = self:api()
@@ -244,7 +248,7 @@ end
     runtime require and the promise require when a function yields one
 --]]
 
-function Targets:header(name: string): string
+function Targets.header(self: Self, name: string): string
 	local options: { [string]: any } = self._file.options :: any
 	local requires: { string } = { `local Volt = require({options.runtime})` }
 	local services: { string } = { options.runtime:match("^[^.]+") or options.runtime }
@@ -265,7 +269,7 @@ function Targets:header(name: string): string
 		local promise: string = options.promise
 		local service: string = promise:match("^[^.]+") or promise
 
-		table.insert(requires, `local Promise = require({promise})`)
+		table.insert(requires, `local Promise: any = require({promise})`)
 
 		if not table.find(services, service) then
 			table.insert(services, service)
@@ -291,7 +295,7 @@ end
     messages sent by id for their names and sizes
 --]]
 
-function Targets:start(hash: number): string
+function Targets.start(self: Self, hash: number): string
 	local options: { [string]: any } = self._file.options :: any
 	local server: boolean = self._server
 	local settings: { string } = {}
@@ -327,12 +331,12 @@ function Targets:start(hash: number): string
 	return table.concat(lines, "\n")
 end
 
-function Targets:method(name: string): string
+function Targets.method(self: Self, name: string): string
 	return Types.cased(name, self._casing)
 end
 
 -- The last id given in each direction, functions included, since a function's ids count towards the width
-function Targets:count(declarations: { Declaration })
+function Targets.count(self: Self, declarations: { Declaration })
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "namespace" then
 			self:count(declaration.declarations)
@@ -343,8 +347,12 @@ function Targets:count(declarations: { Declaration })
 	end
 end
 
+local _: TargetsTypes.Own, _: TargetsTypes.Api, _: TargetsTypes.Messages = Targets, Api, Messages
+
 -- The API tables and the walk of an event are the methods of one sibling each, and a name defined twice is a bug
-for _, part in { Api, Messages } do
+local parts: { any } = { Api, Messages }
+
+for _, part in parts do
 	for name: string, method in part do
 		assert(Targets[name] == nil, `Targets.{name} is defined twice`)
 		Targets[name] = method

@@ -7,7 +7,7 @@
 --]]
 
 --!strict
-local Analyse = {} :: any
+local Analyse = {}
 Analyse.__index = Analyse
 
 local Diagnostics = require("./Diagnostics")
@@ -48,6 +48,14 @@ local FNV_OFFSET: number = 2166136261
 local FNV_PRIME_LOW: number = 403 -- The prime 16777619 is 2^24 + 403; the split keeps every product exact
 local WORD: number = 2 ^ 32
 
+type Fields = {
+	_diagnostics: Diagnostics,
+	_toServer: number,
+	_toClient: number,
+	_unreliable: { Event },
+	_sent: { Declaration },
+}
+
 --[[
     The bounds a range declares, without the nil of a missing end
 --]]
@@ -61,6 +69,17 @@ local function ends(range: Range): { number }
 		table.insert(list, range.max)
 	end
 	return list
+end
+
+-- One analysis of one file, reporting into its diagnostics
+function Analyse.new(diagnostics: Diagnostics): Self
+	return setmetatable({
+		_diagnostics = diagnostics,
+		_toServer = 0, -- The last id given in each direction
+		_toClient = 0,
+		_unreliable = {} :: { Event }, -- Checked against the budget once the id widths are known
+		_sent = {} :: { Declaration }, -- The reliable messages a client sends, checked against maxPacket likewise
+	}, Analyse)
 end
 
 --[[
@@ -83,17 +102,11 @@ end
 --]]
 
 function Analyse.file(file: File, diagnostics: Diagnostics): number
-	local self = setmetatable({
-		_diagnostics = diagnostics,
-		_toServer = 0, -- The last id given in each direction
-		_toClient = 0,
-		_unreliable = {} :: { Event }, -- Checked against the budget once the id widths are known
-		_sent = {} :: { Declaration }, -- The reliable messages a client sends, checked against maxPacket likewise
-	}, Analyse)
+	local analysis: Self = Analyse.new(diagnostics)
 
-	self:declarations(file.declarations)
-	self:budget(file.options.unreliableBudget :: number)
-	self:packet(file.options.maxPacket :: number)
+	analysis:declarations(file.declarations)
+	analysis:budget(file.options.unreliableBudget :: number)
+	analysis:packet(file.options.maxPacket :: number)
 
 	return Analyse.hash(Print.file(file))
 end
@@ -103,7 +116,7 @@ end
     message the next id in every direction it travels
 --]]
 
-function Analyse:declarations(declarations: { Declaration })
+function Analyse.declarations(self: Self, declarations: { Declaration })
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
 			self:type(declaration.type)
@@ -119,16 +132,20 @@ function Analyse:declarations(declarations: { Declaration })
 					self:type(declaration["return"])
 				end
 
-				declaration.toServer = self:next("_toServer")
-				declaration.toClient = self:next("_toClient")
+				self._toServer += 1
+				self._toClient += 1
+				declaration.toServer = self._toServer
+				declaration.toClient = self._toClient
 				table.insert(self._sent, declaration)
 			else
 				if declaration.from == "Client" or declaration.from == "Both" then
-					declaration.toServer = self:next("_toServer")
+					self._toServer += 1
+					declaration.toServer = self._toServer
 				end
 
 				if declaration.from == "Server" or declaration.from == "Both" then
-					declaration.toClient = self:next("_toClient")
+					self._toClient += 1
+					declaration.toClient = self._toClient
 				end
 
 				if declaration.type == "Unreliable" then
@@ -141,17 +158,12 @@ function Analyse:declarations(declarations: { Declaration })
 	end
 end
 
-function Analyse:next(direction: string): number
-	self[direction] += 1
-	return self[direction]
-end
-
 --[[
     Refuses every unreliable event whose largest message, id included,
     would not fit one fire
 --]]
 
-function Analyse:budget(budget: number)
+function Analyse.budget(self: Self, budget: number)
 	for _, event: Event in self._unreliable do
 		local toServer: number = event.toServer and self._toServer or 0
 		local toClient: number = event.toClient and self._toClient or 0
@@ -173,7 +185,7 @@ end
     opens past maxPacket, since the server drops a packet that long whole
 --]]
 
-function Analyse:packet(maxPacket: number)
+function Analyse.packet(self: Self, maxPacket: number)
 	local idBytes: number = Sizes.idBytes(self._toServer)
 
 	for _, declaration: Declaration in self._sent do
@@ -195,7 +207,7 @@ end
     Checks one type node and everything inside it
 --]]
 
-function Analyse:type(node: Type | Pack)
+function Analyse.type(self: Self, node: Type | Pack)
 	if node.kind == "primitive" then
 		self:range(node)
 	elseif node.kind == "roblox" then
@@ -223,7 +235,7 @@ end
     whole and within the bounds on an integer
 --]]
 
-function Analyse:range(node: Type)
+function Analyse.range(self: Self, node: Type)
 	local name: string = (node :: any).name
 	local range: Range? = (node :: any).range
 	local row = Primitives[name]
@@ -268,7 +280,7 @@ end
     from zero up, in order
 --]]
 
-function Analyse:lengths(range: Range?)
+function Analyse.lengths(self: Self, range: Range?)
 	if not range then
 		return
 	end
@@ -290,7 +302,7 @@ end
     takes, and a class only on an instance
 --]]
 
-function Analyse:roblox(node: Roblox)
+function Analyse.roblox(self: Self, node: Roblox)
 	local row = Roblox[node.name]
 	local allowed: number = row.generics or 0
 	local generics: { Type }? = node.generics
@@ -319,7 +331,7 @@ end
     and the reader can compare for duplicates
 --]]
 
-function Analyse:key(node: Type, label: string)
+function Analyse.key(self: Self, node: Type, label: string)
 	local actual: Type = Sizes.resolved(node)
 	local allowed: boolean = (actual.kind == "primitive" and actual.name ~= "unknown")
 		or actual.kind == "roblox"
@@ -337,7 +349,7 @@ end
     are refused, as is a member that can be nil or anything at all
 --]]
 
-function Analyse:union(node: Type)
+function Analyse.union(self: Self, node: Type)
 	local seen: { [string]: Type } = {}
 
 	for _, member: Type in (node :: any).members do
@@ -361,5 +373,7 @@ function Analyse:union(node: Type)
 		end
 	end
 end
+
+type Self = typeof(setmetatable({} :: Fields, Analyse))
 
 return Analyse

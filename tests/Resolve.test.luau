@@ -135,7 +135,7 @@ describe("Resolve", function ()
 			local second: string = rendered(text, "Dup", `error V3002: "N.Dup" is declared twice`, 4)
 
 			expect(report(text)).is(`{first}\n\n{second}`)
-			expect((file.declarations[1] :: any).references).is(1)
+			expect((file.declarations[1] :: Schema.TypeDeclaration).references).is(1)
 		end)
 
 		test("V3003 reports a recursive type once per cycle, at the reference that closes it", function ()

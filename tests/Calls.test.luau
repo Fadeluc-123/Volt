@@ -10,7 +10,7 @@
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
-local Promise = require("./Promise")
+local Promise: any = require("./Promise")
 local Volt = require("@volt")
 local Config = require("@volt/Config/Runtime")
 

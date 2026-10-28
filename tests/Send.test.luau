@@ -98,7 +98,7 @@ describe("Send", function ()
 		expect(#fired).is(1)
 		expect(fired[1].target).is("a")
 		expect(buffer.len(fired[1].packet)).is(5)
-		expect(table.concat(fired[1].side :: any, ",")).is("first,second")
+		expect(table.concat(fired[1].side :: { any }, ",")).is("first,second")
 		expect(state.cursor).is(0)
 		expect(state.sideCursor).is(1)
 		expect((next(state.side))).is(nil)
@@ -145,8 +145,8 @@ describe("Send", function ()
 		send:flush()
 
 		expect(table.concat(lengths(fired), ",")).is("8,4")
-		expect(table.concat(fired[1].side :: any, ",")).is("one")
-		expect(table.concat(fired[2].side :: any, ",")).is("three")
+		expect(table.concat(fired[1].side :: { any }, ",")).is("one")
+		expect(table.concat(fired[2].side :: { any }, ",")).is("three")
 	end)
 
 	test("never lets a message straddle two fires", function ()
@@ -215,7 +215,7 @@ describe("Send", function ()
 		local packet: buffer, side: { any }? = send:take()
 
 		expect(buffer.len(packet)).is(3)
-		expect(table.concat(side :: any, ",")).is("kept")
+		expect(table.concat(side :: { any }, ",")).is("kept")
 		expect(`{send.scratch.cursor},{send.scratch.sideCursor}`).is("0,1")
 		expect(total.messagesOut).is(0)
 
@@ -249,7 +249,7 @@ describe("Send", function ()
 
 		expect(buffer.len(fired[1].packet)).is(5)
 		expect(buffer.readu8(fired[1].packet, 3)).is(2)
-		expect(table.concat(fired[1].side :: any, ",")).is("kept")
+		expect(table.concat(fired[1].side :: { any }, ",")).is("kept")
 	end)
 
 	test(

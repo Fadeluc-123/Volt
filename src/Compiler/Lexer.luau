@@ -109,7 +109,9 @@ function Lexer.scan(source: Source, diagnostics: Diagnostics, file: File?): { To
 		cursor = finish + 1
 	end
 
-	table.insert(tokens, { kind = "eof", value = "", start = last + 1, finish = last + 1 })
+	local eof: Token = { kind = "eof", value = "", start = last + 1, finish = last + 1 }
+	table.insert(tokens, eof)
+
 	return tokens
 end
 
