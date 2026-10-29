@@ -160,6 +160,7 @@ function Targets.new(file: File, side: string): Self
 
 	local self: Self = setmetatable(fields, Targets) :: any
 	self:count(file.declarations)
+	self:mark(file.declarations)
 
 	return self
 end

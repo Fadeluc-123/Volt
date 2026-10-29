@@ -162,9 +162,10 @@ function Parser.declarations(self: Self, close: string?): { Declaration }
 end
 
 --[[
-    Skips to the next declaration keyword, or to the brace that closes the
-    enclosing namespace, whichever comes first. A keyword counts only when
-    a name follows it, which is what tells struct Stack from struct {
+    Skips to the next declaration keyword or attribute, or to the brace
+    that closes the enclosing namespace, whichever comes first. A keyword
+    or an @ counts only when a name follows it, which is what tells struct
+    Stack from struct {
 --]]
 
 function Parser.synchronise(self: Self, depth: number, close: string?)
@@ -175,7 +176,7 @@ function Parser.synchronise(self: Self, depth: number, close: string?)
 			and DECLARATIONS[token.value] == true
 			and (token.value == "export" or following.kind == "name")
 
-		if declares then
+		if declares or (self:at("@") and following.kind == "name") then
 			self._depth = depth -- Whatever body was left open is abandoned with its declaration
 			return
 		end
@@ -189,12 +190,14 @@ function Parser.synchronise(self: Self, depth: number, close: string?)
 end
 
 --[[
-    Parses one declaration. Options are collected into the file's option
-    table rather than returned, and reported once a declaration has gone
-    before them
+    Parses one declaration and the attributes in front of it, which are
+    checked once it is parsed, since only then is its kind known. Options
+    are collected into the file's option table rather than returned, and
+    reported once a declaration has gone before them
 --]]
 
 function Parser.declaration(self: Self): Declaration?
+	local attributes: { Token } = self:attributes()
 	local token: Token = self:peek()
 
 	if self:at("option") then
@@ -203,32 +206,44 @@ function Parser.declaration(self: Self): Declaration?
 			self._diagnostics:error("V2009", message, token)
 		end
 
-		self:option()
+		self:attach(attributes, "option", self:option().value, false)
 		return nil
 	end
 
 	self._declared = true
 
+	local declaration: Declaration
 	if self:at("export") or self:at("type") or self:at("struct") or self:at("enum") then
-		return self:typeDeclaration()
+		declaration = self:typeDeclaration()
 	elseif self:at("event") then
-		return self:message(Options.event)
+		declaration = self:message(Options.event)
 	elseif self:at("function") then
-		return self:message(Options["function"])
+		declaration = self:message(Options["function"])
 	elseif self:at("namespace") then
-		return self:namespace()
+		declaration = self:namespace()
+	else
+		return self:fail("V2001", `expected a declaration, got {self:describe(token)}`, token)
 	end
 
-	return self:fail("V2001", `expected a declaration, got {self:describe(token)}`, token)
+	local exported: boolean = declaration.kind == "type" and declaration.export
+	local applied: { [string]: boolean }? = self:attach(attributes, declaration.kind, declaration.name, exported)
+
+	if declaration.kind == "type" then
+		declaration.attributes = applied
+	end
+
+	return declaration
 end
 
-function Parser.option(self: Self)
+function Parser.option(self: Self): Token
 	self:consume()
 
 	local key: Token = self:key()
 	local label: string = "the options"
 	self:expect("punctuation", "=")
 	self:entry(self._options :: { [string]: any }, Options.file, key, label, nil)
+
+	return key
 end
 
 --[[

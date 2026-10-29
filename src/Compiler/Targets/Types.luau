@@ -9,6 +9,7 @@
 local Types = {}
 
 local Contract = require("../Config/Contract")
+local Expressions = require("../Emit/Expressions")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
 
@@ -153,6 +154,12 @@ function Types.annotation(node: Type): string
 		return `\{ [{Types.annotation(node.element)}]: true }`
 	elseif node.kind == "map" then
 		return `\{ [{Types.annotation(node.key)}]: {Types.annotation(node.value)} }`
+	elseif node.kind == "literal" then
+		-- A string is its singleton, escaped as a Luau string; Luau has no number singletons, so a number is any number
+		local value: string | number | boolean = node.value
+		return typeof(value) == "string" and Expressions.quote(value)
+			or typeof(value) == "number" and "number"
+			or tostring(value)
 	end
 
 	local members: { string } = {}
@@ -170,11 +177,19 @@ function Types.annotation(node: Type): string
 	return table.concat(members, " | ")
 end
 
--- The export line of every named type in a declaration list, namespaces walked, in declaration order
+--[[
+    The line of every named type in a declaration list, namespaces walked,
+    in declaration order: exported, or local to the module for a private
+    one, which the module's own signatures still name
+--]]
+
 function Types.named(declarations: { Declaration }, lines: { string }): { string }
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
-			table.insert(lines, `export type {Types.label(declaration)} = {Types.annotation(declaration.type)}`)
+			local attributes: { [string]: boolean }? = declaration.attributes
+			local exported: string = (attributes and attributes.private) and "" or "export "
+
+			table.insert(lines, `{exported}type {Types.label(declaration)} = {Types.annotation(declaration.type)}`)
 		elseif declaration.kind == "namespace" then
 			Types.named(declaration.declarations, lines)
 		end

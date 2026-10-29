@@ -1,9 +1,10 @@
 --[[
     The scalar walks, merged onto the emitter: an integer or float at a
     constant offset with its checks, a 64-bit integer read exactly, a
-    quantised float, a boolean as a flag bit, a string or buffer with
-    its length, the length rule every counted type shares, and a value
-    carried outside the buffer in a side-array slot
+    quantised float, a boolean as a flag bit, a string or buffer with its
+    length and a text's UTF-8 check, the length rule every counted type
+    shares, a value carried outside the buffer in a side-array slot, and
+    a literal, which carries nothing
 --]]
 
 --!strict
@@ -28,6 +29,7 @@ local MASKED_BYTES: number = 4 -- The widest unsigned integer bit32 holds, which
 
 local minus = Expressions.minus
 local plus = Expressions.plus
+local quote = Expressions.quote
 local refusal = Expressions.refusal
 local refuse = Expressions.refuse
 local writeNumber = Expressions.writeNumber
@@ -219,7 +221,9 @@ end
 
 --[[
     A string or buffer. An exact length sits among the fixed bytes with
-    no prefix; otherwise the bytes follow in the tail after their prefix
+    no prefix; otherwise the bytes follow in the tail after their prefix.
+    A text is refused when it is not UTF-8: by a writer that checks,
+    after its length, and by every reader straight after the read
 --]]
 
 function Scalars.bytes(
@@ -232,13 +236,19 @@ function Scalars.bytes(
 	path: string
 ): string
 	local isBuffer: boolean = (node :: any).name == "buffer"
+	local isText: boolean = (node :: any).utf8 == true
 	local measured: string = isBuffer and `buffer.len({value})` or `#{value}`
 	local result: string = read:name(hint)
+	local invalid: string = `{path}: invalid UTF-8`
 
 	self:shape(write, value, isBuffer and "buffer" or "string", path)
 
 	local count: string, prefix: number, low: number =
 		self:length((node :: any).range, write, read, measured, hint, path, "bytes")
+
+	if isText and self._validate then
+		refuse(write, `utf8.len({value}) == nil`, invalid)
+	end
 
 	local function pack(target: string, offset: string): string
 		return isBuffer and `buffer.copy({target}, {offset}, {value})`
@@ -259,11 +269,19 @@ function Scalars.bytes(
 		write:line(pack(write.out, write:at(index)))
 		read:line(unpack("packet", read:at(at)))
 
+		if isText then
+			refuse(read, `utf8.len({result}) == nil`, invalid)
+		end
+
 		return result
 	end
 
 	write:extend(hint, path, measured, pack)
 	read:extend(hint, path, count, unpack)
+
+	if isText then
+		read:tail(refusal(`utf8.len({result}) == nil`, invalid))
+	end
 
 	return result
 end
@@ -338,6 +356,23 @@ function Scalars.unknown(_: Emit, write: Block, read: Block, value: string, hint
 	)
 
 	return result
+end
+
+--[[
+    A literal carries nothing: a writer that checks refuses any other
+    value in one comparison, and the reader yields the value itself as a
+    Luau literal wherever the walk puts it
+--]]
+
+function Scalars.literal(self: Emit, node: Type, write: Block, value: string, path: string): string
+	local held: string | number | boolean = (node :: any).value
+	local spelled: string = typeof(held) == "string" and quote(held) or tostring(held)
+
+	if self._validate then
+		refuse(write, `{value} ~= {spelled}`, `{path}: expected {Print.type(node)}`)
+	end
+
+	return spelled
 end
 
 return Scalars

@@ -93,7 +93,7 @@ describe("Lexer", function ()
 	end)
 
 	test("punctuation", function ()
-		expectEach("{ } ( ) [ ] < > : , = | ? .", "punctuation")
+		expectEach("{ } ( ) [ ] < > : , = | ? . @", "punctuation")
 	end)
 
 	test("comments and whitespace produce no token", function ()
@@ -124,11 +124,11 @@ describe("Lexer", function ()
 	end)
 
 	test("V1002 reports an unexpected character and resumes on the next line", function ()
-		local text: string = "event @ Input\nevent B"
+		local text: string = "event $ Input\nevent B"
 		local _, diagnostics = scan(text)
 
-		local location: string = `Test.volt:1:7: error V1002: unexpected character "@"`
-		local excerpt: string = "    1 | event @ Input"
+		local location: string = `Test.volt:1:7: error V1002: unexpected character "$"`
+		local excerpt: string = "    1 | event $ Input"
 		local underline: string = `      | {string.rep(" ", 6)}^`
 
 		expect(diagnostics:render()).is(`{location}\n{excerpt}\n{underline}`)

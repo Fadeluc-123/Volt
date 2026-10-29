@@ -35,7 +35,7 @@ export type Own = {
 	declarations: (self: Parser, close: string?) -> { Declaration },
 	synchronise: (self: Parser, depth: number, close: string?) -> (),
 	declaration: (self: Parser) -> Declaration?,
-	option: (self: Parser) -> (),
+	option: (self: Parser) -> Token,
 	typeDeclaration: (self: Parser) -> Declaration,
 	message: (self: Parser, shape: { Spec }) -> Declaration,
 	namespace: (self: Parser) -> Declaration,
@@ -59,6 +59,8 @@ export type Records = {
 	record: (self: Parser, target: { [string]: any }, shape: { Spec }, label: string) -> (),
 	entry: (self: Parser, target: { [string]: any }, shape: { Spec }, key: Token, label: string, close: string?) -> (),
 	value: (self: Parser, spec: Spec, key: string) -> any,
+	attributes: (self: Parser) -> { Token },
+	attach: (self: Parser, found: { Token }, kind: string, name: string, export: boolean) -> { [string]: boolean }?,
 }
 
 export type TypeForms = {

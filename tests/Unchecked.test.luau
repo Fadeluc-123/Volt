@@ -2,7 +2,8 @@
     Proves that a writer built without write validation that raises part
     way leaves nothing of its message behind, over the mock with modules
     compiled with the option off: a fire of either reliability, a
-    broadcast, an invoke and an encode, each named for its message
+    broadcast, an invoke and an encode, each named for its message; and
+    that a reply is checked all the same, through a pair an event walked
 --]]
 
 --!strict
@@ -28,8 +29,12 @@ type Harness = {
 	failures: { string },
 }
 
-local SCHEMAS: { string } = { "Events", "Broadcasts", "Functions", "Exports" }
+local SCHEMAS: { string } = { "Events", "Broadcasts", "Functions", "Exports", "Console" }
 local BAD: string = "bad" -- A value no number or table field takes, which a buffer write or an index raises on
+local NOT_TEXT: string = string.char(0xFF) -- A byte no UTF-8 text holds
+local COMMAND: string = "go" -- Text Console's run takes
+local KIND: string = "Info" -- A Kind every line and reply may carry
+local REFUSED: string = "Decree.Line: invalid UTF-8" -- What the pair Console's line and run's return share refuses
 
 local MODULES: { [string]: { client: string, server: string } } = {}
 
@@ -191,5 +196,29 @@ describe("An unchecked writer that raises", function ()
 		named(ok, message, "Save: invalid argument")
 
 		expect(buffer.tostring(harness.alice.Save.write(save))).is(buffer.tostring(first))
+	end)
+end)
+
+describe("An unchecked module's reply", function ()
+	test("is refused when its text is not UTF-8, though an event walks the pair it shares first", function ()
+		local harness: Harness = setup("Console")
+
+		harness.server.Decree.run.on(function (): (string, string)
+			return NOT_TEXT, KIND
+		end)
+
+		local promise: any = harness.alice.Decree.run.invoke(COMMAND)
+
+		exchange(harness.mock)
+		harness.mock:step()
+
+		expect(table.concat(harness.failures, ",")).is(`handler Decree.run: {REFUSED}`)
+		expect(`{promise.settled[1]} {promise.settled[2]}`).is(`false {REFUSED}`)
+
+		local ok: boolean, message: any =
+			pcall(harness.server.Decree.line.fire, harness.mock.players[1], NOT_TEXT, KIND)
+
+		expect(ok).is(false)
+		expect(tostring(message)).is(REFUSED)
 	end)
 end)

@@ -27,6 +27,8 @@ local QUEUE: number = 64 -- The queue every event here keeps, the schema's defau
 local LONG_REASON: number = 200 -- Past the 128 bytes Example's Inventory.Transfer allows its reason
 local OUT_OF_RANGE: number = 1000 -- Past the 999 a Stack's quantity allows
 local WRONG_DIR: number = 9 -- Past the 8 Input's dir allows
+local NOT_TEXT: { number } = { 0xC3, 0x28 } -- A two-byte sequence whose second byte does not continue it
+local LINE: number = 1 -- The id Console's line reaches the client with
 
 -- Runs one step on a thread of its own, so a listener that yields in it is resumed only after a frame has passed
 local function across(mock: Mock)
@@ -93,6 +95,17 @@ describe("Failures", function ()
 			named(records.failures.server[1], "decode", "Records")
 			expect(events.failures.server[1].detail).is("Input: Input.dir: out of range")
 			expect(records.failures.server[1].detail).is("Records: Stack.quantity: out of range")
+		end)
+
+		test("a decode of text that is not UTF-8 names the function", function ()
+			local harness: Harness = setup("Console")
+
+			-- The client's module checks nothing it writes, so the text reaches the server's reader
+			harness.client.Decree.run.invoke(string.char(table.unpack(NOT_TEXT)))
+			steps(harness.mock)
+
+			named(harness.failures.server[1], "decode", "Decree.run")
+			expect(harness.failures.server[1].detail).is("Decree.run: Decree.run.text: invalid UTF-8")
 		end)
 
 		test("a listener's error and its yield name the event", function ()
@@ -194,6 +207,19 @@ describe("Failures", function ()
 			expect(patch.failures.client[1].detail).is("Inventory.Patch: Stack.quantity: out of range")
 			named(reply.failures.client[1], "decode", "Inventory.Transfer")
 			named(patch.failures.client[1], "decode", "Inventory.Patch")
+		end)
+
+		test("a decode of text that is not UTF-8 inside a shared pair names the event", function ()
+			local harness: Harness = setup("Console")
+			local length: number = #NOT_TEXT
+
+			-- Built by hand, since the server's pair checks the text in every build: the id, Line's u16 length and
+			-- its bytes, then Kind's flag byte
+			harness.mock.server.reliable(harness.player, packet({ LINE, length, 0, NOT_TEXT[1], NOT_TEXT[2], 0 }))
+			steps(harness.mock)
+
+			named(harness.failures.client[1], "decode", "Decree.line")
+			expect(harness.failures.client[1].detail).is("Decree.line: Decree.Line: invalid UTF-8")
 		end)
 
 		test("a listener's error and its yield, and a queue overflow, name the event", function ()

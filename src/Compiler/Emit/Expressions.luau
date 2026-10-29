@@ -1,8 +1,8 @@
 --[[
     The expression strings the walkers join into generated lines: a bound
     taken from or added to an expression, a count of one, an expression
-    grouped so a join keeps its meaning, the lines that refuse a value,
-    and a number of any width written to or read from a fixed offset
+    grouped so a join keeps its meaning, text as a Luau string, the lines
+    that refuse a value, and a number of any width at a fixed offset
 --]]
 
 --!strict
@@ -12,6 +12,9 @@ local Blocks = require("../Blocks")
 local Primitives = require("../Config/Primitives")
 
 type Block = Blocks.Block
+
+-- The bytes a Luau string in double quotes cannot hold as they are, each with its escape
+local ESCAPES: { [string]: string } = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r" }
 
 -- An expression less a bound, written the way a person would
 function Expressions.minus(expression: string, bound: number): string
@@ -37,16 +40,21 @@ function Expressions.group(expression: string): string
 	return expression:find("[-+*/%%]") and `({expression})` or expression
 end
 
+-- Text as a Luau string in double quotes, every quote, backslash and line break in it escaped
+function Expressions.quote(text: string): string
+	return `"{(text:gsub('[\\"\n\r]', ESCAPES))}"`
+end
+
 --[[
     The lines that refuse a value when a condition holds: an error on the
     read side, which the runtime's packet pcall turns into a decode
     failure, or a call to what the block refuses through on the write
-    side, which undoes the message before it raises
+    side, which undoes the message before it raises. The message may
+    quote a tagged enum's tag or a literal, so it is escaped as one
 --]]
 
 function Expressions.refusal(condition: string, message: string, through: string?): string
-	local quoted: string = message:gsub('"', '\\"') -- A printed tagged enum carries its tag in quotes
-	return `if {condition} then\n\t{through or "error"}("{quoted}")\nend`
+	return `if {condition} then\n\t{through or "error"}({Expressions.quote(message)})\nend`
 end
 
 function Expressions.refuse(block: Block, condition: string, message: string)

@@ -2,7 +2,8 @@
     The type-family schemas the emitter's tests share, each compiled and
     its events rendered once as one chunk, with what those tests ask of
     them: an event's parameters at their least, a fire of its writer
-    caught by pcall, and the check that a fire or a read failed as meant
+    caught by pcall, the check that a fire or a read failed as meant, and
+    the byte runs no text takes
 --]]
 
 --!strict
@@ -34,12 +35,24 @@ local SCHEMAS: { string } = {
 	"Choices",
 	"Lists",
 	"Tables",
+	"Text",
+	"Literals",
 }
 
 local Families = {
 	schemas = SCHEMAS,
 	files = {} :: { [string]: File }, -- Each schema compiled
 	texts = {} :: { [string]: string }, -- Each schema's events as one chunk, which is also its golden
+
+	-- The five ways utf8.len refuses text: a lone continuation byte, a truncated sequence, an overlong, a surrogate,
+	-- and a code point past U+10FFFF
+	invalid = {
+		string.char(0x80),
+		string.char(0xE6, 0x97),
+		string.char(0xC0, 0x80),
+		string.char(0xED, 0xA0, 0x80),
+		string.char(0xF4, 0x90, 0x80, 0x80),
+	} :: { string },
 }
 
 local function byName(schema: string, name: string): Event

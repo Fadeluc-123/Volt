@@ -44,7 +44,7 @@ describe("Compiler", function ()
 	test("checks what it wrote, line endings aside, and names each module missing or out of date", function ()
 		local directory: string = scratch("Check")
 		local schema: string = `{directory}/Schemas/Example.volt`
-		local network: string = `{directory}/src/Shared/Network`
+		local network: string = `{directory}/Shared/Network`
 
 		fs.writeDir(`{directory}/Schemas`)
 		fs.writeDir(network)
@@ -80,9 +80,9 @@ describe("Compiler", function ()
 
 		local stale: process.ExecResult = volt(schema, "--check")
 		local named: string = table.concat({
-			`{schema}: ../src/Shared/Network/Client.luau is out of date`,
-			`{schema}: ../src/Shared/Network/Server.luau is missing`,
-			`{schema}: ../src/Shared/Network/Types.luau is missing`,
+			`{schema}: ../Shared/Network/Client.luau is out of date`,
+			`{schema}: ../Shared/Network/Server.luau is missing`,
+			`{schema}: ../Shared/Network/Types.luau is missing`,
 			"",
 		}, "\n")
 

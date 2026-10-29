@@ -78,6 +78,7 @@ export type Api = {
 
 export type Messages = {
 	sends: (write: Block, reliable: boolean, fixed: number, data: (Type | Pack)?) -> string?,
+	mark: (self: Targets, declarations: { Declaration }) -> (),
 	parameters: (data: (Type | Pack)?) -> { Field },
 	walk: (self: Targets, event: Event, fires: boolean, hears: boolean) -> Walked,
 	exchange: (self: Targets, declaration: Function) -> Exchanged,

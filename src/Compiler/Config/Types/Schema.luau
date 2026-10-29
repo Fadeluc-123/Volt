@@ -21,8 +21,9 @@ export type Roblox = {
 	finish: number,
 }
 
+-- A string primitive carries utf8 only when written string.utf8, and a literal holds the one value it allows
 export type Type =
-	{ kind: "primitive", name: string, range: Range?, start: number, finish: number }
+	{ kind: "primitive", name: string, range: Range?, utf8: boolean?, start: number, finish: number }
 	| Roblox
 	| { kind: "struct", fields: { Field }, start: number, finish: number }
 	| { kind: "enum", tag: string?, variants: { Variant }, start: number, finish: number }
@@ -32,12 +33,14 @@ export type Type =
 	| { kind: "optional", inner: Type, start: number, finish: number }
 	| { kind: "union", members: { Type }, start: number, finish: number }
 	| { kind: "reference", name: string, target: TypeDeclaration?, start: number, finish: number }
+	| { kind: "literal", value: string | number | boolean, start: number, finish: number }
 
 export type TypeDeclaration = {
 	kind: "type",
 	name: string,
 	export: boolean,
 	type: Type,
+	attributes: { [string]: boolean }?, -- Keyed by the attribute's name without its @, absent when there are none
 	path: string?,
 	references: number?,
 	start: number,

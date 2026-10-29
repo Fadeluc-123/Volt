@@ -3,16 +3,18 @@
     list of key: value entries checked against a shape of specs, which is
     how events, functions and the file's options are read, reporting
     unknown, duplicate, missing and wrongly shaped keys with the span of
-    each
+    each; and the attributes in front of a declaration, checked by rows
 --]]
 
 --!strict
 local Records = {}
 
+local Attributes = require("../Config/Attributes")
 local Lexer = require("../Lexer")
 local Options = require("../Config/Options")
 local Types = require("../Config/Types/Parser")
 
+type Attribute = Attributes.Attribute
 type Parser = Types.Parser
 type Spec = Options.Spec
 type Token = Lexer.Token
@@ -22,6 +24,16 @@ local KINDS: { [string]: string } = {
 	string = "a string",
 	name = "a name",
 	boolean = "true or false",
+}
+
+-- How each kind of declaration an attribute may apply to reads in a message
+local DECLARATIONS: { [string]: string } = {
+	type = "a type, struct or enum",
+	event = "an event",
+	namespace = "a namespace",
+	option = "an option",
+
+	["function"] = "a function",
 }
 
 --[[
@@ -54,6 +66,23 @@ local function keysOf(shape: { Spec }): string
 		table.insert(keys, spec.key)
 	end
 	return table.concat(keys, ", ")
+end
+
+local function rowOf(name: string): Attribute?
+	for _, row: Attribute in Attributes do
+		if row.name == name then
+			return row
+		end
+	end
+	return nil
+end
+
+local function namesOf(): string
+	local names: { string } = {}
+	for _, row: Attribute in Attributes do
+		table.insert(names, `@{row.name}`)
+	end
+	return table.concat(names, ", ")
 end
 
 --[[
@@ -133,6 +162,72 @@ function Records.value(self: Parser, spec: Spec, key: string): any
 
 	local found: string = self:describe(token)
 	return self:fail("V2005", `expected {expectation(spec)} for key "{key}", got {found}`, token)
+end
+
+--[[
+    Reads the attributes in front of a declaration, each an @ and a name,
+    in source order. A repeat is reported and dropped; each one spans its
+    @ through its name
+--]]
+
+function Records.attributes(self: Parser): { Token }
+	local found: { Token } = {}
+	local seen: { [string]: boolean } = {}
+
+	while self:at("@") do
+		local at: Token = self:consume()
+		local name: Token = self:expect("name")
+		local attribute: Token = { kind = "name", value = name.value, start = at.start, finish = name.finish }
+
+		if seen[name.value] then
+			self._diagnostics:error("V2002", `duplicate attribute "@{name.value}"`, attribute)
+		else
+			seen[name.value] = true
+			table.insert(found, attribute)
+		end
+	end
+
+	return found
+end
+
+--[[
+    Checks the attributes read in front of a declaration against their
+    rows once its kind is known, reporting one that is no row and one the
+    declaration cannot carry, and returns the set of those that apply
+--]]
+
+function Records.attach(
+	self: Parser,
+	found: { Token },
+	kind: string,
+	name: string,
+	export: boolean
+): { [string]: boolean }?
+	local applied: { [string]: boolean } = {}
+
+	for _, attribute: Token in found do
+		local row: Attribute? = rowOf(attribute.value)
+
+		if not row then
+			local message: string = `unknown attribute "@{attribute.value}"; attributes are {namesOf()}`
+			self._diagnostics:error("V2011", message, attribute)
+		elseif not table.find(row.kinds, kind) then
+			local kinds: { string } = {}
+			for _, allowed: string in row.kinds do
+				table.insert(kinds, DECLARATIONS[allowed])
+			end
+
+			local message: string = `"@{row.name}" applies to {table.concat(kinds, ", ")}, not to {kind} {name}`
+			self._diagnostics:error("V2012", message, attribute)
+		elseif export and not row.exported then
+			self._diagnostics:error("V2012", `an exported type cannot be @{row.name}`, attribute)
+		else
+			applied[row.name] = true
+		end
+	end
+
+	-- A declaration with no attribute that applies carries no set at all
+	return next(applied) ~= nil and applied or nil
 end
 
 return Records

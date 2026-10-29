@@ -297,6 +297,8 @@ function Sizes.size(node: Type | Pack): Size
 		)
 	elseif node.kind == "set" then
 		return repeated(node.range, Sizes.size(node.element))
+	elseif node.kind == "literal" then
+		return Sizes.fixed(0) -- The reader yields the value itself, so nothing is carried
 	end
 
 	local target: TypeDeclaration? = node.target
@@ -346,6 +348,8 @@ function Sizes.classes(node: Type): { string }
 		return { actual.tag and "table" or "string" }
 	elseif actual.kind == "optional" then
 		return { "nil" }
+	elseif actual.kind == "literal" then
+		return { typeof(actual.value) }
 	elseif actual.kind == "reference" then
 		return {} -- Unresolved, and already reported
 	end

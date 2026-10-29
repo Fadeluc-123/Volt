@@ -483,8 +483,10 @@ A range in parentheses narrows a type. Both ends are included: `u8(0..8)` allows
 | `q8(min..max)`, `q16(min..max)` | A decimal between `min` and `max`, rounded to one of 256 or 65,536 evenly spaced steps. The range is required. | 1, 2 | `q16(-3.2..3.2)` |
 | `boolean` | `true` or `false`. | 1 bit; eight share a byte | `boolean` |
 | `string` | A string, measured in bytes. | the bytes, plus 1 or 2 for the length | `string(0..64)`, `string(8)` |
+| `string.utf8` | Text that must be valid UTF-8. The range still counts bytes, not characters, so `string.utf8(1..4)` holds `"日"` (3 bytes) but not `"日本"` (6). The receiver refuses invalid text on every read. | the bytes, plus 1 or 2 for the length | `string.utf8(1..4096)` |
 | `buffer` | A Luau buffer. | the bytes, plus 1 or 2 for the length | `buffer(0..1024)` |
 | `unknown` | Any Luau value. It travels beside the buffer and Volt never checks it. | 1 bit | `unknown` |
+| `"melee"`, `2`, `true` | Exactly that one value, called a literal type. The receiver already knows it, so nothing is sent; the sender refuses any other value while `writeValidation` is on, as it is by default. | none | `struct { kind: "melee", damage: u16 }` |
 | `Vector3`, `Vector3<T>` | A Vector3, each part sent as `T`, which is `f32` unless you give one. | 12 by default | `Vector3<q16(-1024..1024)>` (6 bytes) |
 | `Vector2`, `Vector2<T>` | A Vector2. | 8 by default | `Vector2<i16>` |
 | `CFrame`, `CFrame<P, R>` | A CFrame: the position as three `P`, the rotation as three `R`, both `f32` by default. | 24 by default | `CFrame<f32, q16(-3.2..3.2)>` |
@@ -515,7 +517,7 @@ Types can be combined:
 
 An array of booleans is packed into bits: `boolean[8]` takes one byte. A map or a set refuses a duplicate key.
 
-Volt picks a member of `A | B` by the value's Luau type, so the members must be told apart that way. Two number types, two strings, two buffers, two tables (structs, arrays, maps, sets and tagged enums all count) or two instances cannot share a union, and the compiler says so. To choose between two structs, use a tagged enum. `nil` is never a member; use `?` instead.
+Volt picks a member of `A | B` by the value's Luau type, so the members must be told apart that way. Two number types, two strings, two buffers, two tables (structs, arrays, maps, sets and tagged enums all count) or two instances cannot share a union, and the compiler says so. To choose between two structs, use a tagged enum. `nil` is never a member; use `?` instead. A literal counts as its Luau type, so `u8 | "none"` works, while `"on" | "off"` is two strings and is written `enum { on, off }` instead.
 
 Give a type a name to use it in several places:
 
@@ -527,6 +529,12 @@ export struct Save { version: u16, stacks: Stack[0..256] }
 ```
 
 `type`, `struct` and `enum` declare a name the whole schema can use. A named type also becomes a Luau type in the generated modules. `export` in front adds a `write` and a `read` for that type to the module (see [More tools](#more-tools)).
+
+`@private` in front of a `type`, `struct` or `enum` keeps its Luau type to the generated modules: they still use it in their own signatures, but your scripts cannot name it. It changes nothing that is sent. An exported type cannot be private, since its `write` and `read` are for your scripts.
+
+```
+@private type Line = string.utf8(0..16384)
+```
 
 A namespace groups messages and types:
 
@@ -543,7 +551,7 @@ namespace Combat {
 
 The event is then `Network.Combat.Hit`, and the client fires it with `Network.Combat.Hit.fire(12, 30)`. Outside the namespace a name inside it is written `Combat.Name`. A name declared at the top of the file can be used inside every namespace. A type and a message cannot share a name.
 
-Generics, recursive types, struct spread and literal types are not part of the language, and the compiler reports them as errors.
+Generics, recursive types and struct spread are not part of the language, and the compiler reports them as errors.
 
 ## Choosing how a message travels
 
