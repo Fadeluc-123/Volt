@@ -94,7 +94,12 @@ function Players.onLeave(self: Runtime, callback: Callback): () -> ()
 	return subscribe(self._leaves, callback)
 end
 
--- Calls back when a player's or bot's handshake is accepted, which is when what was held for them goes out
+--[[
+    Calls back once a player's or bot's handshake is accepted, at the end
+    of the first flush after it, which has sent what was held for them
+    and reported what it dropped; the closure returned disconnects it
+--]]
+
 function Players.onHandshake(self: Runtime, callback: Callback): () -> ()
 	return subscribe(self._handshakes, callback)
 end
