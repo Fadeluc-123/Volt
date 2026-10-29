@@ -14,6 +14,7 @@ Networking for Roblox games: one file describes every message, and a tool turns 
 - [Choosing how a message travels](#choosing-how-a-message-travels)
 - [Safety defaults](#safety-defaults)
 - [More tools](#more-tools)
+- [Colors in VS Code](#colors-in-vs-code)
 - [Options](#options)
 - [Troubleshooting](#troubleshooting)
 - [Versions](#versions)
@@ -864,6 +865,27 @@ The mock differs from the real engine in six ways, which a test that leans on it
 5. Players are plain tables, `{ Name, UserId, Kick, kicked }`, not frozen, and the same table reaches every callback, handler and listener, so a test may add fields to one.
 6. Heartbeat callbacks get no `deltaTime`.
 
+## Colors in VS Code
+
+Volt comes with a small VS Code extension that colors `.volt` files. It colors comments, strings, keywords such as `event` and `struct`, types such as `u8` and `Vector3`, the keys of an event or a function, fixed values such as `Reliable` and `SingleSync`, attributes such as `@private`, and numbers. It also marks the two mistakes `volt` finds while it reads a file character by character, a string with no closing quote and a character the language never uses, such as `$`, from that point to the end of the line; most themes show them in red. Toggle Line Comment (Ctrl+/) writes `--`, and VS Code closes brackets and quotes as you type.
+
+The extension is not in the Wally package and not on the VS Code Marketplace. It lives in Volt's repository, in the folder `.vscode/volt-syntax`, so you need a copy of the repository on your computer, for example from `git clone https://github.com/Fadeluc-123/Volt.git`. It is three small JSON files, with nothing to build.
+
+Install it once on each computer:
+
+1. Open VS Code. Any folder can be open, or none.
+2. Open the Command Palette with Ctrl+Shift+P (Cmd+Shift+P on a Mac).
+3. Type `Developer: Install Extension from Location...` and press Enter.
+4. In the folder picker, go into Volt's repository folder, then into `.vscode`, select the folder `volt-syntax` and confirm. On a Mac the picker hides folders whose name starts with a dot until you press Cmd+Shift+. (period).
+5. Open any `.volt` file. The language name at the right of the status bar, along the bottom of the window, reads `Volt`, and the file is colored.
+
+VS Code uses the folder where it lies instead of copying it, so one install colors `.volt` files in every project you open on that computer. Two things follow from that:
+
+- After the extension's files change, for example when you pull a newer Volt or edit the grammar, open the Command Palette and run `Developer: Reload Window`, and VS Code reads the new files.
+- If you move or delete Volt's folder, the colors stop. Install the extension again from the folder's new place.
+
+If a `.volt` file is colored as some other language, another extension claims `.volt` too; one for Phalcon's Volt templates uses the same file extension. Click the language name in the status bar, choose `Configure File Association for '.volt'...` and pick `Volt`.
+
 ## Options
 
 Options go at the top of a schema, one per line: `option name = value`. A path to a module is written with dots and starts with a service, such as `ReplicatedStorage.Packages.Volt`.
@@ -999,6 +1021,8 @@ selene src tests .lune place benchmark
 ```
 
 Run the compiler from source with `lune run src/Compiler <schema>`.
+
+The editor colors come from `.vscode/volt-syntax/syntaxes/volt.tmLanguage.json`. Four of its rules list words the compiler knows: `keyword` the lexer's keywords, `primitive` the rows of `src/Compiler/Config/Primitives.luau`, `roblox` the rows of `Config/Roblox.luau`, and `value` the fixed values in `Config/Options.luau`. `tests/Grammar.test.luau` fails when one of those lists and its source differ, printing both, so a word added to the compiler is added to its rule in the same change. The other rules match by shape and no test runs them, so after editing the grammar run `Developer: Reload Window` and read `tests/Schemas/Example.volt` and `tests/Schemas/Console.volt`; `Developer: Inspect Editor Tokens and Scopes` shows the scope of the text under the cursor.
 
 The smoke place in `place/` checks real remotes in Studio:
 

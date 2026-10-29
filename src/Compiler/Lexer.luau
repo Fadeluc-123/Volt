@@ -48,6 +48,7 @@ local PATTERNS: { { pattern: string, kind: string } } = {
 }
 
 local Lexer = {}
+Lexer.keywords = KEYWORDS
 
 --[[
     Finds the first pattern that matches at the cursor and returns its kind

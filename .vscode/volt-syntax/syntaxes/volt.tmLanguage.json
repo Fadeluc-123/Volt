@@ -1,0 +1,49 @@
+{
+	"name": "Volt",
+	"scopeName": "source.volt",
+	"patterns": [
+		{ "include": "#comment" },
+		{ "include": "#string" },
+		{ "include": "#unterminated" },
+		{ "include": "#attribute" },
+		{ "include": "#utf8" },
+		{ "include": "#primitive" },
+		{ "include": "#key" },
+		{ "include": "#keyword" },
+		{ "include": "#enumItem" },
+		{ "include": "#roblox" },
+		{ "include": "#boolean" },
+		{ "include": "#value" },
+		{ "include": "#name" },
+		{ "include": "#number" },
+		{ "include": "#operator" },
+		{ "include": "#unexpected" }
+	],
+	"repository": {
+		"comment": { "match": "--.*", "name": "comment.line.double-dash" },
+		"string": { "match": "\"[^\"]*\"", "name": "string.quoted.double" },
+		"unterminated": { "match": "\".*", "name": "invalid.illegal" },
+		"attribute": { "match": "@\\s*[A-Za-z_][A-Za-z0-9_]*", "name": "entity.other.attribute-name" },
+		"utf8": { "match": "string\\s*\\.\\s*utf8\\b", "name": "support.type.primitive" },
+		"primitive": {
+			"match": "(?:u8|u16|u24|u32|u48|u64|i8|i16|i24|i32|i48|i64|f16|f32|f64|q8|q16|boolean|string|buffer|unknown)\\b",
+			"name": "support.type.primitive"
+		},
+		"key": { "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*:)", "name": "variable.other.property" },
+		"keyword": { "match": "(?:option|export|type|struct|enum|namespace|event|set|function)\\b", "name": "keyword.other" },
+		"enumItem": { "match": "Enum\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*", "name": "support.class" },
+		"roblox": {
+			"match": "(?:Vector3|Vector2|CFrame|AlignedCFrame|Color3|BrickColor|DateTime|DateTimeMillis|Instance|StreamedInstance|Enum|EnumItem)\\b",
+			"name": "support.class"
+		},
+		"boolean": { "match": "(?:true|false)\\b", "name": "constant.language.boolean" },
+		"value": {
+			"match": "(?<=[:=])\\s*(?:camel|pascal|snake|unlimited|coroutine|promise|Client|Server|Both|Reliable|Unreliable|SingleSync|SingleAsync|ManySync|ManyAsync|Polling|Coroutine|Promise)\\b",
+			"name": "constant.language"
+		},
+		"name": { "match": "[A-Za-z_][A-Za-z0-9_]*" },
+		"number": { "match": "-?[0-9]+(?:\\.[0-9]+)?", "name": "constant.numeric" },
+		"operator": { "match": "\\.\\.|[|?=]", "name": "keyword.operator" },
+		"unexpected": { "match": "(?:[^ \\t\\r\\n\\f\\vA-Za-z0-9_\"{}()\\[\\]<>:,=|?.@-]|-(?![-0-9])).*", "name": "invalid.illegal" }
+	}
+}
