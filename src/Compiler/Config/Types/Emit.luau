@@ -21,6 +21,7 @@ export type Fields = {
 	_constants: { [string]: string },
 	_names: { [string]: boolean },
 	_shared: { [TypeDeclaration]: boolean },
+	_checked: { [TypeDeclaration]: boolean },
 	helpers: { [string]: boolean },
 	constants: { string },
 	functions: { string },
@@ -28,6 +29,7 @@ export type Fields = {
 
 export type Own = {
 	block: (self: Emit, node: Type | Pack, write: Block, read: Block) -> ({ string }, { string }),
+	mark: (self: Emit, node: Type | Pack) -> (),
 	shared: (self: Emit, target: TypeDeclaration) -> string,
 	call: (self: Emit, target: TypeDeclaration, write: Block, read: Block, value: string, hint: string) -> string,
 	type: (self: Emit, node: Type, write: Block, read: Block, value: string, hint: string, path: string) -> string,
@@ -54,6 +56,7 @@ export type Scalars = {
 		unit: string
 	) -> (string, number, number),
 	unknown: (self: Emit, write: Block, read: Block, value: string, hint: string, path: string) -> string,
+	literal: (self: Emit, node: Type, write: Block, value: string, path: string) -> string,
 }
 
 export type RobloxTypes = {

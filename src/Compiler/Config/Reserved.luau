@@ -68,6 +68,7 @@ local Reserved = {
 		"trimUnreliable",
 		"type",
 		"typeof",
+		"utf8",
 		"writef16",
 	} :: { string },
 

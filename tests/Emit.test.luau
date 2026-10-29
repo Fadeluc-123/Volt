@@ -1,8 +1,9 @@
 --[[
     Proves the emitter's writers: every event of every family renders to
     its golden file, reads back what was written at its bounds and at
-    random, and refuses a bad value; with validation off only the checks
-    that keep a packet whole are left, and every global called is reserved
+    random, and refuses a bad value, text that is not UTF-8 among them;
+    with validation off only the checks that keep a packet whole are
+    left, and every global called is reserved
 --]]
 
 --!strict
@@ -32,12 +33,52 @@ local Vector3 = Environment.Vector3
 
 local ROUNDS: number = 200 -- Random values written and read back per event
 local SCHEMAS: string = "tests/Schemas"
+local EXACT_BYTES: number = 4 -- What Text's exact takes, which every invalid run is padded to so each place takes it
+local FREE_CHARACTERS: number = 100 -- Four-byte characters in a long free text
+local SUN: string = utf8.char(0x65E5) -- One character of three bytes
+local BOOK: string = utf8.char(0x672C) -- Another, so the two are six bytes
+local FOUR: string = utf8.char(0x1F600) -- One character of four bytes, as long as Text's short and exact take
+local NUL: string = string.char(0)
+local HIT: { [string]: any } = { kind = "melee", damage = 0, version = 2, critical = false, ranked = true }
+
+-- A call not reached through a dot or a colon is of a global or a local, and so is the library a call is reached through
+local CALLED: { string } = { "[^%w_.:]([%a_][%w_]*)%(", "[^%w_.:]([%a_][%w_]*)%.[%a_][%w_]*%(" }
+
+-- Every place Text's writers take text: the event, the parameter, the path a refusal names and how it is carried
+local TEXTS: { { any } } = {
+	{ "Text", 1, "Text.short", "value" },
+	{ "Text", 2, "Text.exact", "value" },
+	{ "Text", 3, "Text.free", "value" },
+	{ "Notes", 1, "Notes.tags[key]", "key" },
+	{ "Notes", 2, "Note.title", "title" },
+	{ "Notes", 3, "Note.body", "body" },
+}
 
 local valueOf = Values.valueOf
 local near = Values.near
 local least = Families.least
 local fire = Families.fire
 local failure = Families.failure
+
+-- A Hit with one field changed
+local function hit(key: string, value: any): { [string]: any }
+	local changed: { [string]: any } = table.clone(HIT)
+	changed[key] = value
+	return changed
+end
+
+-- A text as a row of TEXTS carries it: as the value, as a map's one key, or as one field of a note whose other is valid
+local function placed(how: string, text: string): any
+	if how == "value" then
+		return text
+	elseif how == "key" then
+		return { [text] = 1 }
+	end
+
+	local note: { [string]: string } = { title = "a", body = "" }
+	note[how] = text
+	return note
+end
 
 -- Every writer refusal per schema: the event, the parameter, the bad value and the message
 local REFUSALS: { [string]: { { any } } } = {
@@ -117,6 +158,18 @@ local REFUSALS: { [string]: { { any } } } = {
 		{ "Tables", 1, "x", "Tables.a: expected table" },
 		{ "Tables", 4, { [1] = true }, "Tables.d: expected 3 entries" },
 	},
+
+	Text = {
+		{ "Text", 1, `{SUN}{BOOK}`, "Text.short: length out of range" },
+	},
+
+	Literals = {
+		{ "Hits", 1, hit("kind", "ranged"), `Hit.kind: expected "melee"` },
+		{ "Hits", 2, hit("version", 3), "Hit.version: expected 2" },
+		{ "Hits", 2, hit("ranked", false), "Hit.ranked: expected true" },
+		{ "Choices", 1, "ranged", `Choices.tag: expected "melee"` },
+		{ "Choices", 2, "other", `Choices.reason: expected "none"` },
+	},
 }
 
 describe("Emit", function ()
@@ -191,6 +244,40 @@ describe("Emit", function ()
 		end)
 	end)
 
+	describe("text", function ()
+		local module: any, packet: () -> (buffer, { any }) = Generated.load("Text", Families.texts.Text)
+
+		test("round-trips empty, at its exact and its longest length, as four-byte characters and with NUL", function ()
+			-- Short, exact and free: three bytes in one character first, then each at its longest, then NUL
+			local rows: { { string } } = {
+				{ SUN, FOUR, "" },
+				{ FOUR, string.rep(NUL, EXACT_BYTES), string.rep(FOUR, FREE_CHARACTERS) },
+				{ NUL, `a{NUL}b{NUL}`, NUL },
+			}
+
+			for _, written: { string } in rows do
+				module.Text.write(table.unpack(written))
+
+				local bytes: buffer, side: { any } = packet()
+				local read: { any } = { module.Text.read(bytes, 0, side, 1, buffer.len(bytes)) }
+
+				expect(`{read[3]}|{read[4]}|{read[5]}`).is(table.concat(written, "|"))
+			end
+		end)
+
+		for _, row: { any } in TEXTS do
+			test(`{row[3]} refuses each way text is not UTF-8`, function ()
+				for _, run: string in Families.invalid do
+					local written: { any } = least("Text", row[1])
+					written[row[2]] = placed(row[4], `{string.rep("a", EXACT_BYTES - #run)}{run}`)
+
+					local ok: boolean, message: any = fire(module, "Text", row[1], written)
+					failure(ok, message, `{row[3]}: invalid UTF-8`)
+				end
+			end)
+		end
+	end)
+
 	describe("with write validation off", function ()
 		local loose: { [string]: any } = {}
 		local checks: { [string]: number } = {}
@@ -256,30 +343,31 @@ describe("Emit", function ()
 
 	test("reserves every global a generated function calls, so no field or parameter local shadows one", function ()
 		local reserved: { [string]: boolean } = {}
-		local texts: { string } = {}
+		local texts: { { schema: string, text: string } } = {}
 		local unreserved: { string } = {}
+		local utf8In: { [string]: boolean } = {} -- The schemas whose modules call the utf8 library
 
 		for _, name: string in Reserved.generated do
 			reserved[name] = true
 		end
 
 		for _, schema: string in Families.schemas do
-			table.insert(texts, Families.texts[schema])
+			table.insert(texts, { schema = schema, text = Families.texts[schema] })
 		end
 
 		for _, name: string in fs.readDir(SCHEMAS) do
 			local schema: string? = name:match("^(.+)%.volt$")
 			if schema then
 				local client: string, server: string = Generated.modules(schema, fs.readFile(`{SCHEMAS}/{name}`))
-				table.insert(texts, client)
-				table.insert(texts, server)
+				table.insert(texts, { schema = schema, text = client })
+				table.insert(texts, { schema = schema, text = server })
 			end
 		end
 
-		for _, text: string in texts do
+		for _, entry in texts do
 			-- Comments and strings call nothing, and a name the text declares is its own
 			local code: string =
-				text:gsub("%-%-%[%[.-%]%]", ""):gsub("%-%-[^\n]*", ""):gsub("\\.", ""):gsub('"[^"]*"', "")
+				entry.text:gsub("%-%-%[%[.-%]%]", ""):gsub("%-%-[^\n]*", ""):gsub("\\.", ""):gsub('"[^"]*"', "")
 			local declared: { [string]: boolean } = {}
 
 			for name: string in code:gmatch("local ([%a_][%w_]*)") do
@@ -289,14 +377,18 @@ describe("Emit", function ()
 				declared[name] = true
 			end
 
-			-- A call not reached through a dot or a colon is a call of a global or of a local
-			for name: string in (`\n{code}`):gmatch("[^%w_.:]([%a_][%w_]*)%(") do
-				if not declared[name] and not reserved[name] and not table.find(unreserved, name) then
-					table.insert(unreserved, name)
+			for _, pattern: string in CALLED do
+				for name: string in (`\n{code}`):gmatch(pattern) do
+					utf8In[entry.schema] = utf8In[entry.schema] or name == "utf8"
+
+					if not declared[name] and not reserved[name] and not table.find(unreserved, name) then
+						table.insert(unreserved, name)
+					end
 				end
 			end
 		end
 
 		expect(table.concat(unreserved, ", ")).is("")
+		expect(reserved.utf8 and utf8In.Text and utf8In.Console).is(true)
 	end)
 end)

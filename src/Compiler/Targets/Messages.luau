@@ -19,6 +19,7 @@ local Types = require("./Types")
 local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
+type Declaration = Schema.Declaration
 type Event = Schema.Event
 type Exchanged = TargetsTypes.Exchanged
 type Field = Schema.Field
@@ -111,6 +112,23 @@ function Messages.sends(write: Block, reliable: boolean, fixed: number, data: (T
 	end
 
 	return `trim{suffix}({write:hold(fixed + most)})`
+end
+
+--[[
+    Marks every named type a function's return reaches, before any message
+    is walked, so a return is checked whichever message walks the pair of
+    a type it holds first, an event's included
+--]]
+
+function Messages.mark(self: Targets, declarations: { Declaration })
+	for _, declaration: Declaration in declarations do
+		if declaration.kind == "namespace" then
+			self:mark(declaration.declarations)
+		elseif declaration.kind == "function" and declaration["return"] then
+			-- Whiteoak TODO: unchecked, a marked pair checks its other uses too; a second, unchecked pair for them
+			self._emitter:mark(declaration["return"] :: Type | Pack)
+		end
+	end
 end
 
 -- The fields a pack of data carries: a pack's parameters, or the one value
@@ -257,7 +275,6 @@ function Messages.exchange(self: Targets, declaration: Function): Exchanged
 	replyRead:open("if status == 0 then")
 
 	-- The returns are checked on every build, since a return the type cannot carry is the server's own bug
-	-- Whiteoak TODO: a shared type first walked here keeps its checks elsewhere in a module with validation off
 	local validated: boolean = self._emitter:validating(true)
 
 	if returns then

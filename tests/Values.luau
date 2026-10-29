@@ -36,6 +36,10 @@ local CREATABLE: { [string]: string } = { BasePart = "Part" } -- A class Instanc
 local ITEM_ENUMS: { any } = { Enum.Material, Enum.KeyCode } -- Where an untyped enum item comes from
 local COMPONENT: Type = { kind = "primitive", name = Wire.component, start = 0, finish = 0 } -- A vector's default numeric type
 
+-- The least and most code point of a UTF-8 character of each width in bytes
+local CODE_POINTS: { { number } } = { { 0, 0x7F }, { 0x80, 0x7FF }, { 0x800, 0xFFFF }, { 0x10000, 0x10FFFF } }
+local SURROGATES: { number } = { 0xD800, 0xDFFF } -- The code points UTF-8 never encodes
+
 local Values = {}
 
 local near: (Type, any, any) -> boolean
@@ -56,6 +60,24 @@ local function randomBytes(count: number): string
 		bytes[index] = string.char(math.random(0, 255))
 	end
 	return table.concat(bytes)
+end
+
+-- Valid UTF-8 of exactly a count of bytes, its characters of every width at random
+local function randomText(count: number): string
+	local characters: { string } = {}
+	local left: number = count
+
+	while left > 0 do
+		local width: number = math.random(1, math.min(left, #CODE_POINTS))
+		local point: number = math.random(CODE_POINTS[width][1], CODE_POINTS[width][2])
+
+		if point < SURROGATES[1] or point > SURROGATES[2] then
+			table.insert(characters, utf8.char(point))
+			left -= width
+		end
+	end
+
+	return table.concat(characters)
 end
 
 -- The first, the last or any entry of a list
@@ -95,7 +117,9 @@ local function primitiveOf(shape: any, ends: string?): any
 
 		return ends == "max" and { 1 } or pick({ nil, 5, "text", {} }, nil)
 	elseif name == "string" or name == "buffer" then
-		local text: string = randomBytes(lengthOf(shape.range, ends))
+		local count: number = lengthOf(shape.range, ends)
+		local text: string = shape.utf8 and randomText(count) or randomBytes(count)
+
 		return name == "buffer" and buffer.fromstring(text) or text
 	end
 
@@ -170,6 +194,8 @@ function valueOf(node: Type, ends: string?): any
 
 	if kind == "primitive" then
 		return primitiveOf(shape, ends)
+	elseif kind == "literal" then
+		return shape.value
 	elseif kind == "roblox" then
 		return robloxOf(shape, ends)
 	elseif kind == "struct" then
@@ -280,6 +306,8 @@ function near(node: Type, expected: any, actual: any): boolean
 
 	if kind == "roblox" then
 		return robloxNear(shape, expected, actual)
+	elseif kind == "literal" then
+		return expected == shape.value and actual == shape.value
 	elseif kind == "struct" then
 		for _, field: Field in shape.fields do
 			if not near(field.type, expected[field.name], actual[field.name]) then

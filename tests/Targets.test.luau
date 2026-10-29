@@ -1,9 +1,10 @@
 --[[
-    Proves the assembled modules: each side of Events, Broadcasts and Shared
-    renders as its golden file, both sides carry the runtime's version, and
-    over the mock the API carries every call mode and fire variant, a
-    two-way event, an instance and batched unreliable fires; casing renames
-    the members
+    Proves the assembled modules: each side of Events, Broadcasts, Shared
+    and Console renders as its golden file, both sides carry the runtime's
+    version, a private type is declared and not exported, and over the
+    mock the API carries every call mode and fire variant, a two-way
+    event, an instance and batched unreliable fires; casing renames the
+    members
 --]]
 
 --!strict
@@ -38,8 +39,9 @@ type Modules = { schema: string, client: string, server: string, types: string }
 
 local Instance = Environment.Instance
 
--- The client-fired forms and the two-way event, the server-fired forms, then shared types each carried one way
-local SCHEMAS: { string } = { "Events", "Broadcasts", "Shared" }
+-- The client-fired forms and the two-way event, the server-fired forms, shared types each carried one way, then
+-- Decree's contract with its private type
+local SCHEMAS: { string } = { "Events", "Broadcasts", "Shared", "Console" }
 
 local SIDES: { string } = { "Client", "Server", "Types" }
 local SPRAYS: number = 400 -- Unreliable fires of three bytes in one frame, more than one packet of the budget holds
@@ -105,6 +107,20 @@ describe("Targets", function ()
 		expect(MODULES.Events.server:find(`version = "{Volt.version}"`, 1, true) ~= nil).is(true)
 		expect(harness.server.version).is(Volt.version)
 		expect(harness.clients.alice.version).is(Volt.version)
+	end)
+
+	test("declares a private type in every module without exporting it, and keeps its pair's halves", function ()
+		local modules: Modules = MODULES.Console
+		local reader: string = "\nlocal function readDecree_Line%([^\n]*%): %(number, number, Decree_Line%)\n"
+
+		for _, text: string in { modules.server, modules.client, modules.types } do
+			expect(text:find("\nexport type Decree_Kind = ", 1, true) ~= nil).is(true)
+			expect(text:find("\ntype Decree_Line = string\n", 1, true) ~= nil).is(true)
+			expect(text:find("export type Decree_Line", 1, true) == nil).is(true)
+		end
+
+		expect(modules.server:find("\nlocal function writeDecree_Line(", 1, true) ~= nil).is(true)
+		expect(modules.client:match(reader) ~= nil).is(true)
 	end)
 
 	test("holds a client's reliable messages to maxPacket with the handshake the runtime writes", function ()

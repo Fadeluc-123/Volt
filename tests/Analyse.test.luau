@@ -48,6 +48,8 @@ local SIZES: { { any } } = {
 	{ "string(0..64)", 1, 65, 0, 0 },
 	{ "string(1..64)", 2, 65, 0, 0 },
 	{ "string(0..256)", 2, 258, 0, 0 },
+	{ "string.utf8(1..4096)", 3, 4098, 0, 0 },
+	{ "string.utf8(8)", 8, 8, 0, 0 },
 	{ "buffer(16)", 16, 16, 0, 0 },
 	{ "Vector3", 12, 12, 0, 0 },
 	{ "Vector3<q16(-1024..1024)>", 6, 6, 0, 0 },
@@ -87,6 +89,13 @@ local SIZES: { { any } } = {
 	{ "u8 | string", 1, 65537, 1, 0 },
 	{ "Vector3 | Stack", 5, 36, 1, 1 },
 	{ "Team | enum { Green }", 0, 0, 2, 0 },
+	{ `"melee"`, 0, 0, 0, 0 },
+	{ "2", 0, 0, 0, 0 },
+	{ "-0.5", 0, 0, 0, 0 },
+	{ "true", 0, 0, 0, 0 },
+	{ "false", 0, 0, 0, 0 },
+	{ `"melee"?`, 0, 0, 1, 0 },
+	{ `u8 | "none"`, 0, 1, 1, 0 },
 }
 
 -- A discriminant with more variants than a byte holds is two raw bytes
@@ -238,6 +247,21 @@ describe("Analyse", function ()
 			expect(report(text)).is(`{first}\n\n{second}\n\n{third}\n\n{fourth}\n\n{fifth}\n\n{sixth}\n\n{seventh}`)
 		end)
 
+		test("a literal is a union member of its Luau class, and no map key or Roblox type's argument", function ()
+			local text: string = schema(
+				`type A = "on" | "off"\ntype B = true | false\ntype C = \{ ["none"]: u8 }\ntype D = Vector3<2>\ntype E = u8 | "none"`
+			)
+			local key: string = `error V3008: a map key must be a primitive, string, enum or Roblox type, got "none"`
+			local expected: { string } = {
+				rendered(text, `"off"`, `error V3009: union members "on" and "off" are both strings at runtime`),
+				rendered(text, "false", "error V3009: union members true and false are both booleans at runtime"),
+				rendered(text, `"none"`, key),
+				rendered(text, "2", "error V3007: Vector3's type argument must be a numeric primitive, got 2"),
+			}
+
+			expect(report(text)).is(table.concat(expected, "\n\n"))
+		end)
+
 		test("V3010 refuses an unreliable event whose largest message, id included, is over the budget", function ()
 			local text: string = schema(
 				"option unreliableBudget = 4\nnamespace N { event Big { from: Client, type: Unreliable, call: Polling, data: (a: u8, b: u16, c: u8) } }\nevent Fits { from: Client, type: Unreliable, call: Polling, data: (a: u8, b: u16) }"
@@ -321,6 +345,31 @@ describe("Analyse", function ()
 			expect(select(3, compile(commented))).is(hash)
 			expect(select(3, compile(edited))).never_is(hash)
 		end)
+
+		test("changes when a type is marked @private", function ()
+			local plain: number = select(3, compile(schema("type Cursor = u16")))
+			local marked: number = select(3, compile(schema("@private type Cursor = u16")))
+
+			expect(marked).never_is(plain)
+		end)
+	end)
+
+	test("prints attributes, a string.utf8 and each literal as the schema spells them", function ()
+		local text: string = schema(
+			`@private type Cursor = u16(0..4096)\ntype Name = string.utf8(0..64)\nstruct Hit \{ kind: "melee", version: 2, scale: -0.5, ranked: true, critical: false }`
+		)
+		local file: Schema.File, diagnostics = compile(text)
+		local printed: string = Print.file(file)
+		local lines: { string } = {
+			"\n@private type Cursor = u16(0..4096) -- 2 bytes, 0 references\n",
+			"\ntype Name = string.utf8(0..64) -- 1..65 bytes, 0 references\n",
+			`\ntype Hit = struct \{ kind: "melee", version: 2, scale: -0.5, ranked: true, critical: false } -- 0 bytes, 0 references`,
+		}
+
+		expect(diagnostics:render()).is("")
+		for _, line: string in lines do
+			expect(printed:find(line, 1, true) ~= nil).is(true)
+		end
 	end)
 
 	test("prints the canonical form with resolved paths, ids and sizes, namespaces indented", function ()

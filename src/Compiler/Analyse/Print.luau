@@ -1,18 +1,21 @@
 --[[
     Prints a resolved file in its canonical form, which --ast shows and
     the schema hash is taken over: the options in their fixed order, then
-    every declaration on one line with references spelled as full paths,
-    record keys in shape order, a namespace's declarations indented under
-    it, and each declaration annotated with what analysis found
+    every declaration on one line, its attributes first, with references
+    spelled as full paths, record keys in shape order, a namespace's
+    declarations indented under it, and each annotated with what analysis
+    found
 --]]
 
 --!strict
 local Print = {}
 
+local Attributes = require("../Config/Attributes")
 local Options = require("../Config/Options")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("./Sizes")
 
+type Attribute = Attributes.Attribute
 type Declaration = Schema.Declaration
 type Field = Schema.Field
 type File = Schema.File
@@ -47,7 +50,9 @@ end
 
 function Print.type(node: Type): string
 	if node.kind == "primitive" then
-		return `{node.name}{printRange(node.range, "(", ")")}`
+		return `{node.name}{node.utf8 and ".utf8" or ""}{printRange(node.range, "(", ")")}`
+	elseif node.kind == "literal" then
+		return typeof(node.value) == "string" and `"{node.value}"` or tostring(node.value)
 	elseif node.kind == "roblox" then
 		local generics: { string } = {}
 		for _, generic: Type in (node.generics or {}) :: { Type } do
@@ -169,7 +174,16 @@ end
 
 local function printDeclaration(node: Declaration, indent: string): string
 	if node.kind == "type" then
-		return `{indent}{node.export and "export " or ""}type {node.name} = {Print.type(node.type)}{annotate(node)}`
+		-- Attributes print in the rows' order, so their order in the source never changes the hash
+		local attributes: { string } = {}
+		for _, row: Attribute in Attributes do
+			if node.attributes and node.attributes[row.name] then
+				table.insert(attributes, `@{row.name} `)
+			end
+		end
+
+		local named: string = `{table.concat(attributes)}{node.export and "export " or ""}type {node.name}`
+		return `{indent}{named} = {Print.type(node.type)}{annotate(node)}`
 	elseif node.kind == "namespace" then
 		local inner: { string } = {}
 		for _, declaration: Declaration in node.declarations do

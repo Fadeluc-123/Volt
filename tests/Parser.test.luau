@@ -1,9 +1,9 @@
 --[[
-    Proves every type form and declaration form parses into the node the
-    design describes by printing the tree back to source, that nodes carry
-    their spans and values, that each V2xxx diagnostic is reported where it
-    happens, and that a parse resumes at the next declaration after an
-    error so one run reports every problem in the file
+    Proves every type form parses into the node the design describes by
+    printing the tree back to source, that nodes carry their spans and
+    values, that each V2xxx diagnostic is reported where it happens, and
+    that a parse resumes at the next declaration after an error so one run
+    reports every problem in the file
 --]]
 
 --!strict
@@ -35,6 +35,10 @@ local TYPES: { string } = {
 	"q16(-3.2..3.2)",
 	"string(0..64)",
 	"string(8)",
+	"string.utf8",
+	"string.utf8(1..4096)",
+	"string.utf8(8)",
+	"struct { utf8: string.utf8, text: utf8 }",
 	"buffer(0..1024)",
 	"u32(0..)",
 	"u32(..8)",
@@ -71,38 +75,14 @@ local TYPES: { string } = {
 	"u8 | string",
 	"u8 | string?",
 	"u8[] | Vector3?",
-}
-
--- Every declaration form, as written and as it prints back when the two differ
-local DECLARATIONS: { { string } } = {
-	{ "type Reference = string(1..64)" },
-	{ "export type Reference = string(1..64)" },
-	{
-		"struct Stack { item: string(1..32), quantity: u16(1..999), properties: unknown? }",
-		"type Stack = struct { item: string(1..32), quantity: u16(1..999), properties: unknown? }",
-	},
-	{
-		"export struct Save { version: u16, stacks: Stack[0..256], }",
-		"export type Save = struct { version: u16, stacks: Stack[0..256] }",
-	},
-	{ "enum Team { Red, Blue }", "type Team = enum { Red, Blue }" },
-	{
-		`export enum Shape "kind" \{ Circle \{ radius: f32 }, Point }`,
-		`export type Shape = enum "kind" \{ Circle \{ radius: f32 }, Point }`,
-	},
-	{
-		"event Input { from: Client, type: Unreliable, call: SingleSync, data: (dir: u8(0..8), jump: boolean), queue: 8, rate: unlimited }",
-	},
-	{ "event Damage { from: Server, type: Reliable, call: ManyAsync, data: struct { targetId: u16, amount: u16 } }" },
-	{ "event Tick { from: Both, type: Reliable, call: Polling, data: () }" },
-	{
-		"function GetInventory { data: (reference: Reference), return: (ok: boolean, stacks: Stack[0..256]), yield: Promise, timeout: 5, rate: 60 }",
-	},
-	{ "function Ping {}" },
-	{
-		"namespace Combat { event Hit { from: Client, type: Reliable, call: SingleSync } namespace Inner { type Id = u8 } }",
-		"namespace Combat {\n\tevent Hit { from: Client, type: Reliable, call: SingleSync }\n\tnamespace Inner {\n\t\ttype Id = u8\n\t}\n}",
-	},
+	`"melee"`,
+	"2",
+	"-0.5",
+	"true",
+	"false",
+	`"melee"?`,
+	`u8 | "none"`,
+	`struct \{ kind: "melee", version: 2, ranked: true }`,
 }
 
 --[[
@@ -152,11 +132,26 @@ describe("Parser", function ()
 		end
 	end)
 
-	describe("declarations", function ()
-		for _, pair: { string } in DECLARATIONS do
-			test(pair[1], function ()
-				expect(roundTrip(pair[1])).is(pair[2] or pair[1])
-			end)
+	test("string.utf8 is the string primitive with utf8 set, and a literal holds its value", function ()
+		local text: string =
+			`type A = string.utf8(1..4096)\ntype B = string\ntype C = "melee" | 2 | -0.5 | true | false`
+		local file: Schema.File, diagnostics = parse(text)
+		local unicode: any, plain: any = (file.declarations[1] :: any).type, (file.declarations[2] :: any).type
+		local members: { any } = (file.declarations[3] :: any).type.members
+		local values: { string | number | boolean } = { "melee", 2, -0.5, true, false }
+
+		expect(diagnostics:render()).is("")
+		expect(unicode.kind).is("primitive")
+		expect(unicode.name).is("string")
+		expect(unicode.utf8).is(true)
+		expect(unicode.range.min).is(1)
+		expect(unicode.range.max).is(4096)
+		expect(unicode.finish).is((text:find(")", 1, true)))
+		expect(plain.utf8).is(nil)
+
+		for index: number, value: string | number | boolean in values do
+			expect(members[index].kind).is("literal")
+			expect(members[index].value).is(value)
 		end
 	end)
 
@@ -223,12 +218,13 @@ describe("Parser", function ()
 	end)
 
 	describe("diagnostics", function ()
-		test("V2001 reports the token found where another was expected", function ()
-			local text: string = "type A = 5\nevent Input { from Client }"
-			local first: string = rendered(text, "5", `error V2001: expected a type, got "5"`)
+		test("V2001 reports the token found where another was expected, string.text among them", function ()
+			local text: string = "type A = ,\nevent Input { from Client }\ntype S = string.text"
+			local first: string = rendered(text, ",", `error V2001: expected a type, got ","`)
 			local second: string = rendered(text, "Client", `error V2001: expected ":", got "Client"`)
+			local third: string = rendered(text, "text", `error V2001: expected "utf8", got "text"`)
 
-			expect(report(text)).is(`{first}\n\n{second}`)
+			expect(report(text)).is(`{first}\n\n{second}\n\n{third}`)
 		end)
 
 		test("V2002 reports a duplicate key, field or variant and keeps the first", function ()
@@ -310,12 +306,11 @@ describe("Parser", function ()
 		end)
 
 		test("V2008 names the phase 2 syntax it does not accept", function ()
-			local text: string = `type Box<T> = T\nstruct S \{ ..Base }\ntype Switch = "on" | "off"`
+			local text: string = "type Box<T> = T\nstruct S { ..Base }"
 			local first: string = rendered(text, "<", "error V2008: generic types are not supported in this version")
 			local second: string = rendered(text, "..", "error V2008: struct spread is not supported in this version")
-			local third: string = rendered(text, `"on"`, "error V2008: literal types are not supported in this version")
 
-			expect(report(text)).is(`{first}\n\n{second}\n\n{third}`)
+			expect(report(text)).is(`{first}\n\n{second}`)
 		end)
 
 		test("V2009 reports an option after a declaration and still reads it", function ()

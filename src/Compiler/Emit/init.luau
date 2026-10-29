@@ -17,6 +17,7 @@ local Collections = require("./Emit/Collections")
 local Composites = require("./Emit/Composites")
 local Contract = require("./Config/Contract")
 local Expressions = require("./Emit/Expressions")
+local Parser = require("./Parser")
 local Primitives = require("./Config/Primitives")
 local Roblox = require("./Emit/Roblox")
 local Scalars = require("./Emit/Scalars")
@@ -41,6 +42,7 @@ function Emit.new(options: Options): Self
 		_constants = {} :: { [string]: string }, -- Constant names by what they hold, so one table serves every use
 		_names = {} :: { [string]: boolean }, -- Every constant name taken
 		_shared = {} :: { [TypeDeclaration]: boolean }, -- The named types whose pair is emitted
+		_checked = {} :: { [TypeDeclaration]: boolean }, -- The named types whose pair checks whatever the option says
 		helpers = {} :: { [string]: boolean }, -- The helpers the walked types needed
 		constants = {} :: { string }, -- The module-level tables the walked types need, in first-use order
 		functions = {} :: { string }, -- The function pairs of shared named types, each after the pairs it calls
@@ -99,9 +101,31 @@ function Emit.block(self: Self, node: Type | Pack, write: Block, read: Block): (
 end
 
 --[[
+    Marks every named type a type reaches through its references, so the
+    pair each becomes checks its values whatever the option says,
+    whichever message walks it first
+--]]
+
+function Emit.mark(self: Self, node: Type | Pack)
+	if node.kind ~= "reference" then
+		for _, child: Type in Parser.children(node) do
+			self:mark(child)
+		end
+		return
+	end
+
+	local target: TypeDeclaration = node.target :: TypeDeclaration
+	if not self._checked[target] then
+		self._checked[target] = true
+		self:mark(target.type)
+	end
+end
+
+--[[
     The function pair a shared named type is called through, emitted once
     and in dependency order, since walking a type emits the pairs of the
-    shared types it references first. Returns the name the pair carries
+    shared types it references first. A marked type's writer checks its
+    values in every build. Returns the name the pair carries
 --]]
 
 function Emit.shared(self: Self, target: TypeDeclaration): string
@@ -115,10 +139,12 @@ function Emit.shared(self: Self, target: TypeDeclaration): string
 	self._shared[target] = true
 
 	local known: boolean = self._known
+	local validated: boolean = self._validate
 	local write: Block = Blocks.new("write", path)
 	local read: Block = Blocks.new("read", path)
 
 	self._known = false
+	self._validate = validated or self._checked[target] == true
 
 	local names: { string }, values: { string } = self:block(target.type, write, read)
 	local writeBody: string = write:done()
@@ -127,6 +153,7 @@ function Emit.shared(self: Self, target: TypeDeclaration): string
 
 	table.insert(taken, { name = names[1], type = "any" })
 	self._known = known
+	self._validate = validated
 
 	table.insert(self.functions, `local function write{name}({Emit.parameters(writeBody, taken)})\n{writeBody}end\n`)
 	-- The reader returns the type the module exports under the pair's name, or a checker widens what it built
@@ -175,6 +202,11 @@ function Emit.type(self: Self, node: Type, write: Block, read: Block, value: str
 		end
 
 		return self:type(target.type, write, read, value, hint, path)
+	end
+
+	-- A literal reads its value once, in its one comparison, so it never takes the local the rule below gives
+	if node.kind == "literal" then
+		return self:literal(node, write, value, path)
 	end
 
 	-- A value reached through a field or an index is read into a local first, so the checks and the write after

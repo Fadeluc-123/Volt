@@ -1,8 +1,9 @@
 --[[
     Proves the emitter's readers refuse what a packet must not carry: a
     byte out of range, a block, payload or run past the packet's end, a
-    64-bit integer a number cannot hold, an empty or wrong-class slot and
-    a key that appears twice, each with the field's name
+    64-bit integer a number cannot hold, an empty or wrong-class slot, a
+    key that appears twice and text that is not UTF-8, each with the
+    field's name
 --]]
 
 --!strict
@@ -13,8 +14,13 @@ local Generated = require("./Generated")
 
 local describe = Suite.describe
 local test = Suite.test
+local expect = Suite.expect
 
 local Instance = Environment.Instance
+
+local TEXT_BYTES: number = 4 -- What Text's exact takes and its short at its longest, which a run is padded to
+local EXACT_AT: number = 1 -- Where Text's exact sits in its packet, after the short's prefix
+local SHORT_AT: number = 7 -- And where the short's bytes do, after the fixed bytes
 
 local least = Families.least
 local fire = Families.fire
@@ -128,6 +134,28 @@ describe("Emit", function ()
 			local bytes: buffer, side: { any } = packetOf("Tables", "Tables", written)
 			buffer.writeu8(bytes, 5, buffer.readu8(bytes, 3))
 			refused("Tables", "Tables", bytes, side, buffer.len(bytes), "Tables.a: duplicate key")
+		end)
+
+		test("text that is not UTF-8, among the fixed bytes or after them, and reads a NUL back", function ()
+			local written: { any } = least("Text", "Text")
+			local nuls: string = string.rep(string.char(0), TEXT_BYTES)
+
+			written[1] = string.rep("a", TEXT_BYTES)
+
+			for _, run: string in Families.invalid do
+				for _, place: { any } in { { EXACT_AT, "Text.exact" }, { SHORT_AT, "Text.short" } } do
+					local bytes: buffer, side: { any } = packetOf("Text", "Text", written)
+
+					buffer.writestring(bytes, place[1], `{string.rep("a", TEXT_BYTES - #run)}{run}`)
+					refused("Text", "Text", bytes, side, buffer.len(bytes), `{place[2]}: invalid UTF-8`)
+				end
+			end
+
+			local bytes: buffer, side: { any } = packetOf("Text", "Text", written)
+			buffer.writestring(bytes, EXACT_AT, nuls)
+
+			local read: { any } = { modules.Text.Text.read(bytes, 0, side, 1, buffer.len(bytes)) }
+			expect(read[4]).is(nuls)
 		end)
 	end)
 end)

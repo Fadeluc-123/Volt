@@ -21,14 +21,30 @@ type Block = Blocks.Block
 type Emit = EmitTypes.Emit
 type Field = Schema.Field
 type Type = Schema.Type
+type TypeDeclaration = Schema.TypeDeclaration
 type Variant = Schema.Variant
 
 local group = Expressions.group
 local refuse = Expressions.refuse
 
 --[[
+    Whether a type reads back as its value in place, which only a literal
+    does, rather than through a local typed as it is; a shared named type
+    reads back through its pair whatever it holds
+--]]
+
+local function inPlace(node: Type): boolean
+	if node.kind == "reference" then
+		local target: TypeDeclaration = node.target :: TypeDeclaration
+		return not Sizes.shared(target) and inPlace(target.type)
+	end
+	return node.kind == "literal"
+end
+
+--[[
     A struct: its fields in order, each read into a local, then one
-    table constructor after every field's bytes
+    table constructor after every field's bytes, typed as the struct
+    when a field reads back as a literal, which an untyped table widens
 --]]
 
 function Composites.struct(
@@ -42,12 +58,15 @@ function Composites.struct(
 ): string
 	local result: string = read:name(hint)
 	local parts: { string } = {}
+	local typed: boolean = false
 
 	self:shape(write, value, "table", path)
 	self._known = false
 
 	for _, field: Field in (node :: any).fields :: { Field } do
 		local place: string = `{value}.{field.name}`
+
+		typed = typed or inPlace(field.type)
 		table.insert(
 			parts,
 			`{field.name} = {self:type(field.type, write, read, place, field.name, `{path}.{field.name}`)}`
@@ -55,7 +74,9 @@ function Composites.struct(
 	end
 
 	local body: string = #parts == 0 and "" or ` {table.concat(parts, ", ")} `
-	read:tail(`local {result} = \{{body}}`)
+	local annotation: string = typed and `: {Types.annotation(node)}` or ""
+
+	read:tail(`local {result}{annotation} = \{{body}}`)
 
 	return result
 end
@@ -84,17 +105,24 @@ function Composites.optional(
 	local word: string, bit: number = write:flag()
 	local mask: number = 2 ^ bit
 	local result: string = read:name(hint)
+	local writes: boolean = self._validate or not inPlace(inner) -- A literal nothing checks writes nothing at all
 
 	read:flag()
 	write:line(`{word} += {value} ~= nil and {mask} or 0`)
 	read:line(`local {result}: {Types.annotation(node)}`)
 
-	write:open(`if {value} ~= nil then`)
+	if writes then
+		write:open(`if {value} ~= nil then`)
+	end
+
 	read:open(`if bit32.btest({word}, {mask}) then`)
 
 	self:nested(inner, write:child(path), read:child(path), value, hint, path, result)
 
-	write:close("end")
+	if writes then
+		write:close("end")
+	end
+
 	read:close("end")
 
 	return result
@@ -327,12 +355,22 @@ function Composites.union(
 	read:line(`local {which}: number = {fetch}`)
 	read:line(`local {result}: {Types.annotation(node)}`)
 
+	local written: number = 0 -- Members with nothing to write, a literal nothing checks, take no branch on the write side
+
 	for position: number, member: Type in members do
+		if self._validate or not inPlace(member) then
+			written += 1
+
+			if written == 1 then
+				write:open(`if {index} == {position - 1} then`)
+			else
+				write:tail(`elseif {index} == {position - 1} then`)
+			end
+		end
+
 		if position == 1 then
-			write:open(`if {index} == 0 then`)
 			read:open(`if {which} == 0 then`)
 		else
-			write:tail(`elseif {index} == {position - 1} then`)
 			read:tail(`elseif {which} == {position - 1} then`)
 		end
 
@@ -346,7 +384,10 @@ function Composites.union(
 
 	self._known = known
 
-	write:close("end")
+	if written > 0 then
+		write:close("end")
+	end
+
 	read:close(`else\n\terror("{path}: out of range")\nend`)
 
 	return result

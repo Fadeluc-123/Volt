@@ -1,9 +1,9 @@
 --[[
     The type forms, merged onto the parser class: a union of postfix
     types with an optional mark outside it, where an atom is a primitive
-    with its bounds, an inline struct or enum, a set, a map, a Roblox type
-    with what follows its name, or a reference to a named type; and the
-    field lists, parameter packs and ranges those forms carry
+    with its bounds, an inline struct or enum, a set, a map, a literal, a
+    Roblox type with what follows its name, or a reference to a named type;
+    and the field lists, parameter packs and ranges those forms carry
 --]]
 
 --!strict
@@ -83,8 +83,8 @@ end
 
 --[[
     The type forms that start with a distinct token: a primitive with its
-    bounds, an inline struct or enum, a set, a map, a Roblox type or a
-    reference to a named type
+    bounds, an inline struct or enum, a set, a map, a literal, a Roblox
+    type or a reference to a named type
 --]]
 
 function TypeForms.atom(self: Parser): Type
@@ -92,13 +92,33 @@ function TypeForms.atom(self: Parser): Type
 
 	if token.kind == "primitive" then
 		self:consume()
+
+		-- A string takes .utf8 only straight after it, so a utf8 anywhere else is a plain name
+		local text: boolean = token.value == "string" and self:at(".")
+		if text then
+			self:consume()
+			self:expect("name", "utf8")
+		end
+
 		return {
 			kind = "primitive",
 			name = token.value,
+			utf8 = text or nil,
 			range = self:bounds(),
 			start = token.start,
 			finish = self:previous().finish,
 		}
+	elseif token.kind == "string" or token.kind == "number" or self:at("true") or self:at("false") then
+		self:consume()
+
+		local value: string | number | boolean = token.value
+		if token.kind == "number" then
+			value = tonumber(token.value) :: number
+		elseif token.kind == "name" then
+			value = token.value == "true"
+		end
+
+		return { kind = "literal", value = value, start = token.start, finish = token.finish }
 	elseif self:at("struct") then
 		self:consume()
 		return self:struct(token.start)
@@ -138,8 +158,6 @@ function TypeForms.atom(self: Parser): Type
 			start = token.start,
 			finish = self:previous().finish,
 		}
-	elseif token.kind == "string" then
-		self:fail("V2008", "literal types are not supported in this version", token)
 	elseif token.kind ~= "name" then
 		self:fail("V2001", `expected a type, got {self:describe(token)}`, token)
 	end

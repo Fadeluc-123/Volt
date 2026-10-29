@@ -29,7 +29,7 @@ export type Harness = {
 }
 
 -- Unchecked, so a value only a reader refuses can be sent; the reply path and the readers are checked in every build
-local SCHEMAS: { string } = { "Events", "Functions", "Exports", "Records", "Example" }
+local SCHEMAS: { string } = { "Events", "Functions", "Exports", "Records", "Example", "Console" }
 
 local MODULES: { [string]: { client: string, server: string } } = {}
 

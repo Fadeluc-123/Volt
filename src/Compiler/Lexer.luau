@@ -44,7 +44,7 @@ local PATTERNS: { { pattern: string, kind: string } } = {
 	{ pattern = "^%-?%d+", kind = "number" },
 	{ pattern = "^[%a_][%w_]*", kind = "name" },
 	{ pattern = "^%.%.", kind = "range" },
-	{ pattern = "^[{}()%[%]<>:,=|?.]", kind = "punctuation" },
+	{ pattern = "^[{}()%[%]<>:,=|?.@]", kind = "punctuation" },
 }
 
 local Lexer = {}
