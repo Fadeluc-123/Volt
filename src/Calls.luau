@@ -66,8 +66,8 @@ end
     Makes one call: takes a slot, writes the call through the function's
     writer with it and waits for the reply, on the calling thread or
     through a promise as the function asks. A call fails at once, taking
-    no slot, when nothing is listening, which is edit mode, or when every
-    slot is in flight
+    no slot, when nothing is listening, which is edit mode, when every
+    slot is in flight, or when its message took the frame past the cap
 --]]
 
 function Calls.invoke(self: Runtime, id: number, write: (slot: number, ...any) -> (), ...: any): ...any
@@ -88,6 +88,12 @@ function Calls.invoke(self: Runtime, id: number, write: (slot: number, ...any) -
 	if not written then
 		table.insert(call.free, slot)
 		error(self.reliable:undo(call.name, refused), 0)
+	end
+
+	-- A message past the cap is dropped and reported here; none of its bytes left, so no reply can name its slot
+	if self.reliable:drop() then
+		table.insert(call.free, slot)
+		return failed(call, "dropped")
 	end
 
 	call.last = math.max(call.last, slot)

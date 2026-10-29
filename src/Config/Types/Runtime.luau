@@ -147,6 +147,7 @@ export type Fields = {
 	_joins: { [{}]: Callback },
 	_leaves: { [{}]: Callback },
 	_handshakes: { [{}]: Callback },
+	_accepted: { any },
 	_handlers: { [number]: (...any) -> ...any },
 	_failure: Failure,
 	_stats: Stats,

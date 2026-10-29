@@ -1,15 +1,16 @@
 --[[
     Proves the runtime holds when what it calls out to calls back into it
     part way through: a failure handler that fires or broadcasts from a
-    message the cap dropped, and a join callback that subscribes another
+    message the cap dropped, a join callback that subscribes another, and
+    a handshake callback that fires and flushes
 --]]
 
 --!strict
-local fs = require("@lune/fs")
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
 local Generated = require("./Generated")
+local Served = require("./Served")
 local Volt = require("@volt")
 
 local describe = Suite.describe
@@ -31,12 +32,11 @@ type Harness = {
 	heard: { [string]: { number } },
 }
 
-local CAP: number = 8 -- Two Damage messages' bytes, so a third takes a player's frame past the cap
 local ANSWER: number = 100 -- What the failure handler fires at Bob, which no other fire here does
 
-local BROADCASTS: string = `option maxOutgoing = {CAP}\n{fs.readFile("tests/Schemas/Broadcasts.volt")}`
-local CLIENT: string, SERVER: string = Generated.modules("Broadcasts", BROADCASTS)
-local _, EVENTS: string = Generated.modules("Events", fs.readFile("tests/Schemas/Events.volt"))
+local CLIENT: string = Served.modules.Capped.client -- Broadcasts with room for two Damage messages a frame
+local SERVER: string = Served.modules.Capped.server
+local EVENTS: string = Served.modules.Events.server
 
 -- Enough steps for a client's handshake to be read and a server fire to arrive after it
 local function steps(mock: Mock)
@@ -176,4 +176,48 @@ describe("Reentry", function ()
 			expect(table.concat(heard, ",")).is("1,1,1,1,1")
 		end
 	)
+
+	test("an onHandshake callback that fires and flushes sends its fire in the same step as what was held", function ()
+		local mock: Mock = Volt.mock(task.spawn)
+		local server: any, runtime: Runtime = Generated.module("Server", SERVER, mock.server)
+		local alice, transport = mock:join("Alice")
+		local heard: { number } = {}
+		local announced: { number } = { 0, 0, 0 }
+
+		-- The flush it calls is a whole one, which must not announce this handshake a second time
+		runtime:onHandshake(function (player: any)
+			announced[1] += 1
+			server.Damage.fire(player, { target = 1, amount = 3 })
+			server.flush()
+		end)
+
+		for index: number = 2, 3 do
+			runtime:onHandshake(function ()
+				announced[index] += 1
+			end)
+		end
+
+		-- Two fill her held frame to the cap, so a third written behind them would be dropped
+		for amount: number = 1, 2 do
+			server.Damage.fire(alice, { target = 1, amount = amount })
+		end
+
+		mock:step()
+
+		local client: any = Generated.module("Client", CLIENT, transport)
+
+		client.Damage.on(function (hit: Hit)
+			table.insert(heard, hit.amount)
+		end)
+
+		-- Her handshake is read at the second step, and what its flush sent arrives at the third
+		mock:step()
+		mock:step()
+		expect(#heard).is(0)
+
+		mock:step()
+		expect(table.concat(heard, ",")).is("1,2,3")
+		expect(table.concat(announced, ",")).is("1,1,1")
+		expect(runtime:stats(alice).failures.outgoing).is(nil)
+	end)
 end)

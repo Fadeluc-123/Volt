@@ -65,6 +65,7 @@ export type Own = {
 	add: (self: Send, target: any, stats: Stats, record: Record?, held: boolean?) -> State,
 	remove: (self: Send, target: any) -> (),
 	undo: (self: Send, name: string, message: any) -> string,
+	drop: (self: Send) -> boolean,
 }
 
 export type Broadcast = {

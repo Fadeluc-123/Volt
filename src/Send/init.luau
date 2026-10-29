@@ -2,7 +2,8 @@
     The send side of one reliability: a state per target with a growing
     buffer, a side array and their cursors; the calls every generated
     writer makes to begin or trim a message, take bytes, store a slot or
-    refuse a value; and what a raise leaves taken back
+    refuse a value; and what a raise leaves, or a message past the cap,
+    taken back
 --]]
 
 --!strict
@@ -38,7 +39,7 @@ type Stats = Types.Stats
 
 function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: number, budget: number?): Self
 	local scratch: State = States.blank(nil, nil, nil, false)
-	local send: Fields -- What a writer's calls reach, the send's own fields once they are built below
+	local send: Self -- What a writer's calls reach, the send itself once it is built below
 
 	-- Takes bytes at the end of the current buffer, growing it when the frame needs more than it holds
 	local function allocate(bytes: number): (number, buffer)
@@ -69,10 +70,9 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		local state: State = send.current
 		local stats: Stats? = state.stats
 
+		-- Only a state over the cap pays for the call, so every other message keeps one comparison
 		if state.cursor > cap then
-			States.rollback(state, total)
-			dropped(state.target)
-			send.current = state -- The failure handler may have fired, which points the send at another target
+			send:drop()
 		end
 
 		state.committed = state.cursor
@@ -130,10 +130,10 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		_drops = {} :: { any }, -- Whom a copy or a flush dropped a message for, told once its loop is done
 	}
 
-	-- The closures keep a local of their own, since the checker retypes the one handed to setmetatable
-	send = fields
+	-- The closures keep a local of their own, since the checker retypes the table handed to setmetatable
+	send = setmetatable(fields, Send) :: any
 
-	return setmetatable(fields, Send) :: any
+	return send
 end
 
 -- A joiner's state, counting into their counters and byte count, held until their handshake when a client will send one
@@ -176,6 +176,26 @@ function Send.undo(self: Self, name: string, message: any): string
 	States.rollback(state, self._total)
 
 	return `{name}: {(tostring(message):gsub(POSITION, ""))}`
+end
+
+--[[
+    Drops the last message written when it took the current state past
+    the cap: the state goes back to where that message began, the message
+    is uncounted and the runtime is told of it. Returns whether it dropped,
+    so a call can ask right after its writer returns
+--]]
+
+function Send.drop(self: Self): boolean
+	local state: State = self.current
+	if state.cursor <= self._cap then
+		return false
+	end
+
+	States.rollback(state, self._total)
+	self._dropped(state.target)
+	self.current = state -- The failure handler may have fired, which points the send at another target
+
+	return true
 end
 
 local _: Types.Own, _: Types.Broadcast, _: Types.Flush = Send, Broadcast, Flush

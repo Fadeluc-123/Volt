@@ -1,117 +1,32 @@
 --[[
-    Proves the failure detail contract over the generated modules, on the
-    server and on the client: every failure of a message begins with its
-    registry name and a colon exactly once, a failure of a packet names no
-    message, and a handler's error reaches its caller as exactly its text
+    Proves the failure detail contract for a failure of one message, over
+    the generated modules on the server and on the client: its detail
+    begins with the message's registry name and a colon exactly once, and
+    a handler's error reaches its caller as exactly its text
 --]]
 
 --!strict
-local fs = require("@lune/fs")
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
-local Generated = require("./Generated")
-local handshake = require("./Handshake")
+local Failures = require("./Failures")
 local Volt = require("@volt")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
+local packet = Failures.packet
+local setup = Failures.setup
+local steps = Failures.steps
 
+type Harness = Failures.Harness
 type Mock = Volt.Mock
-type Transport = Volt.Transport
+type Report = Failures.Report
 
-type Report = { kind: string, detail: string } -- One failure a side reported
-
--- A server and one client over a mock, each running its side's module, and what each side reported
-type Harness = {
-	mock: Mock,
-	player: any,
-	transport: Transport, -- The player's client side, which a raw packet is sent through
-	server: any,
-	client: any,
-	hash: number,
-	names: { [string]: boolean }, -- Every registry name either side has
-	failures: { server: { Report }, client: { Report } },
-}
-
--- Unchecked, so a value only a reader refuses can be sent; the reply path and the readers are checked in every build
-local SCHEMAS: { string } = { "Events", "Functions", "Exports", "Records", "Example" }
 local QUEUE: number = 64 -- The queue every event here keeps, the schema's default
-local MAX_PACKETS: number = 240 -- The packets a player may send a second, the schema's default
-local MAX_PACKET: number = 8192 -- What a client's reliable frame is capped at, the schema's default
-local MAX_OUTGOING: number = 262144 -- What a player's frame, and so their hold, is capped at, the schema's default
-local SYNC_BYTES: number = 2 -- Sync's id and its u8, as the server fires it
-local WRONG_HASH: number = 0xBAD
-local UNKNOWN_ID: number = 255 -- An id no schema here gives a message
 local LONG_REASON: number = 200 -- Past the 128 bytes Example's Inventory.Transfer allows its reason
 local OUT_OF_RANGE: number = 1000 -- Past the 999 a Stack's quantity allows
 local WRONG_DIR: number = 9 -- Past the 8 Input's dir allows
-local READY: number = 3 -- Ready's id on the server, which a raw packet before the handshake opens with
-local PAST_RATE: number = 5 -- Packets past the rate in one step
-
-local MODULES: { [string]: { client: string, server: string } } = {}
-
-for _, name: string in SCHEMAS do
-	local source: string = `option writeValidation = false\n{fs.readFile(`tests/Schemas/{name}.volt`)}`
-	local client: string, server: string = Generated.modules(name, source)
-
-	MODULES[name] = { client = client, server = server }
-end
-
--- A packet from a flat list of bytes
-local function packet(bytes: { number }): buffer
-	local out: buffer = buffer.create(#bytes)
-	for index: number, byte: number in bytes do
-		buffer.writeu8(out, index - 1, byte)
-	end
-	return out
-end
-
--- A list that keeps every failure a module reports
-local function recorded(module: any): { Report }
-	local reports: { Report } = {}
-
-	module.onFailure(function (_, kind: string, detail: string)
-		table.insert(reports, { kind = kind, detail = detail })
-	end)
-
-	return reports
-end
-
-local function setup(name: string): Harness
-	local mock: Mock = Volt.mock(task.spawn)
-	local player: any, transport: Transport = mock:join("Alice")
-	local server: any = Generated.module("Server", MODULES[name].server, mock.server)
-	local client: any = Generated.module("Client", MODULES[name].client, transport)
-	local names: { [string]: boolean } = {}
-
-	for _, side: any in { server, client } do
-		for _, registry: any in { side.events, side.functions } do
-			for key: string in registry do
-				names[key] = true
-			end
-		end
-	end
-
-	return {
-		mock = mock,
-		player = player,
-		transport = transport,
-		server = server,
-		client = client,
-		hash = tonumber(MODULES[name].server:match("hash = (0x%x+)")) :: number,
-		names = names,
-		failures = { server = recorded(server), client = recorded(client) },
-	}
-end
-
--- Enough steps for a server fire to wait out the client's handshake and arrive, or for a call to come back
-local function steps(mock: Mock)
-	mock:step()
-	mock:step()
-	mock:step()
-end
 
 -- Runs one step on a thread of its own, so a listener that yields in it is resumed only after a frame has passed
 local function across(mock: Mock)
@@ -131,20 +46,6 @@ local function named(report: Report?, kind: string, name: string)
 	expect(found.kind).is(kind)
 	expect(found.detail:match("^(.-): ")).is(name)
 	expect(found.detail:sub(1, 2 * #name + 4)).never_is(`{name}: {name}: `)
-end
-
--- Every failure of a kind names no message, so nothing routes it to a message's owner
-local function unnamed(harness: Harness, reports: { Report }, kind: string)
-	local count: number = 0
-
-	for _, report: Report in reports do
-		if report.kind == kind then
-			count += 1
-			expect(harness.names).never_has_key(report.detail:match("^(.-): ") or report.detail)
-		end
-	end
-
-	expect(count > 0).is(true)
 end
 
 describe("Failures", function ()
@@ -268,58 +169,6 @@ describe("Failures", function ()
 
 			named(harness.failures.server[1], "queue", "Ready")
 		end)
-
-		test(
-			"a packet before the handshake, an unknown id, a wrong hash, the packet rate, the cap and departed name none",
-			function ()
-				local early: Harness = setup("Events")
-				local wrong: Harness = setup("Events")
-				local harness: Harness = setup("Events")
-				local slow: any = harness.mock:join("Slow") -- No client, so what is fired at them is held step after step
-				local half: number = MAX_OUTGOING // (2 * SYNC_BYTES)
-
-				early.transport.reliable(nil, packet({ READY }))
-				wrong.transport.reliable(nil, handshake(WRONG_HASH))
-				steps(early.mock)
-				steps(wrong.mock)
-				wrong.server.Sync.fire(wrong.player, 1)
-
-				-- Past the cap in one frame for a player who has handshaken, and over three for one held from the start
-				for _ = 1, 2 * half + 1 do
-					early.server.Sync.fire(early.player, 1)
-				end
-				for _ = 1, half do
-					harness.server.Sync.fire(slow, 1)
-				end
-
-				early.mock:step()
-				harness.mock:step()
-				harness.transport.reliable(nil, packet({ UNKNOWN_ID }))
-				harness.mock:step()
-
-				for _ = 1, MAX_PACKETS + PAST_RATE do
-					harness.transport.reliable(nil, buffer.create(0))
-				end
-				for _ = 1, half + 1 do
-					harness.server.Sync.fire(slow, 1)
-				end
-
-				harness.mock:step()
-				harness.mock:leave(harness.player)
-				harness.server.Sync.fire(harness.player, 1)
-
-				expect(early.failures.server[1].detail).is("before the handshake")
-				expect(harness.failures.server[1].detail).is(`unknown message {UNKNOWN_ID}`)
-				unnamed(early, early.failures.server, "packet")
-				unnamed(harness, harness.failures.server, "packet")
-				unnamed(wrong, wrong.failures.server, "handshake")
-				unnamed(harness, harness.failures.server, "rate")
-				unnamed(early, early.failures.server, "outgoing")
-				unnamed(harness, harness.failures.server, "outgoing")
-				unnamed(wrong, wrong.failures.server, "departed")
-				unnamed(harness, harness.failures.server, "departed")
-			end
-		)
 	end)
 
 	describe("on the client", function ()
@@ -375,22 +224,6 @@ describe("Failures", function ()
 			named(harness.failures.client[2], "listener", "Sync")
 			named(queued.failures.client[1], "queue", "Sync")
 			expect(harness.failures.client[2].detail).is("Sync: a sync listener yielded")
-		end)
-
-		test("an unknown id and a reliable frame past maxPacket name no message", function ()
-			local harness: Harness = setup("Events")
-
-			harness.mock.server.reliable(harness.player, packet({ UNKNOWN_ID }))
-
-			for _ = 1, MAX_PACKET // 2 do
-				harness.client.Sync.fire(1)
-			end
-
-			steps(harness.mock)
-
-			unnamed(harness, harness.failures.client, "packet")
-			unnamed(harness, harness.failures.client, "outgoing")
-			expect(harness.failures.client[1].detail).is("over maxPacket, a message was dropped")
 		end)
 	end)
 end)

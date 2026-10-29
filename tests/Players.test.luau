@@ -7,17 +7,19 @@
 --]]
 
 --!strict
-local fs = require("@lune/fs")
 local task = require("@lune/task")
 
 local Suite = require("./Suite")
 local Generated = require("./Generated")
 local handshake = require("./Handshake")
+local Served = require("./Served")
 local Volt = require("@volt")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
+local serve = Served.serve
+local held = Served.held
 
 type Bot = Volt.Bot
 type Mock = Volt.Mock
@@ -25,7 +27,6 @@ type Runtime = Volt.Runtime
 
 type Hit = { target: number, amount: number }
 
-local SCHEMAS: { string } = { "Broadcasts", "Events" } -- A reliable and an unreliable event the server fires, then the client's
 local WRONG_HASH: number = 0xBAD -- A hash neither schema has
 local DAMAGE_BYTES: number = 4 -- One Damage message: its id, a u16 and a u8
 
@@ -33,31 +34,7 @@ local DAMAGE_BYTES: number = 4 -- One Damage message: its id, a u16 and a u8
 local KINDS: { string } =
 	{ "packet", "rate", "handshake", "decode", "listener", "handler", "outgoing", "queue", "departed" }
 
-local MODULES: { [string]: { client: string, server: string } } = {}
-
-for _, name: string in SCHEMAS do
-	local client: string, server: string = Generated.modules(name, fs.readFile(`tests/Schemas/{name}.volt`))
-	MODULES[name] = { client = client, server = server }
-end
-
--- A server module over a mock with every failure it reports kept, then the runtime it started
-local function serve(name: string, mock: Mock): (any, { string }, Runtime)
-	local server: any, runtime: Runtime = Generated.module("Server", MODULES[name].server, mock.server)
-	local failures: { string } = {}
-
-	server.onFailure(function (_, kind: string, detail: string)
-		table.insert(failures, `{kind}: {detail}`)
-	end)
-
-	return server, failures, runtime
-end
-
--- A server fire before a client's handshake waits for it: one step flushes the handshake, one reads it, one delivers
-local function held(mock: Mock)
-	mock:step()
-	mock:step()
-	mock:step()
-end
+local MODULES = Served.modules
 
 describe("Players", function ()
 	test(

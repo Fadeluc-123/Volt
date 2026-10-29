@@ -1,9 +1,9 @@
 --[[
     Proves functions end to end: each side of the Functions schema renders
-    as its golden file, the runtime agrees on what a refusal carries, and
-    over the mock a call reaches its handler and its returns come back, a
-    missing or failing handler refuses it, a promise settles either way or
-    refuses at the call, a handler's fires come first, and it disconnects
+    as its golden file, compiler and runtime agree on what a refusal holds,
+    and over the mock a call is answered, refused by a missing or failing
+    handler, settled as a promise or refused at the call, preceded by its
+    handler's fires, disconnected, and failed at once when the cap drops it
 --]]
 
 --!strict
@@ -30,52 +30,102 @@ type Harness = {
 	server: any,
 	client: any,
 	failures: { Report },
+	reported: { string }, -- Each failure the client reported, as its player, its kind and its detail
 }
 
 -- The results of a call once its reply is back, as one line, or pending until then
 type Box = { line: string }
 
+local CAP: number = 32 -- The capped modules' maxPacket: a handshake, a Divide and an Inventory.Transfer fit, no more
+local PAST_SLOTS: number = Config.slots + 1 -- One drop more than a function has slots, so slots kept would run out
+local DROPPED: string = "nil outgoing over maxPacket, a message was dropped" -- A dropped call as the client reports it
+
 local SCHEMA: string = fs.readFile("tests/Schemas/Functions.volt")
 local CLIENT: string, SERVER: string, TYPES: string = Generated.modules("Functions", SCHEMA)
+local CAPPED_CLIENT: string, CAPPED_SERVER: string =
+	Generated.modules("Functions", `option maxPacket = {CAP}\n{SCHEMA}`)
 local EXAMPLE_CLIENT: string, EXAMPLE_SERVER: string =
 	Generated.modules("Example", fs.readFile("tests/Schemas/Example.volt"))
 local SIDES: { { name: string, text: string } } =
 	{ { name = "Client", text = CLIENT }, { name = "Server", text = SERVER }, { name = "Types", text = TYPES } }
 
-local function setup(): Harness
+local function setup(client: string?, server: string?): Harness
 	local mock: Mock = Volt.mock(task.spawn)
 	local _, transport = mock:join("Alice")
 	local failures: { Report } = {}
-	local server: any = Generated.module("Server", SERVER, mock.server)
+	local reported: { string } = {}
+	local serverModule: any = Generated.module("Server", server or SERVER, mock.server)
 
-	server.onFailure(function (_, kind: string, detail: string)
+	serverModule.onFailure(function (_, kind: string, detail: string)
 		table.insert(failures, { kind = kind, detail = detail })
+	end)
+
+	local clientModule: any = Generated.module("Client", client or CLIENT, transport)
+
+	clientModule.onFailure(function (player: any, kind: string, detail: string)
+		table.insert(reported, `{player} {kind} {detail}`)
 	end)
 
 	return {
 		mock = mock,
-		server = server,
-		client = Generated.module("Client", CLIENT, transport),
+		server = serverModule,
+		client = clientModule,
 		failures = failures,
+		reported = reported,
 	}
 end
 
--- Makes one call on a thread of its own, since a coroutine call yields, and renders what it returned once it is back
-local function call(invoke: (...any) -> ...any, ...: any): Box
-	local box: Box = { line = "pending" }
+-- Values as one line, as a call returned them or a promise settled with them
+local function line(results: { n: number, [number]: any }): string
+	local parts: { string } = {}
 
+	for index: number = 1, results.n do
+		table.insert(parts, tostring(results[index]))
+	end
+
+	return table.concat(parts, " ")
+end
+
+-- Makes one call into a box on a thread of its own, since a coroutine call yields, rendering its returns once back
+local function into(box: Box, invoke: (...any) -> ...any, ...: any): Box
 	task.spawn(function (...: any)
-		local results = table.pack(invoke(...))
-		local parts: { string } = {}
-
-		for index: number = 1, results.n do
-			table.insert(parts, tostring(results[index]))
-		end
-
-		box.line = table.concat(parts, " ")
+		box.line = line(table.pack(invoke(...)))
 	end, ...)
 
 	return box
+end
+
+local function call(invoke: (...any) -> ...any, ...: any): Box
+	return into({ line = "pending" }, invoke, ...)
+end
+
+-- Connects a handler to every function a dropped-call test calls: Echo doubles, Divide divides and a transfer moves
+local function answer(harness: Harness)
+	harness.server.Echo.on(function (_, value: number): number
+		return value * 2
+	end)
+	harness.server.Divide.on(function (_, dividend: number, divisor: number): (boolean, number?)
+		return true, dividend / divisor
+	end)
+	harness.server.Inventory.Transfer.on(function (_, source: number, destination: number, quantity: number)
+		return source < destination, `moved {quantity}`
+	end)
+end
+
+-- The client reported one failure per dropped call, each the cap's with no player, and the server reported none
+local function dropsOnly(harness: Harness, count: number)
+	local others: number = 0
+
+	for _, report: string in harness.reported do
+		if report ~= DROPPED then
+			others += 1
+		end
+	end
+
+	expect(#harness.reported).is(count)
+	expect(others).is(0)
+	expect(harness.client.stats().failures.outgoing).is(count)
+	expect(#harness.failures).is(0)
 end
 
 -- One step flushes the call, the next delivers it and flushes the reply, the last delivers the reply
@@ -265,6 +315,80 @@ describe("Functions", function ()
 			roundTrip(harness.mock)
 
 			expect(box.line).is("false no handler")
+		end)
+	end)
+
+	describe("a call the client's cap drops", function ()
+		test("fails at once in coroutine mode, its failure heard first, and the next call still fits", function ()
+			local harness: Harness = setup(CAPPED_CLIENT, CAPPED_SERVER)
+			local second: Box = { line = "pending" }
+			local heard: string? = nil -- The second call's line when its failure reached the handler
+
+			answer(harness)
+			harness.client.onFailure(function (player: any, kind: string, detail: string)
+				table.insert(harness.reported, `{player} {kind} {detail}`)
+				heard = second.line
+			end)
+
+			-- The handshake and a Divide take 24 bytes; a second Divide would take 43, and an Echo after it takes 28
+			local first: Box = call(harness.client.Divide.invoke, 5, 2)
+			into(second, harness.client.Divide.invoke, 1, 1)
+			local echo: Box = call(harness.client.Echo.invoke, 21)
+
+			expect(heard).is("pending")
+			expect(second.line).is("false dropped")
+
+			roundTrip(harness.mock)
+
+			expect(first.line).is("true true 2.5")
+			expect(echo.line).is("true 42")
+			dropsOnly(harness, 1)
+		end)
+
+		test("is a promise already rejected as the frame's last write, and the calls before it are answered", function ()
+			local harness: Harness = setup(CAPPED_CLIENT, CAPPED_SERVER)
+
+			answer(harness)
+
+			-- The handshake, a Divide and a transfer take 31 bytes; a second transfer would take 38
+			local divide: Box = call(harness.client.Divide.invoke, 5, 2)
+			local transfer = harness.client.Inventory.Transfer.invoke(1, 2, 3)
+			local dropped = harness.client.Inventory.Transfer.invoke(1, 2, 3)
+
+			expect(line(dropped.settled)).is("false dropped")
+
+			roundTrip(harness.mock)
+
+			expect(divide.line).is("true true 2.5")
+			expect(line(transfer.settled)).is("true true moved 3")
+			dropsOnly(harness, 1)
+		end)
+
+		test("gives its slot back, so past more drops than slots the next frame's call goes out", function ()
+			local harness: Harness = setup(CAPPED_CLIENT, CAPPED_SERVER)
+			local rejected: number = 0
+
+			answer(harness)
+
+			local divide: Box = call(harness.client.Divide.invoke, 5, 2)
+			local transfer = harness.client.Inventory.Transfer.invoke(1, 2, 3)
+
+			for _ = 1, PAST_SLOTS do
+				if line(harness.client.Inventory.Transfer.invoke(1, 2, 3).settled) == "false dropped" then
+					rejected += 1
+				end
+			end
+
+			roundTrip(harness.mock)
+
+			local later = harness.client.Inventory.Transfer.invoke(1, 2, 3)
+			roundTrip(harness.mock)
+
+			expect(rejected).is(PAST_SLOTS)
+			expect(divide.line).is("true true 2.5")
+			expect(line(transfer.settled)).is("true true moved 3")
+			expect(line(later.settled)).is("true true moved 3")
+			dropsOnly(harness, PAST_SLOTS)
 		end)
 	end)
 end)

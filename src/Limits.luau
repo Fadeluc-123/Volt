@@ -88,9 +88,10 @@ end
     The checks a packet passes before any of it is decoded, on the
     server: it is from a player still here, no larger than maxPacket,
     within the player's packet rate, and after their handshake or is it.
-    Accepting the handshake lets out what was held for them; refusing it
-    keeps them from being sent anything again. Returns where the loop
-    starts, or nil for a packet that is dropped
+    Accepting the handshake lets out what was held for them at the next
+    flush, which then announces it; refusing it keeps them from being
+    sent anything again. Returns where the loop starts, or nil for a
+    packet that is dropped
 --]]
 
 function Limits.admit(self: Runtime, player: any, packet: buffer): number?
@@ -151,7 +152,8 @@ function Limits.admit(self: Runtime, player: any, packet: buffer): number?
 	state.reliable.held = false
 	state.unreliable.held = false
 
-	self:_announce(self._handshakes, player)
+	-- Announced at the end of the next flush, once that flush has sent what was held and reported what it dropped
+	table.insert(self._accepted, player)
 
 	return HANDSHAKE_BYTES
 end

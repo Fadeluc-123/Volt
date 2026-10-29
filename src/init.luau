@@ -175,6 +175,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		_joins = {} :: { [{}]: Callback }, -- The callbacks of each kind a game or a package subscribed, by a token each
 		_leaves = {} :: { [{}]: Callback },
 		_handshakes = {} :: { [{}]: Callback },
+		_accepted = {} :: { any }, -- Whose handshakes were accepted and not yet announced, in the order read
 		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
 
 		-- The runtime's own failure handler until a game replaces it, a plain function so onFailure can hand it on
@@ -328,11 +329,33 @@ function Runtime.broadcast(
 	send:broadcast(targets, except)
 end
 
--- Fails the calls past their deadline, then sends every target's accumulated bytes; the Heartbeat does this every flush-th frame
+--[[
+    Fails the calls past their deadline, sends every target's accumulated
+    bytes with each send's drops reported, then announces every handshake
+    accepted before it began, in the order read, for each player still
+    here; the Heartbeat does this every flush-th frame
+--]]
+
 function Runtime.flush(self: Self)
+	local accepted: { any }? = nil
+
+	-- Taken first, so a handshake accepted while this runs is left for a later flush and nobody is announced twice
+	if self._accepted[1] ~= nil then
+		accepted = self._accepted
+		self._accepted = {}
+	end
+
 	self:_sweep()
 	self.reliable:flush()
 	self.unreliable:flush()
+
+	if accepted then
+		for _, player: any in accepted do
+			if self._players[player] then
+				self:_announce(self._handshakes, player)
+			end
+		end
+	end
 end
 
 local _: Types.Own, _: Types.Calls, _: Types.Limits, _: Types.Players, _: Types.Receive, _: Types.Wrapper =
