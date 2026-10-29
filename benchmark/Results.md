@@ -7,89 +7,89 @@ Studio 0.745.0.7451137, 10 s per run, 32 payloads cycled.
 
 | Library | FPS median | FPS min | ms per 1000 fires | Bytes per message | Packets per second | Loss |
 |---|---|---|---|---|---|---|
-| roblox | 15 | 15 | 80.594 | - | 7100 | 0% |
-| blink | 44 | 42 | 2.889 | 603.0 | 44 | 0% |
-| zap | 43 | 42 | 9.584 | 603.0 | 43 | 0% |
-| zapUnchecked | 42 | 42 | 9.444 | 603.0 | 42 | 0% |
-| volt | 60 | 60 | 2.543 | 603.0 | 60 | 0% |
-| voltUnchecked | 60 | 60 | 1.697 | 603.0 | 60 | 0% |
+| roblox | 15 | 15 | 88.948 | - | 6500 | 0% |
+| blink | 44 | 43 | 2.867 | 603.0 | 44 | 0% |
+| zap | 42 | 40 | 9.617 | 603.0 | 42 | 0% |
+| zapUnchecked | 42 | 42 | 9.475 | 603.0 | 42 | 0% |
+| volt | 60 | 60 | 2.479 | 603.0 | 60 | 0% |
+| voltUnchecked | 60 | 60 | 1.687 | 603.0 | 60 | 0% |
 
 Where a client frame goes, in milliseconds, then the server on its own frame, stepped no faster than a live server: what a thousand messages cost it to receive, its frame rate while they arrived, and how far behind it was when the fires stopped.
 
 | Library | Frame | Fires | Flush | Other | Receive per 1000 | Server FPS | Lag s |
 |---|---|---|---|---|---|---|---|
-| roblox | 66.667 | 80.594 | - | -13.927 | 145.697 | 42 | 20.635 |
-| blink | 22.727 | 2.889 | 0.274 | 19.564 | 21.465 | 44 | 0.076 |
-| zap | 23.256 | 9.584 | 0.304 | 13.367 | 21.874 | 43 | 0.075 |
-| zapUnchecked | 23.810 | 9.444 | 0.289 | 14.077 | 22.264 | 42 | 0.077 |
-| volt | 16.667 | 2.543 | 0.392 | 13.732 | 5.606 | 59 | 0.047 |
-| voltUnchecked | 16.667 | 1.697 | 0.353 | 14.616 | 5.578 | 60 | 0.047 |
+| roblox | 66.667 | 88.948 | - | -22.281 | 153.027 | 41 | 19.726 |
+| blink | 22.727 | 2.867 | 0.265 | 19.595 | 21.501 | 43 | 0.091 |
+| zap | 23.810 | 9.617 | 0.279 | 13.914 | 22.588 | 41 | 0.070 |
+| zapUnchecked | 23.810 | 9.475 | 0.280 | 14.054 | 22.336 | 42 | 0.073 |
+| volt | 16.667 | 2.479 | 0.367 | 13.820 | 5.391 | 59 | 0.047 |
+| voltUnchecked | 16.667 | 1.687 | 0.346 | 14.634 | 5.292 | 60 | 0.048 |
 
 ## Booleans (1000 fires a frame)
 
 | Library | FPS median | FPS min | ms per 1000 fires | Bytes per message | Packets per second | Loss |
 |---|---|---|---|---|---|---|
-| roblox | 15 | 15 | 39.430 | - | 11600 | 0% |
-| blink | 60 | 60 | 6.293 | 1003.0 | 60 | 0% |
-| zap | 57 | 53 | 15.192 | 1003.0 | 56 | 0% |
-| zapUnchecked | 57 | 56 | 15.091 | 1003.0 | 56 | 0% |
-| volt | 60 | 60 | 2.395 | 128.0 | 60 | 0% |
-| voltUnchecked | 60 | 59 | 2.458 | 128.0 | 60 | 0% |
+| roblox | 15 | 15 | 39.877 | - | 11600 | 0% |
+| blink | 60 | 59 | 5.640 | 1003.0 | 60 | 0% |
+| zap | 57 | 56 | 15.238 | 1003.0 | 57 | 0% |
+| zapUnchecked | 57 | 55 | 15.447 | 1003.0 | 57 | 0% |
+| volt | 60 | 59 | 2.386 | 128.0 | 60 | 0% |
+| voltUnchecked | 60 | 60 | 2.426 | 128.0 | 60 | 0% |
 
 Where a client frame goes, in milliseconds, then the server on its own frame, stepped no faster than a live server: what a thousand messages cost it to receive, its frame rate while they arrived, and how far behind it was when the fires stopped.
 
 | Library | Frame | Fires | Flush | Other | Receive per 1000 | Server FPS | Lag s |
 |---|---|---|---|---|---|---|---|
-| roblox | 66.667 | 39.430 | - | 27.237 | 77.876 | 42 | 17.039 |
-| blink | 16.667 | 6.293 | 0.428 | 9.946 | 9.038 | 59 | 0.110 |
-| zap | 17.544 | 15.192 | 0.495 | 1.856 | 10.278 | 56 | 0.114 |
-| zapUnchecked | 17.544 | 15.091 | 0.499 | 1.954 | 10.237 | 56 | 0.113 |
-| volt | 16.667 | 2.395 | 0.095 | 14.177 | 2.992 | 59 | 0.047 |
-| voltUnchecked | 16.667 | 2.458 | 0.095 | 14.114 | 2.996 | 59 | 0.047 |
+| roblox | 66.667 | 39.877 | - | 26.790 | 75.992 | 41 | 16.562 |
+| blink | 16.667 | 5.640 | 0.425 | 10.601 | 8.992 | 59 | 0.110 |
+| zap | 17.544 | 15.238 | 0.465 | 1.841 | 10.299 | 57 | 0.080 |
+| zapUnchecked | 17.544 | 15.447 | 0.458 | 1.639 | 10.300 | 56 | 0.079 |
+| volt | 16.667 | 2.386 | 0.088 | 14.193 | 3.220 | 59 | 0.047 |
+| voltUnchecked | 16.667 | 2.426 | 0.089 | 14.151 | 3.315 | 59 | 0.047 |
 
 ## Snapshots (100 fires a frame)
 
 | Library | FPS median | FPS min | ms per 1000 fires | Bytes per message | Packets per second | Loss |
 |---|---|---|---|---|---|---|
-| roblox | 60 | 60 | 37.835 | - | 6010 | 0% |
-| blink | 60 | 59 | 7.676 | 1425.6 | 60 | 0% |
-| zap | 60 | 60 | 10.961 | 1425.6 | 60 | 0% |
-| zapUnchecked | 60 | 60 | 10.826 | 1425.6 | 60 | 0% |
-| volt | 60 | 60 | 4.355 | 1425.6 | 60 | 0% |
-| voltUnchecked | 60 | 59 | 3.713 | 1425.6 | 60 | 0% |
+| roblox | 60 | 60 | 38.590 | - | 6010 | 0% |
+| blink | 60 | 60 | 7.386 | 1425.6 | 60 | 0% |
+| zap | 60 | 59 | 11.200 | 1425.6 | 60 | 0% |
+| zapUnchecked | 60 | 60 | 10.875 | 1425.6 | 60 | 0% |
+| volt | 60 | 60 | 4.228 | 1425.6 | 60 | 0% |
+| voltUnchecked | 60 | 58 | 3.570 | 1425.6 | 59 | 0% |
 
 Where a client frame goes, in milliseconds, then the server on its own frame, stepped no faster than a live server: what a thousand messages cost it to receive, its frame rate while they arrived, and how far behind it was when the fires stopped.
 
 | Library | Frame | Fires | Flush | Other | Receive per 1000 | Server FPS | Lag s |
 |---|---|---|---|---|---|---|---|
-| roblox | 16.667 | 3.783 | - | 12.883 | 67.958 | 59 | 0.046 |
-| blink | 16.667 | 0.768 | 0.091 | 15.809 | 13.335 | 59 | 0.066 |
-| zap | 16.667 | 1.096 | 0.097 | 15.473 | 14.926 | 59 | 0.048 |
-| zapUnchecked | 16.667 | 1.083 | 0.097 | 15.487 | 16.581 | 59 | 0.065 |
-| volt | 16.667 | 0.436 | 0.122 | 16.109 | 8.893 | 60 | 0.049 |
-| voltUnchecked | 16.667 | 0.371 | 0.115 | 16.181 | 8.686 | 59 | 0.049 |
+| roblox | 16.667 | 3.859 | - | 12.808 | 73.373 | 60 | 0.079 |
+| blink | 16.667 | 0.739 | 0.089 | 15.839 | 13.036 | 59 | 0.049 |
+| zap | 16.667 | 1.120 | 0.095 | 15.452 | 15.568 | 59 | 0.049 |
+| zapUnchecked | 16.667 | 1.088 | 0.101 | 15.478 | 16.623 | 59 | 0.049 |
+| volt | 16.667 | 0.423 | 0.106 | 16.138 | 8.839 | 60 | 0.033 |
+| voltUnchecked | 16.667 | 0.357 | 0.105 | 16.204 | 9.315 | 59 | 0.049 |
 
 ## Input (1000 fires a frame)
 
 | Library | FPS median | FPS min | ms per 1000 fires | Bytes per message | Packets per second | Loss |
 |---|---|---|---|---|---|---|
-| roblox | 60 | 59 | 1.483 | - | 60100 | 0% |
-| blink | 60 | 60 | 1.639 | 3.0 | 60100 | 0% |
-| zap | 60 | 60 | 1.763 | 2.0 | 60100 | 0% |
-| zapUnchecked | 60 | 60 | 1.717 | 2.0 | 60100 | 0% |
-| volt | 60 | 60 | 0.152 | 3.0 | 240 | 0% |
-| voltUnchecked | 60 | 60 | 0.180 | 3.0 | 240 | 0% |
+| roblox | 60 | 60 | 1.561 | - | 60100 | 0% |
+| blink | 60 | 60 | 1.698 | 3.0 | 60100 | 0% |
+| zap | 60 | 59 | 1.770 | 2.0 | 60100 | 0% |
+| zapUnchecked | 60 | 59 | 1.818 | 2.0 | 60100 | 0% |
+| volt | 60 | 60 | 0.144 | 3.0 | 240 | 0% |
+| voltUnchecked | 60 | 59 | 0.187 | 3.0 | 240 | 0% |
 
 Where a client frame goes, in milliseconds, then the server on its own frame, stepped no faster than a live server: what a thousand messages cost it to receive, its frame rate while they arrived, and how far behind it was when the fires stopped.
 
 | Library | Frame | Fires | Flush | Other | Receive per 1000 | Server FPS | Lag s |
 |---|---|---|---|---|---|---|---|
-| roblox | 16.667 | 1.483 | - | 15.183 | 3.036 | 60 | 0.048 |
-| blink | 16.667 | 1.639 | 0.001 | 15.027 | 4.076 | 60 | 0.049 |
-| zap | 16.667 | 1.763 | 0.001 | 14.903 | 3.955 | 59 | 0.033 |
-| zapUnchecked | 16.667 | 1.717 | 0.001 | 14.948 | 4.001 | 59 | 0.048 |
-| volt | 16.667 | 0.152 | 0.039 | 16.476 | 0.307 | 59 | 0.066 |
-| voltUnchecked | 16.667 | 0.180 | 0.037 | 16.449 | 0.295 | 59 | 0.050 |
+| roblox | 16.667 | 1.561 | - | 15.106 | 3.191 | 59 | 0.048 |
+| blink | 16.667 | 1.698 | 0.001 | 14.967 | 4.090 | 60 | 0.047 |
+| zap | 16.667 | 1.770 | 0.001 | 14.895 | 3.890 | 60 | 0.048 |
+| zapUnchecked | 16.667 | 1.818 | 0.001 | 14.848 | 4.158 | 59 | 0.048 |
+| volt | 16.667 | 0.144 | 0.040 | 16.483 | 0.308 | 59 | 0.050 |
+| voltUnchecked | 16.667 | 0.187 | 0.037 | 16.443 | 0.300 | 59 | 0.050 |
 
 ## Generated modules
 

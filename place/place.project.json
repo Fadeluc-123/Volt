@@ -1,6 +1,6 @@
 {
 	"name": "Smoke",
-	"servePort": 34873,
+	"servePort": 34882,
 	"tree": {
 		"$className": "DataModel",
 		"ReplicatedStorage": {

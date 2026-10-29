@@ -1,0 +1,27 @@
+{
+	"name": "volt-syntax",
+	"displayName": "Volt",
+	"description": "Syntax highlighting for Volt's .volt schema files.",
+	"publisher": "whiteoak",
+	"version": "0.0.1",
+	"engines": {
+		"vscode": "^1.80.0"
+	},
+	"contributes": {
+		"languages": [
+			{
+				"id": "volt",
+				"aliases": ["Volt"],
+				"extensions": [".volt"],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "volt",
+				"scopeName": "source.volt",
+				"path": "./syntaxes/volt.tmLanguage.json"
+			}
+		]
+	}
+}
