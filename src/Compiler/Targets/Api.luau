@@ -10,11 +10,13 @@ local Api = {}
 
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
+local Labels = require("./Labels")
 local Schema = require("../Config/Types/Schema")
 local TargetsTypes = require("../Config/Types/Targets")
 local Types = require("./Types")
 
 type Declaration = Schema.Declaration
+type Entry = TargetsTypes.Entry
 type Event = Schema.Event
 type Exchanged = TargetsTypes.Exchanged
 type Function = Schema.Function
@@ -35,6 +37,9 @@ local BROADCASTS: { { name: string, target: string, arguments: string } } = {
 -- The player callbacks a server module has, each handed to the runtime's method of the same name
 local CALLBACKS: { string } = { "onJoin", "onLeave", "onHandshake" }
 
+-- What a @delta fire with no player raises, as the runtime's target does for any other fire
+local NONE: string = "Volt: a message for one player was sent to none"
+
 local REGISTRIES: { string } = { "events", "functions", "exports" } -- The flat maps, in the order they are written
 
 -- The parts of a list that are not empty, as one parameter or argument list
@@ -54,18 +59,20 @@ local function member(name: string, signature: string, ...: string): string
 end
 
 -- An entry's members as a frozen table, cast to the handle type it fits so a checker holds every call to it
-local function entry(name: string, members: { string }, handle: string): string
-	return `{name} = table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs(members))}\n}) :: {handle},`
+local function entry(members: { string }, handle: string): string
+	return `table.freeze(\{\n{Blocks.indent(1, Blocks.paragraphs(members))}\n}) :: {handle}`
 end
 
 --[[
     The API table's entries: every message's and exported type's, nested
-    per namespace, then the members every module has, and on the server
-    the player callbacks, the byte count and the bot test after them
+    per namespace, then the members every module has, flush labelled in a
+    labelled module, and on the server the player callbacks, the byte
+    count and the bot test after them. With values, each entry is its
+    value by full name rather than its walk
 --]]
 
-function Api.api(self: Targets): string
-	local entries: { string } = self:declarations(self._file.declarations)
+function Api.api(self: Targets, values: { [string]: string }?): string
+	local entries: { string } = self:declarations(self._file.declarations, values)
 	local hooks: { string } = {
 		`{self:method("hooks")} = table.freeze(\{`,
 		`\t{self:method("beforeSend")} = runtime.beforeSend,`,
@@ -76,13 +83,18 @@ function Api.api(self: Targets): string
 	table.insert(entries, `{self:method("version")} = "{VERSION}",`)
 	table.insert(entries, table.concat(hooks, "\n"))
 	table.insert(entries, `{self:method("rate")} = runtime.rate,`)
-	table.insert(entries, member(self:method("flush"), "()", "runtime:flush()"))
+	table.insert(entries, member(self:method("flush"), "()", Labels.flush(self._label)))
 
 	local failure: string = "(handler: Volt.Failure): Volt.Failure"
 	table.insert(entries, member(self:method("onFailure"), failure, "return runtime:onFailure(handler)"))
 
 	local stats: string = "(player: (Player | Bot)?): Volt.Stats"
 	table.insert(entries, member(self:method("stats"), stats, "return runtime:stats(player)"))
+
+	-- A stamped client reads the server's clock through an accessor, never as an argument a listener takes
+	if not self._server and self._file.options.stamp then
+		table.insert(entries, member(self:method("serverTime"), "(): number", "return runtime:serverTime()"))
+	end
 
 	if not self._server then
 		return Blocks.paragraphs(entries)
@@ -102,22 +114,41 @@ end
 
 --[[
     The API entries of a declaration list: an event's entry, a function's,
-    an exported type's, and a namespace's frozen table of its own entries
+    an exported type's, and a namespace's frozen table of its own entries.
+    Each walked entry is recorded with the functions its walk added, so a
+    side that shards can move it whole; with values, nothing is walked
 --]]
 
-function Api.declarations(self: Targets, declarations: { Declaration }): { string }
+function Api.declarations(self: Targets, declarations: { Declaration }, values: { [string]: string }?): { string }
 	local entries: { string } = {}
 
 	for _, declaration: Declaration in declarations do
-		if declaration.kind == "event" then
-			table.insert(entries, self:event(declaration))
-		elseif declaration.kind == "function" then
-			table.insert(entries, self:call(declaration))
-		elseif declaration.kind == "type" and declaration.export then
-			table.insert(entries, self:export(declaration))
-		elseif declaration.kind == "namespace" then
-			local inner: string = Blocks.paragraphs(self:declarations(declaration.declarations))
+		local first: number = #self._functions + 1
+		local value: string? = nil
+
+		if declaration.kind == "namespace" then
+			local inner: string = Blocks.paragraphs(self:declarations(declaration.declarations, values))
 			table.insert(entries, `{declaration.name} = table.freeze(\{\n{Blocks.indent(1, inner)}\n}),`)
+		elseif values then
+			value = values[declaration.path :: string]
+		elseif declaration.kind == "event" then
+			value = self:event(declaration)
+		elseif declaration.kind == "function" then
+			value = self:call(declaration)
+		elseif declaration.kind == "type" and declaration.export then
+			value = self:export(declaration)
+		end
+
+		if value then
+			table.insert(entries, `{declaration.name} = {value},`)
+		end
+
+		if value and not values then
+			local path: string = declaration.path :: string
+			local walked: Entry =
+				{ path = path, declaration = declaration, value = value, first = first, last = #self._functions }
+
+			table.insert(self._entries, walked)
 		end
 	end
 
@@ -128,7 +159,9 @@ end
     The API entry of one event on this side: fire, asking the hook before
     its send first, with the broadcast variants on the server, when the
     side fires it; on, unless the event is polled, and iter when it hears
-    it. A two-way entry is cast to both handles it fits
+    it. A two-way entry is cast to both handles it fits. Every fire of a
+    @delta event hands its targets to the runtime's delta, which asks the
+    hook and points the send itself, so fire refuses only a missing player
 --]]
 
 function Api.event(self: Targets, event: Event): string
@@ -152,16 +185,28 @@ function Api.event(self: Targets, event: Event): string
 		local allowed: string = `before[{id}] == nil or before[{id}]({joined(target, walked.arguments)})`
 
 		if server then
+			-- An event on a channel points that channel's send at the player, by its number
 			local guarded: string = `({joined("player: Player | Bot", walked.typed)})`
-			local condition: string = `if ({allowed}) and runtime:target(player) then`
+			local targeted: string =
+				`runtime:target({joined("player", walked.stream and tostring(walked.stream) or "")})`
+			local condition: string = `if ({allowed}) and {targeted} then`
+			local through: string = walked.delta and "delta" or "broadcast"
 
-			table.insert(members, member(self:method("fire"), guarded, condition, `\t{call}`, "end"))
+			if walked.delta then
+				local given: string = joined(tostring(id), "player, nil, nil", `write{walked.label}`, walked.arguments)
+				local present: string = `assert(player ~= nil, "{NONE}")`
+
+				table.insert(members, member(self:method("fire"), guarded, present, `runtime:delta({given})`))
+			else
+				table.insert(members, member(self:method("fire"), guarded, condition, `\t{call}`, "end"))
+			end
 
 			for _, variant in BROADCASTS do
 				local signature: string = `({joined(variant.target, walked.typed)})`
-				local given: string = joined(tostring(id), variant.arguments, `write{walked.label}`, walked.arguments)
+				local targets: string = walked.delta and `nil, {variant.arguments}` or variant.arguments
+				local given: string = joined(tostring(id), targets, `write{walked.label}`, walked.arguments)
 
-				table.insert(members, member(self:method(variant.name), signature, `runtime:broadcast({given})`))
+				table.insert(members, member(self:method(variant.name), signature, `runtime:{through}({given})`))
 			end
 		else
 			table.insert(
@@ -188,37 +233,48 @@ function Api.event(self: Targets, event: Event): string
 
 	table.insert(self._registry.events, event.path :: string)
 
-	return entry(event.name, members, table.concat(handles, " & "))
+	return entry(members, table.concat(handles, " & "))
 end
 
 --[[
-    The API entry of one function on this side: invoke on the client,
-    which the runtime carries through the call's writer and answers with
-    the reply; on for the one handler on the server
+    The API entry of one function on this side: invoke on the side its
+    from names, which the runtime carries through the call's writer and
+    answers with the reply, the server's taking the player first; on for
+    the one handler on the other, and on the client connected beside it
 --]]
 
 function Api.call(self: Targets, declaration: Function): string
+	local server: boolean = self._server
 	local exchanged: Exchanged = self:exchange(declaration)
 	local packs: string = `<{exchanged.pack}, {exchanged.returns}>`
+	local members: { string } = {}
 	local handle: string
-	local body: string
 
-	if self._server then
+	if (declaration.from == "Server") ~= server then
 		local signature: string = `(handler: {exchanged.handler}): () -> ()`
 
-		handle = `ServerFunction{packs}`
-		body = member(self:method("on"), signature, `return runtime:handle({exchanged.id}, handler)`)
-	else
-		local signature: string = `({exchanged.typed}){exchanged.result}`
-		local passed: string = joined(`write{exchanged.label}`, exchanged.arguments)
+		handle = server and `ServerFunction{packs}` or `ClientHandler{packs}`
+		table.insert(members, member(self:method("on"), signature, `return runtime:handle({exchanged.id}, handler)`))
 
-		handle = declaration.yield == "Promise" and `ClientPromise<{exchanged.pack}>` or `ClientFunction{packs}`
-		body = member(self:method("invoke"), signature, `return runtime:invoke({exchanged.id}, {passed})`)
+		if not server then
+			local connected: string = `return runtime:handled({exchanged.id})`
+			table.insert(members, member(self:method("connected"), "(): boolean", connected))
+		end
+	else
+		local player: string = server and "player: Player | Bot" or ""
+		local signature: string = `({joined(player, exchanged.typed)}){exchanged.result}`
+		local passed: string = joined(`write{exchanged.label}`, server and "player" or "", exchanged.arguments)
+		local invoke: string = `return runtime:invoke({exchanged.id}, {passed})`
+		local realm: string = server and "Server" or "Client"
+
+		handle = declaration.yield == "Promise" and `{realm}Promise<{exchanged.pack}>`
+			or `{realm}{server and "Invoke" or "Function"}{packs}`
+		table.insert(members, member(self:method("invoke"), signature, invoke))
 	end
 
 	table.insert(self._registry.functions, declaration.path :: string)
 
-	return entry(declaration.name, { body }, handle)
+	return entry(members, handle)
 end
 
 --[[
@@ -243,7 +299,7 @@ function Api.export(self: Targets, declaration: TypeDeclaration): string
 	)
 
 	table.insert(self._registry.exports, declaration.path :: string)
-	return entry(declaration.name, { write, read }, `Exported<{annotation}>`)
+	return entry({ write, read }, `Exported<{annotation}>`)
 end
 
 --[[

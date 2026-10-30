@@ -1,16 +1,19 @@
 --[[
     The walk of one message through the emitter for one side: an event's
-    writer, id first and mark last when unreliable, and its reader ending
-    in deliver; a function's call and reply, written and read from the
-    side that sends each; the schema rows of both, and the Luau types
+    writer, id and an ordered one's sequence first and mark last when
+    unreliable, and its reader ending in deliver, ordered or await; a
+    function's call and reply, written and read from the side that sends
+    each; the schema rows of both, and the Luau types
 --]]
 
 --!strict
 local Messages = {}
 
+local Awaits = require("../Analyse/Awaits")
 local Blocks = require("../Blocks")
 local Contract = require("../Config/Contract")
 local Emit = require("../Emit")
+local Labels = require("./Labels")
 local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
@@ -19,7 +22,6 @@ local Types = require("./Types")
 local Wire = require("../Config/Wire")
 
 type Block = Blocks.Block
-type Declaration = Schema.Declaration
 type Event = Schema.Event
 type Exchanged = TargetsTypes.Exchanged
 type Field = Schema.Field
@@ -32,15 +34,16 @@ type Walked = TargetsTypes.Walked
 
 local SLOT_BYTES: number = Wire.slotBytes
 local STATUS_BYTES: number = Wire.statusBytes
+local SEQUENCE_BYTES: number = Wire.sequenceBytes
 local RESERVE_BYTES: number = Contract.reserveBytes
 
 -- The prefix and the bounds of the reason a refusal carries, by the length rule the runtime follows
 local REASON_PREFIX: number, REASON_MIN: number, REASON_MAX: number =
 	Sizes.lengths({ min = 0, max = Wire.replyMessage, start = 0, finish = 0 })
 
--- The bytes a message's payload takes at its least and most, laid out as its block
-local function bounds(data: (Type | Pack)?): (number, number)
-	return Sizes.block(data and Sizes.size(data) or Sizes.fixed(0))
+-- The bytes a message's payload takes at its least and most, laid out as its block, a @delta event's under its mask
+local function bounds(data: (Type | Pack)?, delta: boolean?): (number, number)
+	return Sizes.block(data and (delta and Sizes.delta(data) or Sizes.size(data)) or Sizes.fixed(0))
 end
 
 -- The id a writer puts first among its fixed bytes
@@ -68,7 +71,7 @@ end
 local function paired(node: Type | Pack): boolean
 	if node.kind == "reference" then
 		local target: TypeDeclaration = node.target :: TypeDeclaration
-		return Sizes.shared(target) or paired(target.type)
+		return not Sizes.dictionary(target) and (Sizes.shared(target) or paired(target.type))
 	end
 
 	for _, child: Type in Parser.children(node) do
@@ -92,43 +95,36 @@ end
 
 --[[
     Points a message's write block at the runtime's calls for one
-    reliability, the module's locals of that name. A writer whose size
-    varies, whose largest is at most RESERVE_BYTES with the fixed bytes
-    before its data, and which calls no shared pair holds that size.
-    Returns the statement such a writer trims with last, or nil
+    reliability, the module's locals of that name, or a channel's, which
+    take its label after the reliable ones'. A writer whose size varies,
+    whose largest is at most RESERVE_BYTES with the fixed bytes before its
+    data, and which calls no shared pair holds that size; a @delta event's
+    walks its struct's fields, never the struct's own pair. Returns the
+    statement such a writer trims with last, or nil
 --]]
 
-function Messages.sends(write: Block, reliable: boolean, fixed: number, data: (Type | Pack)?): string?
-	local suffix: string = reliable and "Reliable" or "Unreliable"
-	local least: number, most: number = bounds(data)
+function Messages.sends(
+	write: Block,
+	reliable: boolean,
+	fixed: number,
+	data: (Type | Pack)?,
+	stream: string?,
+	delta: boolean?
+): string?
+	local suffix: string = reliable and (stream and `Reliable_{stream}` or "Reliable") or "Unreliable"
+	local least: number, most: number = bounds(data, delta)
+	local walked: Type | Pack = delta and Sizes.resolved(data :: Type) or data :: Type | Pack
 
 	write.first = `begin{suffix}`
 	write.allocate = `allocate{suffix}`
 	write.slot = `slot{suffix}`
 	write.refuse = `refuse{suffix}`
 
-	if least == most or fixed + most > RESERVE_BYTES or paired(data :: Type | Pack) then
+	if least == most or fixed + most > RESERVE_BYTES or paired(walked) then
 		return nil
 	end
 
 	return `trim{suffix}({write:hold(fixed + most)})`
-end
-
---[[
-    Marks every named type a function's return reaches, before any message
-    is walked, so a return is checked whichever message walks the pair of
-    a type it holds first, an event's included
---]]
-
-function Messages.mark(self: Targets, declarations: { Declaration })
-	for _, declaration: Declaration in declarations do
-		if declaration.kind == "namespace" then
-			self:mark(declaration.declarations)
-		elseif declaration.kind == "function" and declaration["return"] then
-			-- Whiteoak TODO: unchecked, a marked pair checks its other uses too; a second, unchecked pair for them
-			self._emitter:mark(declaration["return"] :: Type | Pack)
-		end
-	end
 end
 
 -- The fields a pack of data carries: a pack's parameters, or the one value
@@ -149,37 +145,70 @@ end
 
 --[[
     Walks one event through the emitter and keeps what this side needs:
-    a writer with the id first and its trim, then for an unreliable event
-    the mark, last, and an outgoing row, when the side fires it; a reader
-    ending in the runtime's deliver, and a message row, when it hears it.
-    Both blocks are walked either way, since the emitter fills both at once
+    a writer with the id first, then an ordered event's sequence, and its
+    trim, then for an unreliable event the mark, last, and an outgoing row
+    naming its channel or where its sequence sits, when the side fires it;
+    a reader ending in the runtime's deliver, or ordered with the sequence
+    read among its fixed bytes, or on the client await with the cursors it
+    began at when its data reaches an AwaitedInstance, and a message row,
+    with that event's timeout, when it hears it. A @delta event's writer
+    takes the mask first, its reader merges what it read with the last
+    value, and both its rows list its fields. Both blocks are walked
+    either way, since the emitter fills both at once. A labelled module's
+    reader opens its label first and closes it once its tail returns
 --]]
 
 function Messages.walk(self: Targets, event: Event, fires: boolean, hears: boolean): Walked
 	local server: boolean = self._server
 	local path: string = event.path :: string
 	local label: string = path:gsub("%.", "_")
+	local delta: boolean = event.attributes ~= nil and event.attributes.delta == true
 	local reliable: boolean = event.type == "Reliable"
+	local ordered: boolean = event.type == "OrderedUnreliable"
+	local awaited: boolean = not server and Awaits.reaches(event.data) -- The client's runtime waits for its instances
+	local stream: number? = event.channel and table.find(self._streams, event.channel)
 	local outId: number? = fires and (server and event.toClient or event.toServer) or nil
 	local inId: number? = hears and (server and event.toServer or event.toClient) or nil
 	local width: number = Sizes.idBytes(server and self._toClient or self._toServer)
-	local write: Block = Blocks.new("write", path)
+	local framed: number = width + (ordered and SEQUENCE_BYTES or 0) -- The fixed bytes before the data
+	local write: Block = Blocks.new("write", path, nil, nil, self._reserve)
 	local read: Block = Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
-	local trim: string? = Messages.sends(write, reliable, width, event.data)
+	local fields: string = "" -- What a @delta event's rows add: its fields in order, field i's bit 2^(i - 1)
+	local sequence: string = ordered and read:name("sequence") or "" -- Named before any field claims a local
+	local start: string = awaited and read:name("start") or "" -- Where the message began, which the runtime copies
+	local sideStart: string = awaited and read:name("sideStart") or ""
+	local channel: string? = event.channel and (event.channel :: string):gsub("%.", "_")
+	local trim: string? = Messages.sends(write, reliable, framed, event.data, channel, delta)
+
+	read.head = awaited and `local {start}: number, {sideStart}: number = cursor, sideCursor` or nil
+	Labels.open(self._label, read)
 
 	if outId then
 		identify(write, width, outId)
 	end
 
-	if event.data then
+	if ordered then
+		local at: string = write:at(write:reserve(SEQUENCE_BYTES))
+
+		write:line(`buffer.writeu16({write.out}, {at}, orderUnreliable({outId}))`)
+		read:line(`local {sequence}: number = buffer.readu16(packet, {read:at(read:reserve(SEQUENCE_BYTES))})`)
+	end
+
+	if delta then
+		local value: string, word: string, partial: string, listed: string =
+			self._emitter:delta(event.data :: Type, write, read)
+
+		names, values, fields = { value }, { `runtime:merge({inId}, {word}, {partial})` }, `, fields = {listed}`
+	elseif event.data then
 		names, values = self._emitter:block(event.data, write, read)
 	end
 
 	local annotated: { string }, types: { string } = typed(names, event.data)
 
 	if outId then
-		local least: number, most: number = bounds(event.data)
+		local least: number, most: number = bounds(event.data, delta)
+		local given: string = table.concat(delta and { "mask: number", table.unpack(annotated) } or annotated, ", ")
 
 		if trim then
 			write:tail(trim)
@@ -189,22 +218,26 @@ function Messages.walk(self: Targets, event: Event, fires: boolean, hears: boole
 			write:tail("markUnreliable()")
 		end
 
-		table.insert(
-			self._functions,
-			`local function write{label}({table.concat(annotated, ", ")})\n{write:done()}end\n`
-		)
-		self._outgoing[outId] =
-			`\{ name = "{path}", kind = "event", reliable = {reliable}, minBytes = {width + least}, maxBytes = {width + most} }`
+		-- A broadcast picks the send by the row's stream, and writes each target's sequence at the row's offset
+		local placed: string = stream and `, stream = {stream}` or ordered and `, sequence = {width}` or ""
+		local sizes: string = `minBytes = {framed + least}, maxBytes = {framed + most}`
+
+		table.insert(self._functions, `local function write{label}({given})\n{write:done()}end\n`)
+		self._outgoing[outId] = `\{ name = "{path}", kind = "event", reliable = {reliable}{placed}{fields}, {sizes} }`
 	end
 
 	if inId then
-		local body: string = read:done(`return runtime:deliver({inId}, player, cursor, sideCursor{handed(values)})`)
+		local tail: string = ordered and `ordered({inId}, {sequence}, player, cursor, sideCursor`
+			or awaited and `await({inId}, packet, {start}, cursor, side, {sideStart}, sideCursor`
+			or `deliver({inId}, player, cursor, sideCursor`
+		local body: string = read:done(Labels.close(self._label, `{tail}{handed(values)})`))
 		local rate: string = server and typeof(event.rate) == "number" and `, rate = {event.rate}` or ""
+		local timeout: string = awaited and `, timeout = {event.timeout or self._file.options.timeout}` or ""
+		local keys: string = `mode = "{event.call}", queue = {event.queue}{rate}{timeout}{fields}`
 		local taken: string = Emit.parameters(body, Contract.message)
 
 		table.insert(self._functions, `local function read{label}({taken}): (number, number)\n{body}end\n`)
-		self._messages[inId] =
-			`\{ name = "{path}", kind = "event", mode = "{event.call}", queue = {event.queue}{rate}, read = read{label} }`
+		self._messages[inId] = `\{ name = "{path}", kind = "event", {keys}, read = read{label} }`
 	end
 
 	-- A server listener and a server iterator take the player before the values
@@ -221,6 +254,8 @@ function Messages.walk(self: Targets, event: Event, fires: boolean, hears: boole
 	return {
 		id = inId,
 		out = outId,
+		stream = stream,
+		delta = delta,
 		label = label,
 		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),
@@ -232,27 +267,33 @@ end
 
 --[[
     Walks one function through the emitter for one side: the call, slot
-    first after the id, which the client writes and the server reads into
-    the runtime's call; and the reply, whose returns follow the status
-    only when it is ok, which the server writes and the client reads into
-    the runtime's reply, or its refused. Both are walked on both sides
+    first after the id, which the side its from names writes and the
+    other reads into the runtime's call; and the reply, whose returns
+    follow the status only when it is ok, which the answering side writes
+    and the calling side reads into the runtime's reply, or its refused.
+    Both are walked on both sides
 --]]
 
 function Messages.exchange(self: Targets, declaration: Function): Exchanged
 	local server: boolean = self._server
+	local reversed: boolean = declaration.from == "Server"
+	local answers: boolean = reversed ~= server
 	local path: string = declaration.path :: string
 	local label: string = path:gsub("%.", "_")
 	local width: number = Sizes.idBytes(server and self._toClient or self._toServer)
-	local callId: number = declaration.toServer :: number
-	local replyId: number = declaration.toClient :: number
+	local callId: number = (reversed and declaration.toClient or declaration.toServer) :: number
+	local replyId: number = (reversed and declaration.toServer or declaration.toClient) :: number
 	local returns: (Type | Pack)? = declaration["return"]
-	local callWrite: Block, callRead: Block = Blocks.new("write", path), Blocks.new("read", path)
-	local replyWrite: Block, replyRead: Block = Blocks.new("write", path), Blocks.new("read", path)
+	local callWrite: Block, callRead: Block =
+		Blocks.new("write", path, nil, nil, self._reserve), Blocks.new("read", path)
+	local replyWrite: Block, replyRead: Block =
+		Blocks.new("write", path, nil, nil, self._reserve), Blocks.new("read", path)
 	local names: { string }, values: { string } = {}, {}
 	local results: { string }, yields: { string } = {}, {}
 	local callTrim: string? = Messages.sends(callWrite, true, width + SLOT_BYTES, declaration.data)
 	local replyTrim: string? = Messages.sends(replyWrite, true, width + SLOT_BYTES + STATUS_BYTES, returns)
 
+	Labels.open(self._label, callRead, replyRead)
 	identify(callWrite, width, callId)
 	frame(callWrite, callRead, "slot", SLOT_BYTES)
 
@@ -274,7 +315,7 @@ function Messages.exchange(self: Targets, declaration: Function): Exchanged
 
 	replyRead:open("if status == 0 then")
 
-	-- The returns are checked on every build, since a return the type cannot carry is the server's own bug
+	-- The returns are checked on every build, since a return the type cannot carry is the answering side's own bug
 	local validated: boolean = self._emitter:validating(true)
 
 	if returns then
@@ -293,17 +334,17 @@ function Messages.exchange(self: Targets, declaration: Function): Exchanged
 		replyWrite:tail(replyTrim)
 	end
 
-	returnsRead:done(`return runtime:reply({replyId}, slot, cursor, sideCursor{handed(yields)})`)
+	returnsRead:done(Labels.close(self._label, `reply({replyId}, player, slot, cursor, sideCursor{handed(yields)})`))
 	replyRead:close("end")
 
 	local annotated: { string }, types: { string } = typed(names, declaration.data)
 	local returned: { string }, returnTypes: { string } = typed(results, returns)
 
-	if server then
+	if answers then
 		local body: string =
-			callRead:done(`return runtime:call({callId}, player, slot, cursor, sideCursor{handed(values)})`)
+			callRead:done(Labels.close(self._label, `call({callId}, player, slot, cursor, sideCursor{handed(values)})`))
 		local taken: string = Emit.parameters(body, Contract.message)
-		local rate: string = typeof(declaration.rate) == "number" and `, rate = {declaration.rate}` or ""
+		local rate: string = server and typeof(declaration.rate) == "number" and `, rate = {declaration.rate}` or ""
 		local given: string = table.concat({ "slot: number", "status: number", table.unpack(returned) }, ", ")
 		local least: number, most: number = bounds(returns)
 		local shortest: number = width + SLOT_BYTES + STATUS_BYTES + math.min(least, REASON_PREFIX + REASON_MIN)
@@ -315,8 +356,9 @@ function Messages.exchange(self: Targets, declaration: Function): Exchanged
 		self._outgoing[replyId] =
 			`\{ name = "{path}", kind = "reply", reliable = true, minBytes = {shortest}, maxBytes = {longest} }`
 	else
-		local body: string =
-			replyRead:done(`return runtime:refused({replyId}, slot, packet, cursor, sideCursor, length)`)
+		local body: string = replyRead:done(
+			Labels.close(self._label, `refused({replyId}, player, slot, status, packet, cursor, sideCursor, length)`)
+		)
 		local taken: string = Emit.parameters(body, Contract.message)
 		local promise: string = declaration.yield == "Promise" and ", promise = Promise" or ""
 		local given: string = table.concat({ "slot: number", table.unpack(annotated) }, ", ")
@@ -337,10 +379,12 @@ function Messages.exchange(self: Targets, declaration: Function): Exchanged
 	local heard: { string } = table.clone(annotated)
 	local tuple: { string } = { "boolean", table.unpack(returnTypes) }
 
-	table.insert(heard, 1, "player: Player | Bot")
+	if server then
+		table.insert(heard, 1, "player: Player | Bot")
+	end
 
 	return {
-		id = server and callId or replyId,
+		id = answers and callId or replyId,
 		label = label,
 		typed = table.concat(annotated, ", "),
 		arguments = table.concat(names, ", "),

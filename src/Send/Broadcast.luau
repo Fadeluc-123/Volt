@@ -18,19 +18,21 @@ type State = Types.State
     Copies what a broadcast wrote to the scratch state into every
     target's state, or into those listed or set, or into all but one,
     skipping one who has left or whose handshake failed; then empties the
-    scratch state, and only then reports a message a copy dropped
+    scratch state, and only then reports a message a copy dropped. An
+    ordered event's copy carries each target's own next sequence, written
+    over the scratch one where the message keeps it
 --]]
 
-function Broadcast.broadcast(self: Send, targets: { [any]: any }?, except: any?)
+function Broadcast.broadcast(self: Send, targets: { [any]: any }?, except: any?, id: number?, sequence: number?)
 	if targets then
 		-- A list carries its players as values and a set as keys
 		for key, value in targets do
-			self:_copy(self._states[typeof(key) == "number" and value or key])
+			self:_copy(self._states[typeof(key) == "number" and value or key], id, sequence)
 		end
 	else
 		for target, state: State in self._states do
 			if target ~= except then
-				self:_copy(state)
+				self:_copy(state, id, sequence)
 			end
 		end
 	end
@@ -40,7 +42,7 @@ function Broadcast.broadcast(self: Send, targets: { [any]: any }?, except: any?)
 end
 
 -- Appends the scratch state's bytes, slots and marks to one target's state as one message of its own
-function Broadcast._copy(self: Send, state: State?)
+function Broadcast._copy(self: Send, state: State?, id: number?, sequence: number?)
 	if not state or state.refused then
 		return
 	end
@@ -58,6 +60,10 @@ function Broadcast._copy(self: Send, state: State?)
 	self.current = was
 
 	buffer.copy(out, offset, scratch.out, 0, scratch.cursor)
+
+	if id and sequence then
+		buffer.writeu16(out, offset + sequence, States.next(state, id))
+	end
 
 	for index = 1, scratch.sideCursor - 1 do
 		state.side[state.sideCursor] = scratch.side[index]

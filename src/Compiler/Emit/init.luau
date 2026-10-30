@@ -17,8 +17,11 @@ local Collections = require("./Emit/Collections")
 local Composites = require("./Emit/Composites")
 local Contract = require("./Config/Contract")
 local Expressions = require("./Emit/Expressions")
+local Frames = require("./Emit/Frames")
+local Instances = require("./Emit/Instances")
 local Parser = require("./Parser")
 local Primitives = require("./Config/Primitives")
+local Replication = require("./Emit/Replication")
 local Roblox = require("./Emit/Roblox")
 local Scalars = require("./Emit/Scalars")
 local Schema = require("./Config/Types/Schema")
@@ -191,7 +194,9 @@ end
 
 --[[
     Walks one type on both sides. value is the write side's expression
-    for it, hint names the read side's local, path names it in a failure
+    for it, hint names the read side's local, path names it in a failure.
+    A reference is walked as what it names, or through its pair, but a
+    @dictionary one is walked as its id, once its value has a local
 --]]
 
 function Emit.type(self: Self, node: Type, write: Block, read: Block, value: string, hint: string, path: string): string
@@ -199,9 +204,9 @@ function Emit.type(self: Self, node: Type, write: Block, read: Block, value: str
 		local target: TypeDeclaration = node.target :: TypeDeclaration
 		if Sizes.shared(target) then
 			return self:call(target, write, read, value, hint)
+		elseif not Sizes.dictionary(target) then
+			return self:type(target.type, write, read, value, hint, path)
 		end
-
-		return self:type(target.type, write, read, value, hint, path)
 	end
 
 	-- A literal reads its value once, in its one comparison, so it never takes the local the rule below gives
@@ -245,6 +250,8 @@ function Emit.type(self: Self, node: Type, write: Block, read: Block, value: str
 		return self:union(node, write, read, value, hint, path)
 	elseif node.kind == "array" then
 		return self:array(node, write, read, value, hint, path)
+	elseif node.kind == "reference" then
+		return self:dictionary(node.target :: TypeDeclaration, write, read, value, hint, path)
 	end
 
 	return self:map(node, write, read, value, hint, path)
@@ -297,11 +304,11 @@ function Emit.constant(self: Self, key: string, hint: string, render: (string) -
 	return name
 end
 
-local _: Types.Own, _: Types.Scalars, _: Types.RobloxTypes, _: Types.Composites, _: Types.Collections =
-	Emit, Scalars, Roblox, Composites, Collections
+local _: Types.Own, _: Types.Scalars, _: Types.RobloxTypes, _: Types.Frames, _: Types.Instances, _: Types.Composites, _: Types.Collections, _: Types.Replication =
+	Emit, Scalars, Roblox, Frames, Instances, Composites, Collections, Replication
 
 -- Each kind of type is walked by the methods of one sibling file, and a name defined twice is a bug
-local parts: { any } = { Scalars, Roblox, Composites, Collections }
+local parts: { any } = { Scalars, Roblox, Frames, Instances, Composites, Collections, Replication }
 
 for _, part in parts do
 	for name: string, method in part do

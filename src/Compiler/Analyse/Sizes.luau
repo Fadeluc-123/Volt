@@ -27,9 +27,9 @@ export type Size = { min: number, max: number, bits: number, slots: number }
 -- Named types being sized right now, so a reference back into one stops
 local visiting: { [TypeDeclaration]: boolean } = {}
 
--- The bytes a vector or CFrame component takes when the type names none
+-- The bytes a Roblox type's component takes when the type names none
 local COMPONENT_BYTES: number = Primitives[Wire.component].bytes :: number
-local COMPONENT: Size = { min = COMPONENT_BYTES, max = COMPONENT_BYTES, bits = 0, slots = 0 }
+local DICTIONARY_BYTES: number = Wire.dictionaryBytes
 
 function Sizes.fixed(bytes: number): Size
 	return { min = bytes, max = bytes, bits = 0, slots = 0 }
@@ -58,14 +58,19 @@ function Sizes.isUnitEnum(node: Type): boolean
 	return actual.kind == "enum" and actual.tag == nil
 end
 
+-- Whether a named type is @dictionary, so every value of it travels as its id
+function Sizes.dictionary(target: TypeDeclaration): boolean
+	return target.attributes ~= nil and target.attributes.dictionary == true
+end
+
 --[[
     Whether a named type is generated as one function pair that every
     reference calls, rather than inlined at each: when it is exported or
-    referenced more than once
+    referenced more than once, and never when it is @dictionary
 --]]
 
 function Sizes.shared(target: TypeDeclaration): boolean
-	return target.export or (target.references or 0) > 1
+	return not Sizes.dictionary(target) and (target.export or (target.references or 0) > 1)
 end
 
 --[[
@@ -195,24 +200,37 @@ local function repeated(range: Range?, entry: Size): Size
 end
 
 --[[
-    A Roblox type by its row: a vector as its components, a CFrame as three
-    position and three rotation components, an aligned one as a byte and
-    the position, an instance as a slot, an enum item as its name and two
-    bytes, and the rest as their fixed bytes
+    A Roblox type by its row: a value built from components as each one's
+    argument, a CFrame or a Ray as three of its first argument and three of
+    its second, a Region3 as six, a rotation-first CFrame as its rotation's
+    bytes and the position, an instance as a slot, an enum item as its name
+    and two bytes, and the rest as their fixed bytes
 --]]
 
 local function roblox(node: Roblox): Size
 	local row = Roblox[node.name]
 	local generics: { Type } = node.generics or {}
-	local component: Size = generics[1] and Sizes.size(generics[1]) or COMPONENT
+	local widths: { number } = {} -- The bytes a number of each type argument takes
+
+	for index: number = 1, row.generics or 0 do
+		widths[index] = generics[index] and Sizes.size(generics[index]).min or COMPONENT_BYTES
+	end
 
 	if row.axes then
-		return Sizes.fixed(#row.axes * component.min)
-	elseif node.name == "CFrame" then
-		local rotation: Size = generics[2] and Sizes.size(generics[2]) or COMPONENT
-		return Sizes.fixed(3 * component.min + 3 * rotation.min)
-	elseif node.name == "AlignedCFrame" then
-		return Sizes.fixed(1 + 3 * component.min)
+		local arguments: { number } = row.arguments or {}
+		local total: number = 0
+
+		for index: number in row.axes do
+			total += widths[arguments[index] or 1]
+		end
+
+		return Sizes.fixed(total)
+	elseif node.name == "CFrame" or node.name == "Ray" then
+		return Sizes.fixed(3 * widths[1] + 3 * widths[2])
+	elseif node.name == "Region3" then
+		return Sizes.fixed(6 * widths[1])
+	elseif row.rotation then
+		return Sizes.fixed(row.rotation + 3 * widths[1])
 	elseif row.slots then
 		return { min = 0, max = 0, bits = 0, slots = row.slots }
 	elseif node.name == "EnumItem" then
@@ -304,6 +322,8 @@ function Sizes.size(node: Type | Pack): Size
 	local target: TypeDeclaration? = node.target
 	if not target or visiting[target] then
 		return Sizes.fixed(0)
+	elseif Sizes.dictionary(target) then
+		return Sizes.fixed(DICTIONARY_BYTES)
 	end
 
 	visiting[target] = true
@@ -315,6 +335,25 @@ function Sizes.size(node: Type | Pack): Size
 	if Sizes.shared(target) then
 		local low: number, high: number = Sizes.block(size)
 		return { min = low, max = high, bits = 0, slots = size.slots }
+	end
+
+	return size
+end
+
+-- A @delta event's payload: a mask bit per field of its struct, each field a block that only its bit sends
+function Sizes.delta(node: Type | Pack): Size
+	local actual: Type | Pack = node.kind == "reference" and Sizes.resolved(node) or node
+	if actual.kind ~= "struct" then
+		return Sizes.size(actual) -- Refused by analysis, so sized as it is written
+	end
+
+	local size: Size = Sizes.fixed(0)
+	for _, field: Field in actual.fields do
+		local inner: Size = Sizes.size(field.type)
+
+		size.max += select(2, Sizes.block(inner))
+		size.bits += 1
+		size.slots += inner.slots
 	end
 
 	return size

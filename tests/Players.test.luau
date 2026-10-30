@@ -97,6 +97,24 @@ describe("Players", function ()
 		expect(kept.unreliable._states[alice]).is(nil)
 	end)
 
+	test("a fire at no player raises and leaves nothing behind for the next broadcast to send", function ()
+		local mock: Mock = Volt.mock(task.spawn)
+		local _, transport = mock:join("Alice")
+		local server: any = serve("Broadcasts", mock)
+		local client: any = Generated.module("Client", MODULES.Broadcasts.client, transport)
+		local heard: { number } = {}
+
+		client.Damage.on(function (hit: Hit)
+			table.insert(heard, hit.amount)
+		end)
+
+		local fired: boolean = pcall(server.Damage.fire, nil, { target = 1, amount = 1 })
+		server.Damage.fireAll({ target = 1, amount = 2 })
+		held(mock)
+
+		expect(`{fired} {table.concat(heard, ",")}`).is("false 2")
+	end)
+
 	test(
 		"reliable fires before a client starts arrive in order after its handshake, and unreliable ones never",
 		function ()

@@ -13,6 +13,7 @@ local task = require("@lune/task")
 local Suite = require("./Suite")
 local Generated = require("./Generated")
 local handshake = require("./Handshake")
+local packet = require("./Packet")
 local Volt = require("@volt")
 local Types = require("@volt/Config/Types/Runtime")
 
@@ -47,15 +48,6 @@ local MAX_PACKETS: number = 3 -- Packets a player may send a second
 local MAX_OUTGOING: number = 64 -- Bytes a player's frame may hold before the message past it is dropped
 local INPUT_RATE: number = 120 -- What Events.volt leaves Input at, the file's default
 local ECHO_RATE: number = 60 -- What Functions.volt leaves Echo at, the file's default
-
--- A packet from a flat list of id and value bytes
-local function packet(bytes: { number }): buffer
-	local out: buffer = buffer.create(#bytes)
-	for index: number, byte: number in bytes do
-		buffer.writeu8(out, index - 1, byte)
-	end
-	return out
-end
 
 -- A packet of two others, one after the other
 local function joined(first: buffer, second: buffer): buffer

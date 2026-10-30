@@ -3,6 +3,10 @@
 	"servePort": 34882,
 	"tree": {
 		"$className": "DataModel",
+		"Workspace": {
+			"$className": "Workspace",
+			"$properties": { "StreamingEnabled": true }
+		},
 		"ReplicatedStorage": {
 			"Packages": {
 				"$className": "Folder",

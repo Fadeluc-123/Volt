@@ -24,6 +24,7 @@ type Fields = {
 	path: string,
 	out: string,
 	first: string?,
+	head: string?,
 	allocate: string,
 	slot: string,
 	refuse: string,
@@ -77,14 +78,20 @@ end
     A root block for one generated function, or with a parent a child of
     it: an optional payload, a variant body or a loop iteration whose
     lines land in the parent's tail once it is done. A child opened over a
-    region fills bytes its parent already took or checked
+    region fills bytes its parent already took or checked. A root may be
+    given the names a schema's module adds to those every module reaches
+    for, so no local it declares shadows one
 --]]
 
-function Blocks.new(side: Side, path: string, parent: Self?, region: Region?): Self
+function Blocks.new(side: Side, path: string, parent: Self?, region: Region?, reserve: { string }?): Self
 	local names: { [string]: boolean } = parent and parent._names or {}
 
 	if not parent then
 		for _, name: string in Reserved.generated do
+			names[name] = true
+		end
+
+		for _, name: string in reserve or {} do
 			names[name] = true
 		end
 	end
@@ -94,6 +101,7 @@ function Blocks.new(side: Side, path: string, parent: Self?, region: Region?): S
 		path = path,
 		out = region and region.out or "packet", -- The buffer the fixed bytes are read from, or written to once allocated
 		first = nil :: string?, -- What a message's writer calls for its first bytes, which begins the message; nil takes them from allocate
+		head = nil :: string?, -- A statement the block opens with, ahead of its allocation or bounds check
 		allocate = parent and parent.allocate or "allocate", -- What the write side calls for its bytes
 		slot = parent and parent.slot or "slot", -- What the write side calls to store a side-array value
 		refuse = parent and parent.refuse or "refuse", -- What the write side calls to refuse a value and undo the message
@@ -311,8 +319,8 @@ function Blocks.extend(self: Self, hint: string, path: string, bytes: string, pa
 end
 
 --[[
-    Closes the block: one allocation or bounds check for its fixed bytes
-    at the top unless a region holds them, the flag bytes stored after
+    Closes the block: its head, then one allocation or bounds check for
+    its fixed bytes unless a region holds them, the flag bytes stored after
     those bytes are written on the write side and the offset or cursor
     stepped past them, then the tail, then the final statement as a
     paragraph of its own. A child's text lands in its parent's tail
@@ -325,6 +333,10 @@ function Blocks.done(self: Self, final: string?): string
 	local statements: { string } = {}
 	local bytes: number = self._bytes
 	local taken: number = self._held or bytes -- A root that holds takes the writer's largest size, not its fixed bytes
+
+	if self.head then
+		table.insert(statements, Blocks.indent(self._indent, self.head))
+	end
 
 	-- A region's bytes were taken or checked by the parent, so only a block of its own opens with a line
 	if taken > 0 and not self._region and self.side == "write" then

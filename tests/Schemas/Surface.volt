@@ -20,8 +20,15 @@ event BothManySync { from: Both, type: Reliable, call: ManySync }
 event BothManyAsync { from: Both, type: Reliable, call: ManyAsync }
 event BothPolling { from: Both, type: Reliable, call: Polling }
 
+-- A function the client calls and one the server calls
 namespace Ns {
 	function Ask {
+		data: u8,
+		return: u8,
+	}
+
+	function Tell {
+		from: Server,
 		data: u8,
 		return: u8,
 	}

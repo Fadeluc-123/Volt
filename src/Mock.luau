@@ -2,7 +2,8 @@
     The in-memory transport pair a test drives instead of the remotes: a
     server side served through a hub of its own, a client side per joined
     player, packets copied at fire time and delivered on step, one
-    Heartbeat per step, a player list with join, leave and a kick, and bots
+    Heartbeat per step, a player list with join, leave and a kick, bots,
+    the server's clock, and instance ids a test can hide from the clients
 --]]
 
 --!strict
@@ -30,6 +31,7 @@ type Packet = { player: any, packet: buffer, side: { any }? } -- Queued for the 
 type Fields = {
 	server: Transport,
 	players: { Player },
+	time: number,
 	_spawn: Spawn,
 	_present: { [Player]: boolean },
 	_toServer: { Packet },
@@ -41,6 +43,11 @@ type Fields = {
 	_removing: { (player: any) -> () },
 	_joined: number,
 	_hub: Hub,
+	_ids: { [any]: number },
+	_instances: { any },
+	_hidden: { [any]: boolean },
+	_revealed: { any },
+	_resolved: { [Player]: (id: number) -> () },
 }
 
 local SCOPE: string = "Mock" -- The one scope a mock's hub serves, since two scopes cannot share a mock
@@ -101,11 +108,30 @@ function Mock.new(spawn: Spawn): Self
 		present = function (player: any): boolean
 			return self._present[player] == true
 		end,
+
+		-- The server's clock is whatever the test set
+		now = function (): number
+			return self.time
+		end,
+
+		-- An instance's id is the next one the first time a message names it, then the same while the mock lives
+		reference = function (instance: any): number
+			local id: number? = self._ids[instance]
+			if id then
+				return id
+			end
+
+			table.insert(self._instances, instance)
+			self._ids[instance] = #self._instances
+
+			return #self._instances
+		end,
 	})
 
 	self = setmetatable({
 		server = server,
 		players = {} :: { Player },
+		time = 0, -- What the server transport's now returns, which a test sets to stamp what the server sends
 		_spawn = spawn,
 		_present = {} :: { [Player]: boolean },
 		_toServer = {} :: { Packet },
@@ -117,6 +143,11 @@ function Mock.new(spawn: Spawn): Self
 		_removing = {} :: { (player: any) -> () },
 		_joined = 0, -- Players so far, which numbers the next one
 		_hub = hub,
+		_ids = {} :: { [any]: number }, -- The id the server gave each instance it named
+		_instances = {} :: { any }, -- Each id's instance, the ids numbered from 1 in the order they were given
+		_hidden = {} :: { [any]: boolean }, -- The instances no client sees, as if they had not streamed in
+		_revealed = {} :: { any }, -- The instances revealed since the last step, whose ids the clients hear at the next
+		_resolved = {} :: { [Player]: (id: number) -> () }, -- What each client runtime hears an arrival on, by its player
 	}, Mock)
 
 	return self
@@ -167,6 +198,20 @@ function Mock.join(self: Self, name: string): (Player, Transport)
 			end,
 
 			spawn = self._spawn,
+
+			-- Every instance the server named is here at once, unless a test hid it
+			resolve = function (id: number): any
+				local instance: any = self._instances[id]
+				if self._hidden[instance] then
+					return nil
+				end
+
+				return instance
+			end,
+
+			resolved = function (callback: (id: number) -> ())
+				self._resolved[player] = callback
+			end,
 		}
 end
 
@@ -183,19 +228,35 @@ function Mock.leave(self: Self, player: Player)
 
 	self._present[player] = nil
 	self._clients[player] = nil
+	self._resolved[player] = nil
 end
 
 --[[
-    Delivers every packet queued in both directions to the handler on
-    the other side, dropping one from or for a player who has left, then
-    fires one Heartbeat on every runtime, where the flush happens
+    Tells every client the id of each instance revealed since the last
+    step and still visible, then delivers every packet queued in both
+    directions to the handler on the other side, dropping one from or
+    for a player who has left, then fires one Heartbeat on every runtime
 --]]
 
 function Mock.step(self: Self)
 	local toServer: { Packet }, toClient: { Packet } = self._toServer, self._toClient
 	local receive: Handler? = self._receive
+	local revealed: { any } = self._revealed
 
-	self._toServer, self._toClient = {}, {}
+	self._toServer, self._toClient, self._revealed = {}, {}, {}
+
+	for _, instance: any in revealed do
+		local id: number? = self._ids[instance]
+
+		if id and not self._hidden[instance] then
+			for _, player: Player in table.clone(self.players) do
+				local resolved: ((id: number) -> ())? = self._resolved[player]
+				if resolved then
+					resolved(id)
+				end
+			end
+		end
+	end
 
 	for _, queued: Packet in toServer do
 		if receive and self._present[queued.player] then
@@ -218,6 +279,17 @@ function Mock.step(self: Self)
 			callback()
 		end
 	end
+end
+
+-- Makes an instance invisible to every client of the mock, as if it had not streamed in; a bot still sees it
+function Mock.hide(self: Self, instance: any)
+	self._hidden[instance] = true
+end
+
+-- Makes a hidden instance visible again; each client hears its id arrive at the start of the next step
+function Mock.reveal(self: Self, instance: any)
+	self._hidden[instance] = nil
+	table.insert(self._revealed, instance)
 end
 
 -- A bot every runtime on the mock's server sets up as a player; the mock's own list, joins and leaves never see one

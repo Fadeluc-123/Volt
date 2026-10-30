@@ -9,7 +9,14 @@
 local Runtime = {}
 Runtime.__index = Runtime
 
+local Awaited = require("@self/Awaited")
 local Calls = require("@self/Calls")
+local Config = require("@self/Config/Runtime")
+local Contract = require("@self/Config/Types/Contract")
+local Delta = require("@self/Delta")
+local Dictionary = require("@self/Dictionary")
+local Fires = require("@self/Fires")
+local Handlers = require("@self/Handlers")
 local Limits = require("@self/Limits")
 local Mock = require("@self/Mock")
 local Players = require("@self/Players")
@@ -20,9 +27,12 @@ local Traffic = require("@self/Traffic")
 local Types = require("@self/Config/Types/Runtime")
 local Wrapper = require("@self/Wrapper")
 
+local CHANNEL_BYTES: number = Config.channelBytes
+
 local SERVER: string = "server" -- The one target a client's sends go to
 local MAX_OUTGOING: string = "maxOutgoing" -- The caps a dropped message's failure names
 local MAX_PACKET: string = "maxPacket"
+local DEFAULT_STREAM: number = 0 -- The byte the default reliable stream's and every unreliable packet open with
 
 export type Bot = Types.Bot
 export type Failure = Types.Failure
@@ -32,71 +42,27 @@ export type Schema = Types.Schema
 export type Spawn = Types.Spawn
 export type Stats = Types.Stats
 export type Transport = Types.Transport
-
-export type Runtime = {
-	reliable: Send.Send,
-	unreliable: Send.Send,
-	frame: number,
-	before: { [number]: Hook }, -- The hook before a send, by the id of the message sent
-	beforeSend: (name: string, hook: Hook?) -> (),
-	afterReceive: (name: string?, hook: Hook?) -> (),
-	rate: (name: string, perSecond: number, burst: number?) -> (),
-	isBot: (value: any) -> boolean,
-	target: (self: Runtime, player: any) -> boolean,
-	write: (self: Runtime, id: number, write: (...any) -> (), ...any) -> (),
-	broadcast: (self: Runtime, id: number, targets: { [any]: any }?, except: any?, write: (...any) -> (), ...any) -> (),
-	encode: (self: Runtime, name: string, write: (...any) -> (), value: any) -> (buffer, { any }?),
-	decode: (self: Runtime, read: (...any) -> (number, number, any), packet: buffer, side: { any }?) -> any,
-	deliver: (self: Runtime, id: number, player: any, cursor: number, sideCursor: number, ...any) -> (number, number),
-	on: (self: Runtime, id: number, listener: (...any) -> ()) -> () -> (),
-	iter: (self: Runtime, id: number) -> () -> ...any,
-	invoke: (self: Runtime, id: number, write: (slot: number, ...any) -> (), ...any) -> ...any,
-	handle: (self: Runtime, id: number, handler: (...any) -> ...any) -> () -> (),
-	reply: (self: Runtime, id: number, slot: number, cursor: number, sideCursor: number, ...any) -> (number, number),
-
-	call: (
-		self: Runtime,
-		id: number,
-		player: any,
-		slot: number,
-		cursor: number,
-		sideCursor: number,
-		...any
-	) -> (number, number),
-
-	refused: (
-		self: Runtime,
-		id: number,
-		slot: number,
-		packet: buffer,
-		cursor: number,
-		sideCursor: number,
-		length: number
-	) -> (number, number),
-
-	packet: (self: Runtime, player: any, packet: any, side: any) -> (),
-	flush: (self: Runtime) -> (),
-	fail: (self: Runtime, player: any, kind: string, detail: string, name: string?) -> (),
-	onFailure: (self: Runtime, handler: Failure) -> Failure,
-	stats: (self: Runtime, player: any) -> Stats,
-	onJoin: (self: Runtime, callback: (player: any) -> ()) -> () -> (),
-	onLeave: (self: Runtime, callback: (player: any) -> ()) -> () -> (),
-	onHandshake: (self: Runtime, callback: (player: any) -> ()) -> () -> (),
-	traffic: (self: Runtime, player: any) -> (number, number),
-}
+export type Runtime = Contract.Runtime
 
 type Call = Types.Call
 type Callback = Types.Callback
 type Channel = Types.Channel
 type Fields = Types.Fields
+type Fire = Types.Fire
 type Joined = Types.Joined
 type Limit = Types.Limit
-type Outgoing = Types.Outgoing
+type Profiler = Types.Profiler
 type Self = Types.Runtime
+type Waiter = Types.Waiter
 
 local Volt = {
 	version = "0.1.0", -- Shared with the compiler; a schema from another major or minor is refused at start
 }
+
+-- What a server writer of an awaited instance meets on a transport that keeps no instance references
+local function unreferenced(_: Instance): number
+	error("Volt: this transport carries no instance references", 0)
+end
 
 --[[
     Starts a runtime for a generated module's schema table over the real
@@ -122,23 +88,53 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local stats: Stats = Limits.fresh()
 	local self: Self -- The runtime, which the closures below call into once it is made
 
-	-- A message a target's frame has no room for is dropped and reported; the client's one target is nobody to name
+	-- A message a target's frame has no room for is dropped and reported, their baselines cleared before the report;
+	-- the client's one target is nobody to name
 	local function dropping(cap: string): (target: any) -> ()
 		local detail: string = `over {cap}, a message was dropped`
 
 		return function (target: any)
+			self:_forget(target)
 			self:fail(server and target or nil, "outgoing", detail)
 		end
 	end
 
-	-- The client's reliable frame must also fit what the server reads, or the server drops all of it
+	-- In a schema with a dictionary, each packet of a player's default stream follows the entries they lack
+	local fire: Fire = live.reliable
+
+	if server and schema.dictionary then
+		fire = function (target: any, packet: buffer, side: { any }?)
+			self:_lead(target)
+			live.reliable(target, packet, side)
+		end
+	end
+
+	-- In a schema with a channel every packet opens with a byte naming its stream, and a stamped server's with the time
+	local labels: { string }? = schema.streams
+	local last: number? = labels and #labels -- The highest byte a packet may open with, or nil when none opens one
+	local opening: number? = labels and DEFAULT_STREAM
+	local stamped: boolean = schema.stamp == true
+	local stamping: boolean = server and stamped
+	local profiler: Profiler? = schema.profiler -- Only in a module compiled with labels
+
+	-- The client's reliable frame, its channel byte counted, must also fit what the server reads, or it drops all of it
 	local maxOutgoing: number = options.maxOutgoing
-	local reliableCap: number = server and maxOutgoing or math.min(maxOutgoing, options.maxPacket)
+	local fits: number = options.maxPacket - (labels and CHANNEL_BYTES or 0)
+	local reliableCap: number = server and maxOutgoing or math.min(maxOutgoing, fits)
 	local reliableName: string = reliableCap < maxOutgoing and MAX_PACKET or MAX_OUTGOING
+	local budget: number = options.unreliableBudget
+
+	-- Each channel's own reliable send, by its number, opening its packets with that number
+	local streams: { Send.Send } = {}
+
+	for channel: number = 1, last or 0 do
+		streams[channel] = Send.new(live.reliable, stats, dropping(reliableName), reliableCap, nil, channel, stamping)
+	end
 
 	local fields: Fields = {
-		reliable = Send.new(live.reliable, stats, dropping(reliableName), reliableCap),
-		unreliable = Send.new(live.unreliable, stats, dropping(MAX_OUTGOING), maxOutgoing, options.unreliableBudget),
+		reliable = Send.new(fire, stats, dropping(reliableName), reliableCap, nil, opening, stamping),
+		unreliable = Send.new(live.unreliable, stats, dropping(MAX_OUTGOING), maxOutgoing, budget, opening, stamping),
+		streams = streams,
 		frame = 0, -- Counts Heartbeats, which is how a sync listener that yields across one is caught
 		before = {} :: { [number]: Hook? }, -- The hook before a send, by the id of the message sent
 
@@ -154,6 +150,20 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		rate = function (name: string, perSecond: number, burst: number?)
 			self:_rate(name, perSecond, burst)
 		end,
+
+		-- What a server's writer names an awaited instance by and a client's reader finds it by, as plain functions too
+		instanceId = live.reference or unreferenced,
+
+		instanceById = function (id: number): Instance?
+			return self:_lookup(id)
+		end,
+
+		-- What a server's writer takes a dictionary string's id from, a plain function too, and the entries by id
+		intern = function (value: string): number
+			return self:_intern(value)
+		end,
+
+		dictionary = {} :: { string }, -- The server's own, or on the client what the server has sent, never replaced
 
 		_messages = schema.messages,
 		_outgoing = schema.outgoing,
@@ -176,7 +186,7 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		_leaves = {} :: { [{}]: Callback },
 		_handshakes = {} :: { [{}]: Callback },
 		_accepted = {} :: { any }, -- Whose handshakes were accepted and not yet announced, in the order read
-		_handlers = {} :: { [number]: (...any) -> ...any }, -- The server's handler per function, by the call's id
+		_handlers = {} :: { [number]: (...any) -> ...any }, -- The handler per function this side answers, by id
 
 		-- The runtime's own failure handler until a game replaces it, a plain function so onFailure can hand it on
 		_failure = function (player: any, kind: string, detail: string)
@@ -190,6 +200,23 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		_limits = {} :: { [number]: Limit }, -- The limit of every incoming message that has one, which rate may change
 		_after = {} :: { [number]: Hook? }, -- The hook after a receive, by id, and over every message at 0
 		_hooked = false, -- Whether any hook is registered on the receive side, so an unhooked receive asks nothing
+		_lastStream = last,
+		_stamped = stamped, -- Whether a server packet opens with the server time, after any channel byte
+		_clock = stamping and live.now or nil, -- What a stamped server reads the time from, once per flush
+		_stamp = 0, -- The server time of the packet holding the message being handled, or of the queued one handed out
+		_newest = 0, -- The server time of the newest packet, which the stamp returns to once a queue is drained
+		_sequences = {} :: { [number]: number }, -- On the client, the last sequence taken of each ordered event, by id
+		_resolve = live.resolve, -- On the client, the instance an id names, or nil while it has not arrived
+		_waiters = {} :: { Waiter }, -- The messages waiting for an instance they name, in the order they were read
+		_awaited = {} :: { [number]: { Waiter } }, -- The messages waiting on each id, in the order they were read
+		_missing = {} :: { number }, -- The ids the message being read found no instance for, or one held behind another
+		_replaying = nil :: Waiter?, -- The waiting message being read again, which has waited its turn on every id
+		_ids = {} :: { [string]: number }, -- On the server, each dictionary entry's id
+		_owed = {} :: { [number]: buffer }, -- The dictionary message for each count of entries a player already holds
+		_owedTo = 0, -- How many entries those messages run to, so they are built again once the dictionary grows
+		_dictionaryBytes = schema.dictionary, -- How wide the dictionary message's id is, when the schema has one
+		_baselines = {} :: { [number]: { [string]: any } }, -- On the client, the value each @delta event last delivered
+		_profiler = profiler, -- What closes the label of a reader that raised, when the module labels its readers
 	}
 
 	-- Through a typed local, since a local assigned straight from a cast would be read as any from here on
@@ -199,6 +226,8 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	self:channels(schema.messages)
 	self:functions(schema.messages)
 	self:limits(schema.messages)
+	self:arrivals(schema.messages, live.resolved)
+	self:hear()
 
 	if server then
 		local players, added, removing = live.players, live.playerAdded, live.playerRemoving
@@ -221,24 +250,33 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		self.reliable.current = self.reliable:add(SERVER, Limits.fresh())
 		self.unreliable.current = self.unreliable:add(SERVER, Limits.fresh())
 
+		for _, stream: Send.Send in streams do
+			stream.current = stream:add(SERVER, Limits.fresh())
+		end
+
+		-- Only the default stream opens with it, and the flush sends that stream first
 		self:handshake(schema.hash)
 	end
 
-	live.receive(function (player: any, packet: buffer, side: { any }?)
+	local function receive(player: any, packet: buffer, side: { any }?)
 		self:packet(player, packet, side)
-	end)
+	end
 
 	-- Every frame counts for the yield check; every flush-th one sends, unless the game flushes by hand
 	local every: number = options.flush
 	local manual: boolean = options.manualReplication
 
-	live.heartbeat(function ()
+	local function heartbeat()
 		self.frame += 1
 
 		if not manual and self.frame % every == 0 then
 			self:flush()
 		end
-	end)
+	end
+
+	-- Labelled under the scope's name when the module asks, and otherwise handed over as they are, costing nothing
+	live.receive(profiler and self._labelled(profiler, `Volt {schema.scope} receive`, receive) or receive)
+	live.heartbeat(profiler and self._labelled(profiler, `Volt {schema.scope} flush`, heartbeat) or heartbeat)
 
 	-- The public Runtime lists no fields, so neither checker takes the instance as one
 	return self :: any
@@ -265,79 +303,18 @@ function Volt.connectBot(bot: Bot, scope: string): Transport
 end
 
 --[[
-    Fires a message the way a module built without write validation does:
-    its writer runs under pcall, so a value that raises part way through,
-    in a buffer write or a field of the wrong kind, leaves nothing of its
-    message behind and reaches whoever fired named for the message
---]]
-
-function Runtime.write(self: Self, id: number, write: (...any) -> (), ...: any)
-	local ok: boolean, message: any = pcall(write, ...)
-	if ok then
-		return
-	end
-
-	local row: Outgoing = self._outgoing[id]
-	local send: Send.Send = row.reliable and self.reliable or self.unreliable
-
-	error(send:undo(row.name, message), 0)
-end
-
---[[
-    Writes a message once, to the scratch states, and copies it to every
-    target, or to those listed or set, or to all but one, unless the hook
-    before its send vetoes it. Every broadcast variant of the generated
-    API is this one call with the message's writer and its arguments
---]]
-
-function Runtime.broadcast(
-	self: Self,
-	id: number,
-	targets: { [any]: any }?,
-	except: any?,
-	write: (...any) -> (),
-	...: any
-)
-	local hook: Hook? = self.before[id]
-	if hook and not hook(targets, ...) then
-		return
-	end
-
-	-- One listed or set whom the transport lists and this runtime has not set up yet is set up first, as a fire does
-	local present: ((player: any) -> boolean)? = self._present
-
-	if targets and present then
-		for key: any, value: any in targets do
-			local player: any = typeof(key) == "number" and value or key
-
-			if not self._players[player] and present(player) then
-				self:_join(player)
-			end
-		end
-	end
-
-	self:target(nil)
-
-	-- An unchecked writer that raised would leave the scratch state dirty for the next broadcast
-	if self._checked then
-		write(...)
-	else
-		self:write(id, write, ...)
-	end
-
-	local send: Send.Send = self._outgoing[id].reliable and self.reliable or self.unreliable
-	send:broadcast(targets, except)
-end
-
---[[
-    Fails the calls past their deadline, sends every target's accumulated
-    bytes with each send's drops reported, then announces every handshake
-    accepted before it began, in the order read, for each player still
-    here; the Heartbeat does this every flush-th frame
+    Fails the calls and drops the awaited messages past their deadlines,
+    sends every target's accumulated bytes, the default stream's first,
+    then each channel's in order, then the unreliable, with each send's
+    drops reported, then announces every handshake accepted before it
+    began, in the order read, for each player still here; the Heartbeat
+    does this every flush-th frame
 --]]
 
 function Runtime.flush(self: Self)
 	local accepted: { any }? = nil
+	local clock: (() -> number)? = self._clock
+	local stamp: number? = clock and clock() -- The time every packet of this flush opens with, on a stamped server
 
 	-- Taken first, so a handshake accepted while this runs is left for a later flush and nobody is announced twice
 	if self._accepted[1] ~= nil then
@@ -346,8 +323,14 @@ function Runtime.flush(self: Self)
 	end
 
 	self:_sweep()
-	self.reliable:flush()
-	self.unreliable:flush()
+	self:_expire()
+	self.reliable:flush(stamp)
+
+	for _, stream: Send.Send in self.streams do
+		stream:flush(stamp)
+	end
+
+	self.unreliable:flush(stamp)
 
 	if accepted then
 		for _, player: any in accepted do
@@ -358,11 +341,14 @@ function Runtime.flush(self: Self)
 	end
 end
 
-local _: Types.Own, _: Types.Calls, _: Types.Limits, _: Types.Players, _: Types.Receive, _: Types.Wrapper =
-	Runtime, Calls, Limits, Players, Receive, Wrapper
+local _: Types.Own, _: Types.Awaited, _: Types.Calls, _: Types.Fires = Runtime, Awaited, Calls, Fires
+local _: Types.Delta, _: Types.Dictionary = Delta, Dictionary
+local _: Types.Handlers, _: Types.Limits, _: Types.Players = Handlers, Limits, Players
+local _: Types.Receive, _: Types.Wrapper = Receive, Wrapper
 
--- The receive side, the calls, the limits, the players and the wrapper's hooks are a sibling each; a name defined twice is a bug
-local parts: { any } = { Calls, Limits, Players, Receive, Wrapper }
+-- The awaited instances, each side of a call, the baselines, the dictionary, the fires, the receive side, the limits,
+-- the players and the wrapper's hooks are a sibling each, and a name defined twice is a bug
+local parts: { any } = { Awaited, Calls, Delta, Dictionary, Fires, Handlers, Limits, Players, Receive, Wrapper }
 
 for _, part in parts do
 	for name: string, method in part do

@@ -1,7 +1,8 @@
 --[[
     The plain functions over one send state that a send's files share: a
-    blank state for a target, a state emptied for the next frame, and one
-    returned to where its last message began, with that message uncounted
+    blank state for a target, a state emptied for the next frame, one
+    returned to where its last message began, with that message uncounted,
+    and the next sequence of an ordered event sent to the state's target
 --]]
 
 --!strict
@@ -14,6 +15,7 @@ type State = Types.State
 type Stats = Types.Stats
 
 local INITIAL_BYTES: number = Config.initialBytes
+local SEQUENCES: number = Config.sequences
 
 local States = {}
 
@@ -59,6 +61,17 @@ function States.rollback(state: State, total: Stats)
 		stats.messagesOut -= 1
 		total.messagesOut -= 1
 	end
+end
+
+-- The next sequence of an ordered event to the state's target: 1 first, then one more, wrapping to 0 after 65535
+function States.next(state: State, id: number): number
+	local sequences: { [number]: number } = state.sequences or {}
+	local sequence: number = ((sequences[id] or 0) + 1) % SEQUENCES
+
+	sequences[id] = sequence
+	state.sequences = sequences
+
+	return sequence
 end
 
 return States

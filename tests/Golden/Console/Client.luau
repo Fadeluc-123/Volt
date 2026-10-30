@@ -121,7 +121,7 @@ local function writeDecree_run(slot: number, text: string)
 	trimReliable(offset)
 end
 
-local function readDecree_run(_: (Player | Bot)?, packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number)
+local function readDecree_run(player: (Player | Bot)?, packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Decree.run: truncated")
 	end
@@ -136,10 +136,10 @@ local function readDecree_run(_: (Player | Bot)?, packet: buffer, cursor: number
 		cursor, sideCursor, text = readDecree_Line(packet, cursor, side, sideCursor, length)
 		cursor, sideCursor, kind = readDecree_Kind(packet, cursor, side, sideCursor, length)
 
-		return runtime:reply(2, slot, cursor, sideCursor, text, kind)
+		return runtime:reply(2, player, slot, cursor, sideCursor, text, kind)
 	end
 
-	return runtime:refused(2, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(2, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 runtime = Volt.start({

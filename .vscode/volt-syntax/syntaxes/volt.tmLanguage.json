@@ -10,6 +10,7 @@
 		{ "include": "#primitive" },
 		{ "include": "#key" },
 		{ "include": "#keyword" },
+		{ "include": "#channel" },
 		{ "include": "#enumItem" },
 		{ "include": "#roblox" },
 		{ "include": "#boolean" },
@@ -31,14 +32,15 @@
 		},
 		"key": { "match": "[A-Za-z_][A-Za-z0-9_]*(?=\\s*:)", "name": "variable.other.property" },
 		"keyword": { "match": "(?:option|export|type|struct|enum|namespace|event|set|function)\\b", "name": "keyword.other" },
+		"channel": { "match": "\\bchannel(?=[ \\t]+[A-Za-z_])", "name": "keyword.other" },
 		"enumItem": { "match": "Enum\\s*\\.\\s*[A-Za-z_][A-Za-z0-9_]*", "name": "support.class" },
 		"roblox": {
-			"match": "(?:Vector3|Vector2|CFrame|AlignedCFrame|Color3|BrickColor|DateTime|DateTimeMillis|Instance|StreamedInstance|Enum|EnumItem)\\b",
+			"match": "(?:Vector3|Vector2|CFrame|AlignedCFrame|QuaternionCFrame|Color3|BrickColor|DateTime|DateTimeMillis|Instance|StreamedInstance|AwaitedInstance|Enum|EnumItem|UDim2|NumberRange|Rect|Ray|Region3)\\b",
 			"name": "support.class"
 		},
 		"boolean": { "match": "(?:true|false)\\b", "name": "constant.language.boolean" },
 		"value": {
-			"match": "(?<=[:=])\\s*(?:camel|pascal|snake|unlimited|coroutine|promise|Client|Server|Both|Reliable|Unreliable|SingleSync|SingleAsync|ManySync|ManyAsync|Polling|Coroutine|Promise)\\b",
+			"match": "(?<=[:=])\\s*(?:camel|pascal|snake|unlimited|coroutine|promise|Client|Server|Both|Reliable|Unreliable|OrderedUnreliable|SingleSync|SingleAsync|ManySync|ManyAsync|Polling|Coroutine|Promise)\\b",
 			"name": "constant.language"
 		},
 		"name": { "match": "[A-Za-z_][A-Za-z0-9_]*" },

@@ -1,9 +1,9 @@
 --[[
-    The Roblox type walks, merged onto the emitter: a vector or CFrame
-    through its numeric type arguments, a colour as three channels, a
-    brick colour and a typed enum item by number, a date by its
-    timestamp, an untyped item by its enum's name and number, and an
-    instance as a side-array slot
+    The Roblox type walks, merged onto the emitter: a value built from its
+    components, a ray or a region through its numeric type arguments, a
+    colour as three channels, a brick colour and a typed enum item by
+    number, a date by its timestamp, and an untyped item by its enum's name
+    and number; CFrames and instances are siblings'
 --]]
 
 --!strict
@@ -25,7 +25,7 @@ type Roblox = Schema.Roblox
 type Type = Schema.Type
 
 local CHANNELS: { string } = { "R", "G", "B" }
-local TURN: string = "2 * math.pi" -- The span an integer rotation component is scaled from
+local CORNERS: { string } = { "Min", "Max" } -- A Region3's corners, the half size taken from its centre and added
 
 -- The primitives Roblox types are carried as when they name none, as the nodes the walk takes
 local COMPONENT: Type = { kind = "primitive", name = Wire.component, start = 0, finish = 0 }
@@ -38,13 +38,41 @@ local ENUM_NAME: Type = {
 	finish = 0,
 }
 
-local minus = Expressions.minus
-local plus = Expressions.plus
-local group = Expressions.group
 local refusal = Expressions.refusal
 local refuse = Expressions.refuse
-local writeNumber = Expressions.writeNumber
-local readNumber = Expressions.readNumber
+
+-- A Vector3 of a type argument, which a ray's two vectors and a region's two corners are walked as
+local function vector(argument: Type?): Type
+	return { kind = "roblox", name = "Vector3", generics = { argument or COMPONENT }, start = 0, finish = 0 }
+end
+
+-- Whether a number type can carry an infinity: a float with either end of its range open
+local function open(node: Type): boolean
+	local range: Range? = (node :: any).range
+	return Primitives[(node :: any).name].float == true and not (range and range.min and range.max)
+end
+
+-- Each component of each Vector3, as the expressions that read them
+local function spread(vectors: { string }): { string }
+	local numbers: { string } = {}
+	for _, expression: string in vectors do
+		for _, axis: string in Roblox.Vector3.axes :: { string } do
+			table.insert(numbers, `{expression}.{axis}`)
+		end
+	end
+
+	return numbers
+end
+
+-- Refuses any of the numbers being infinite, which a number carried as an open float can be
+local function infinite(block: Block, numbers: { string }, message: string)
+	local terms: { string } = {}
+	for _, number: string in numbers do
+		table.insert(terms, `math.abs({number}) == math.huge`)
+	end
+
+	refuse(block, table.concat(terms, " or "), message)
+end
 
 --[[
     A Roblox type as its components. The writer refuses the wrong class,
@@ -64,7 +92,9 @@ function RobloxTypes.roblox(
 	local name: string = node.name
 	local row = Roblox[name]
 
-	if row.slots then
+	if row.awaited then
+		return self:awaited(node, write, read, value, hint, path)
+	elseif row.classed then
 		return self:instance(node, write, read, value, hint, path)
 	end
 
@@ -77,20 +107,24 @@ function RobloxTypes.roblox(
 	local result: string = read:name(hint)
 	local known: boolean = self._known
 
+	-- Every walk below takes the value as its class, so a vector nested in it adds no second class check
 	self._known = true
 
 	if row.axes then
-		local parts: { string } = {}
-		for _, axis: string in row.axes do
-			local component: Type = generics[1] or COMPONENT
-			table.insert(parts, self:type(component, write, read, `{value}.{axis}`, `{hint}{axis}`, `{path}.{axis}`))
-		end
-
-		read:line(`local {result}: {name} = {name}.new({table.concat(parts, ", ")})`)
+		self:components(node, write, read, value, hint, path, result)
 	elseif name == "CFrame" then
 		self:cframe(node, write, read, value, hint, path, result)
-	elseif name == "AlignedCFrame" then
-		self:aligned(node, write, read, value, hint, path, result)
+	elseif name == "Ray" then
+		local origin: string =
+			self:type(vector(generics[1]), write, read, `{value}.Origin`, `{hint}Origin`, `{path}.Origin`)
+		local direction: string =
+			self:type(vector(generics[2]), write, read, `{value}.Direction`, `{hint}Direction`, `{path}.Direction`)
+
+		read:line(`local {result}: Ray = Ray.new({origin}, {direction})`)
+	elseif name == "Region3" then
+		self:corners(node, write, read, value, hint, path, result)
+	elseif row.rotation then
+		self:rotated(node, write, read, value, hint, path, result)
 	elseif name == "Color3" then
 		local index: number = write:reserve(#CHANNELS)
 		local at: number = read:reserve(#CHANNELS)
@@ -158,11 +192,14 @@ function RobloxTypes.roblox(
 end
 
 --[[
-    A CFrame as a position and a rotation vector, the axis times the
-    angle, each component carried as the named numeric type
+    A value built from the components its row names, each a property
+    path carried as the type argument the row gives it, then rebuilt with
+    its constructor. A range's reader refuses a minimum above its maximum,
+    and a rectangle of an open float is refused when a component is
+    infinite, by a writer that checks and by every reader
 --]]
 
-function RobloxTypes.cframe(
+function RobloxTypes.components(
 	self: Emit,
 	node: Roblox,
 	write: Block,
@@ -172,75 +209,50 @@ function RobloxTypes.cframe(
 	path: string,
 	result: string
 )
+	local name: string = node.name
+	local row = Roblox[name]
 	local generics: { Type } = node.generics or {}
-	local position: Type = generics[1] or COMPONENT
-	local rotation: Type = generics[2] or COMPONENT
-	local axis: string = write:name(`{hint}Axis`)
-	local angle: string = write:name(`{hint}Angle`)
-	local axes: { string } = Roblox.Vector3.axes :: { string }
+	local arguments: { number } = row.arguments or {}
+	local finite: boolean = name == "Rect" and open(generics[1] or COMPONENT)
+	local checked: { string } = {}
 	local parts: { string } = {}
 
-	for _, component: string in axes do
-		local place: string = `{value}.{component}`
-		table.insert(parts, self:type(position, write, read, place, `{hint}{component}`, `{path}.{component}`))
+	for index: number, axis: string in row.axes :: { string } do
+		local bare: string = axis:gsub("%.", "")
+		local place: string = `{value}.{axis}`
+
+		-- A component the writer checks for infinity is read into the local the walk would give it, to check it there
+		if finite and self._validate then
+			place = write:name(`{hint}{bare}`)
+			write:line(`local {place} = {value}.{axis}`)
+			table.insert(checked, place)
+		end
+
+		local component: Type = generics[arguments[index] or 1] or COMPONENT
+		table.insert(parts, self:type(component, write, read, place, `{hint}{bare}`, `{path}.{axis}`))
 	end
 
-	self.helpers.cframe = true
-	write:line(`local {axis}: Vector3, {angle}: number = axisAngle({value})`)
-
-	for _, component: string in axes do
-		local turn: string = `{axis}.{component} * {angle}`
-		local turnHint: string = `{hint}Rotation{component}`
-		table.insert(parts, self:turn(rotation, write, read, turn, turnHint, `{path}.Rotation.{component}`))
+	if #checked > 0 then
+		infinite(write, checked, `{path}: expected {Print.type(node)}`)
 	end
 
-	read:line(`local {result}: CFrame = cframe({table.concat(parts, ", ")})`)
+	if finite then
+		infinite(read, parts, `{path}: out of range`)
+	elseif name == "NumberRange" then
+		refuse(read, `{parts[1]} > {parts[2]}`, `{path}: out of range`)
+	end
+
+	read:line(`local {result}: {name} = {name}.new({table.concat(parts, ", ")})`)
 end
 
 --[[
-    One rotation component: a float or quantised type carries the value as
-    it is, an integer type scales it from a whole turn onto its range on
-    the way out and back on the way in
+    A Region3 as its two corners, its centre less and plus half its size,
+    each walked as a Vector3 of the type argument and rebuilt with
+    Region3.new. Corners of an open float are refused when a component is
+    infinite, by a writer that checks and by every reader
 --]]
 
-function RobloxTypes.turn(
-	self: Emit,
-	node: Type,
-	write: Block,
-	read: Block,
-	value: string,
-	hint: string,
-	path: string
-): string
-	local name: string = (node :: any).name
-	local row = Primitives[name]
-	local floor: number? = row.min
-	local ceiling: number? = row.max
-
-	if not floor or not ceiling then
-		return self:type(node, write, read, value, hint, path)
-	end
-
-	local range: Range? = (node :: any).range
-	local low: number = range and range.min or floor
-	local span: number = (range and range.max or ceiling) - low
-	local index: number = write:reserve(row.bytes :: number)
-	local at: number = read:reserve(row.bytes :: number)
-	local result: string = read:name(hint)
-
-	writeNumber(write, name, index, `math.round({plus(low, `({value} + math.pi) / ({TURN}) * {span}`)})`)
-	read:line(`local {result}: number = {readNumber(read, name, at)}`)
-
-	return `{group(minus(result, low))} / {span} * ({TURN}) - math.pi`
-end
-
---[[
-    An axis-aligned CFrame: a byte naming one of the 24 rotations, then
-    the position. A rotation that is not aligned has no byte to carry it,
-    so it is refused on every build
---]]
-
-function RobloxTypes.aligned(
+function RobloxTypes.corners(
 	self: Emit,
 	node: Roblox,
 	write: Block,
@@ -250,80 +262,35 @@ function RobloxTypes.aligned(
 	path: string,
 	result: string
 )
-	local position: Type = (node.generics or {})[1] or COMPONENT
-	local index: string = write:name(`{hint}Rotation`)
-	local rotation: string = read:name(`{hint}Rotation`)
-	local reserved: number = write:reserve(1)
-	local at: number = read:reserve(1)
-	local parts: { string } = {}
+	local argument: Type? = (node.generics or {})[1]
+	local finite: boolean = open(argument or COMPONENT)
+	local written: { string } = {}
+	local corners: { string } = {}
 
-	self.helpers.aligned = true
+	for index: number, corner: string in CORNERS do
+		local name: string = write:name(`{hint}{corner}`)
+		local sign: string = index == 1 and "-" or "+"
 
-	-- A rotation that is not aligned takes -1, so the local is a number the checker can follow
-	write:line(`local {index}: number = alignedIndex({value}) or -1`)
-
-	refuse(write, `{index} < 0`, `{path}: expected an axis-aligned rotation`)
-	write:line(`buffer.writeu8({write.out}, {write:at(reserved)}, {index})`)
-
-	read:line(`local {rotation}: CFrame? = ALIGNED[buffer.readu8(packet, {read:at(at)}) + 1]`)
-	refuse(read, `not {rotation}`, `{path}: out of range`)
-
-	for _, component: string in Roblox.Vector3.axes :: { string } do
-		local place: string = `{value}.{component}`
-		table.insert(parts, self:type(position, write, read, place, `{hint}{component}`, `{path}.{component}`))
+		write:line(`local {name} = {value}.CFrame.Position {sign} {value}.Size / 2`)
+		table.insert(written, name)
 	end
 
-	read:line(`local {result}: CFrame = {rotation} + Vector3.new({table.concat(parts, ", ")})`)
-end
-
---[[
-    An instance: no bytes, one side-array slot. The writer refuses nil on
-    every build, since an empty slot fails the receiver's decode, and the
-    wrong class when validating; the reader refuses anything but an
-    instance of the class, or for a streamed instance anything present
-    that is not one
---]]
-
-function RobloxTypes.instance(
-	self: Emit,
-	node: Roblox,
-	write: Block,
-	read: Block,
-	value: string,
-	hint: string,
-	path: string
-): string
-	local class: string? = node.class
-	local streamed: boolean = node.name == "StreamedInstance"
-	local expected: string = `{path}: expected {Print.type(node)}`
-	local result: string = read:name(hint)
-	local terms: { string } = {}
-
-	if not self._known then
-		table.insert(terms, self._validate and `typeof({value}) ~= "Instance"` or `{value} == nil`)
+	-- Checked before either corner is walked, since an infinite corner makes the other's component NaN
+	if finite and self._validate then
+		infinite(write, spread(written), `{path}: expected {Print.type(node)}`)
 	end
 
-	-- Out of a shared pair's any the checker has nothing to call IsA on, so the value is cast to what it was checked as
-	if self._validate and class then
-		table.insert(terms, `not ({value} :: Instance):IsA("{class}")`)
+	for index: number, corner: string in CORNERS do
+		local walked: string =
+			self:type(vector(argument), write, read, written[index], `{hint}{corner}`, `{path}.{corner}`)
+		table.insert(corners, walked)
 	end
 
-	if #terms > 0 then
-		refuse(write, table.concat(terms, " or "), expected)
+	if finite then
+		infinite(read, spread(corners), `{path}: out of range`)
 	end
 
-	write:line(`{write.slot}({value})`)
-	read:line(`local {result}: {class or "Instance"}? = side[sideCursor]`)
-	read:line("sideCursor += 1")
-
-	if streamed and class then
-		refuse(read, `{result} ~= nil and not {result}:IsA("{class}")`, expected)
-	elseif not streamed then
-		local isA: string = class and ` or not {result}:IsA("{class}")` or ""
-		refuse(read, `typeof({result}) ~= "Instance"{isA}`, expected)
-	end
-
-	return result
+	read:line(`local {result}: Region3 = Region3.new({table.concat(corners, ", ")})`)
 end
 
 return RobloxTypes

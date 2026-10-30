@@ -1,24 +1,28 @@
 --[[
     Checks every resolved type against the wire rules, gives each message
-    an id per direction, refuses an unreliable event that cannot fit one
-    fire and a client's reliable message the server would drop, and hashes
-    the canonical print of the file. The sizes and the print come from the
-    sibling files, reached through the folder's name, as an init file must
+    an id per direction and each channel its number, holds every message to
+    its packet, every AwaitedInstance to where it may travel and every
+    replication attribute to its rules, then hashes the canonical print.
+    Sizes, packets, awaits, replication and print are sibling files
 --]]
 
 --!strict
 local Analyse = {}
 Analyse.__index = Analyse
 
+local Awaits = require("./Analyse/Awaits")
 local Diagnostics = require("./Diagnostics")
+local Packets = require("./Analyse/Packets")
 local Parser = require("./Parser")
 local Primitives = require("./Config/Primitives")
 local Print = require("./Analyse/Print")
+local Replication = require("./Analyse/Replication")
 local Roblox = require("./Config/Roblox")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
 local Wire = require("./Config/Wire")
 
+type Counts = Packets.Counts
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
 type Event = Schema.Event
@@ -26,7 +30,6 @@ type File = Schema.File
 type Pack = Schema.Pack
 type Range = Schema.Range
 type Roblox = Schema.Roblox
-type Size = Sizes.Size
 type Type = Schema.Type
 
 local COUNTS: { string } = { "one", "two" }
@@ -41,8 +44,7 @@ local CLASSES: { [string]: string } = {
 	Instance = "instances",
 }
 
-local SLOT_BYTES: number = Wire.slotBytes
-local HANDSHAKE_BYTES: number = Wire.handshakeBytes
+local CHANNELS: number = Wire.channels
 
 local FNV_OFFSET: number = 2166136261
 local FNV_PRIME_LOW: number = 403 -- The prime 16777619 is 2^24 + 403; the split keeps every product exact
@@ -52,6 +54,7 @@ type Fields = {
 	_diagnostics: Diagnostics,
 	_toServer: number,
 	_toClient: number,
+	_channels: number,
 	_unreliable: { Event },
 	_sent: { Declaration },
 }
@@ -77,6 +80,7 @@ function Analyse.new(diagnostics: Diagnostics): Self
 		_diagnostics = diagnostics,
 		_toServer = 0, -- The last id given in each direction
 		_toClient = 0,
+		_channels = 0, -- The channels numbered so far
 		_unreliable = {} :: { Event }, -- Checked against the budget once the id widths are known
 		_sent = {} :: { Declaration }, -- The reliable messages a client sends, checked against maxPacket likewise
 	}, Analyse)
@@ -97,7 +101,10 @@ end
 
 --[[
     Analyses a resolved file in place: every type checked, every message
-    given its ids, every unreliable event held to the budget. Returns the
+    given its ids and every channel its number, every AwaitedInstance held
+    to where it may travel and every replication attribute to its rules,
+    then every unreliable event held to the budget and every message a
+    client sends to its frame, once the id widths are known. Returns the
     schema hash
 --]]
 
@@ -105,15 +112,23 @@ function Analyse.file(file: File, diagnostics: Diagnostics): number
 	local analysis: Self = Analyse.new(diagnostics)
 
 	analysis:declarations(file.declarations)
-	analysis:budget(file.options.unreliableBudget :: number)
-	analysis:packet(file.options.maxPacket :: number)
+	Awaits.check(diagnostics, file.declarations)
+	Replication.check(diagnostics, file.declarations)
+
+	local counts: Counts =
+		{ toServer = analysis._toServer, toClient = analysis._toClient, channels = analysis._channels }
+
+	Packets.budget(diagnostics, analysis._unreliable, counts, file.options)
+	Packets.frame(diagnostics, analysis._sent, counts, file.options)
 
 	return Analyse.hash(Print.file(file))
 end
 
 --[[
-    Walks the declarations in order, checking each type and giving each
-    message the next id in every direction it travels
+    Walks the declarations in order, checking each type, giving each
+    message the next id in every direction it travels and each channel the
+    next number, depth first through namespaces, which is the byte its
+    packets open with, so a channel past what one byte numbers is refused
 --]]
 
 function Analyse.declarations(self: Self, declarations: { Declaration })
@@ -122,6 +137,13 @@ function Analyse.declarations(self: Self, declarations: { Declaration })
 			self:type(declaration.type)
 		elseif declaration.kind == "namespace" then
 			self:declarations(declaration.declarations)
+		elseif declaration.kind == "channel" then
+			self._channels += 1
+			declaration.number = self._channels
+
+			if self._channels == CHANNELS + 1 then
+				self._diagnostics:error("V3014", `a schema declares at most {CHANNELS} channels`, declaration)
+			end
 		else
 			if declaration.data then
 				self:type(declaration.data)
@@ -148,57 +170,13 @@ function Analyse.declarations(self: Self, declarations: { Declaration })
 					declaration.toClient = self._toClient
 				end
 
-				if declaration.type == "Unreliable" then
+				-- An ordered event is an unreliable one with a sequence, held to the same budget
+				if declaration.type ~= "Reliable" then
 					table.insert(self._unreliable, declaration)
 				elseif declaration.toServer then
 					table.insert(self._sent, declaration)
 				end
 			end
-		end
-	end
-end
-
---[[
-    Refuses every unreliable event whose largest message, id included,
-    would not fit one fire
---]]
-
-function Analyse.budget(self: Self, budget: number)
-	for _, event: Event in self._unreliable do
-		local toServer: number = event.toServer and self._toServer or 0
-		local toClient: number = event.toClient and self._toClient or 0
-		local idBytes: number = Sizes.idBytes(math.max(toServer, toClient))
-		local payload: Size = event.data and Sizes.size(event.data) or Sizes.fixed(0)
-		local largest: number = idBytes + select(2, Sizes.block(payload))
-
-		if largest > budget then
-			local message: string =
-				`event {event.path} can reach {largest} bytes, over the unreliable budget of {budget}`
-			self._diagnostics:error("V3010", message, event.spans.type)
-		end
-	end
-end
-
---[[
-    Refuses every reliable message a client sends whose largest size, its
-    id and a call's slot included, would take the frame the handshake
-    opens past maxPacket, since the server drops a packet that long whole
---]]
-
-function Analyse.packet(self: Self, maxPacket: number)
-	local idBytes: number = Sizes.idBytes(self._toServer)
-
-	for _, declaration: Declaration in self._sent do
-		local call: boolean = declaration.kind == "function"
-		local data: (Type | Pack)? = (declaration :: any).data
-		local payload: Size = data and Sizes.size(data) or Sizes.fixed(0)
-		local largest: number = idBytes + (call and SLOT_BYTES or 0) + select(2, Sizes.block(payload))
-
-		if largest + HANDSHAKE_BYTES > maxPacket then
-			local named: string = call and `function {declaration.path}'s call` or `event {declaration.path}`
-			local message: string =
-				`{named} can reach {largest} bytes, over maxPacket {maxPacket} with the {HANDSHAKE_BYTES}-byte handshake`
-			self._diagnostics:error("V3012", message, declaration)
 		end
 	end
 end
@@ -299,7 +277,7 @@ end
 
 --[[
     A Roblox type's arguments: as many numeric primitives as the type
-    takes, and a class only on an instance
+    takes, and a class only on a row that takes one
 --]]
 
 function Analyse.roblox(self: Self, node: Roblox)
@@ -321,14 +299,15 @@ function Analyse.roblox(self: Self, node: Roblox)
 		end
 	end
 
-	if node.class and not row.slots then
+	if node.class and not row.classed then
 		self._diagnostics:error("V3007", `{node.name} takes no class`, node)
 	end
 end
 
 --[[
     A map key or set element must be a value Luau can index a table by
-    and the reader can compare for duplicates
+    and the reader can compare for duplicates, so never an instance the
+    client may still be waiting for
 --]]
 
 function Analyse.key(self: Self, node: Type, label: string)
@@ -338,7 +317,11 @@ function Analyse.key(self: Self, node: Type, label: string)
 		or (actual.kind == "enum" and actual.tag == nil)
 		or actual.kind == "reference"
 
-	if not allowed then
+	if actual.kind == "roblox" and Roblox[actual.name].awaited then
+		local message: string =
+			`{label} cannot be {Print.type(node)}, whose instance may not have arrived when it is read`
+		self._diagnostics:error("V3008", message, node)
+	elseif not allowed then
 		local message: string = `{label} must be a primitive, string, enum or Roblox type, got {Print.type(node)}`
 		self._diagnostics:error("V3008", message, node)
 	end

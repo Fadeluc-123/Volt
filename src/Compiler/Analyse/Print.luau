@@ -122,9 +122,23 @@ local function bytes(low: number, high: number): string
 	return low == high and `{Print.whole(low)} bytes` or `{Print.whole(low)}..{Print.whole(high)} bytes`
 end
 
-local function blockBytes(node: (Type | Pack)?): string
-	local low: number, high: number = Sizes.block(node and Sizes.size(node) or Sizes.fixed(0))
+-- A payload's bytes as a block, a @delta event's sized as its mask and the fields it can send
+local function blockBytes(node: (Type | Pack)?, delta: boolean): string
+	local size: Size = node and (delta and Sizes.delta(node) or Sizes.size(node)) or Sizes.fixed(0)
+	local low: number, high: number = Sizes.block(size)
 	return bytes(low, high)
+end
+
+-- A declaration's attributes in the rows' order, so their order in the source never changes the hash
+local function printAttributes(set: { [string]: boolean }?): string
+	local attributes: { string } = {}
+	for _, row: Attribute in Attributes do
+		if set and set[row.name] then
+			table.insert(attributes, `@{row.name} `)
+		end
+	end
+
+	return table.concat(attributes)
 end
 
 --[[
@@ -146,7 +160,7 @@ local function annotate(node: Declaration): string
 		end
 
 		table.insert(parts, `{node.references} reference{plural}`)
-	elseif node.kind == "event" and (node.toServer or node.toClient) then
+	elseif node.kind == "event" then
 		if node.toServer then
 			table.insert(parts, `to server {node.toServer}`)
 		end
@@ -155,12 +169,16 @@ local function annotate(node: Declaration): string
 			table.insert(parts, `to client {node.toClient}`)
 		end
 
-		table.insert(parts, `payload {blockBytes(node.data)}`)
+		-- An event with no ids has not been analysed, and prints back as written
+		if #parts > 0 then
+			local delta: boolean = node.attributes ~= nil and node.attributes.delta == true
+			table.insert(parts, `payload {blockBytes(node.data, delta)}`)
+		end
 	elseif node.kind == "function" and node.toServer then
 		table.insert(parts, `to server {node.toServer}`)
 		table.insert(parts, `to client {node.toClient}`)
-		table.insert(parts, `data {blockBytes(node.data)}`)
-		table.insert(parts, `return {blockBytes(node["return"])}`)
+		table.insert(parts, `data {blockBytes(node.data, false)}`)
+		table.insert(parts, `return {blockBytes(node["return"], false)}`)
 	end
 
 	return #parts == 0 and "" or ` -- {table.concat(parts, ", ")}`
@@ -174,15 +192,7 @@ end
 
 local function printDeclaration(node: Declaration, indent: string): string
 	if node.kind == "type" then
-		-- Attributes print in the rows' order, so their order in the source never changes the hash
-		local attributes: { string } = {}
-		for _, row: Attribute in Attributes do
-			if node.attributes and node.attributes[row.name] then
-				table.insert(attributes, `@{row.name} `)
-			end
-		end
-
-		local named: string = `{table.concat(attributes)}{node.export and "export " or ""}type {node.name}`
+		local named: string = `{printAttributes(node.attributes)}{node.export and "export " or ""}type {node.name}`
 		return `{indent}{named} = {Print.type(node.type)}{annotate(node)}`
 	elseif node.kind == "namespace" then
 		local inner: { string } = {}
@@ -192,6 +202,8 @@ local function printDeclaration(node: Declaration, indent: string): string
 
 		return #inner == 0 and `{indent}namespace {node.name} \{}`
 			or `{indent}namespace {node.name} \{\n{table.concat(inner, "\n")}\n{indent}}`
+	elseif node.kind == "channel" then
+		return `{indent}channel {node.name}`
 	end
 
 	local entries: { string } = {}
@@ -203,13 +215,16 @@ local function printDeclaration(node: Declaration, indent: string): string
 	end
 
 	local record: string = #entries == 0 and "{}" or `\{ {table.concat(entries, ", ")} }`
-	return `{indent}{node.kind} {node.name} {record}{annotate(node)}`
+	local attributes: string = printAttributes(node.kind == "event" and node.attributes or nil)
+
+	return `{indent}{attributes}{node.kind} {node.name} {record}{annotate(node)}`
 end
 
 --[[
     Prints a file in its canonical form: the options in their fixed order,
-    then the declarations, one per line and each annotated with what
-    resolution and analysis found. This text is what the schema hash covers
+    but for the build options, which change nothing on the wire, then the
+    declarations, one per line and each annotated with what resolution and
+    analysis found. This text is what the schema hash covers
 --]]
 
 function Print.file(file: File): string
@@ -217,7 +232,7 @@ function Print.file(file: File): string
 
 	for _, spec: Spec in Options.file do
 		local value: any = (file.options :: any)[spec.key]
-		if value ~= nil then
+		if value ~= nil and not spec.build then
 			table.insert(lines, `option {spec.key} = {spec.kind == "string" and `"{value}"` or tostring(value)}`)
 		end
 	end

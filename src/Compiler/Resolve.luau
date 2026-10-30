@@ -18,6 +18,7 @@ local Source = require("./Source")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
+type Event = Schema.Event
 type File = Schema.File
 type Options = Schema.Options
 type Pack = Schema.Pack
@@ -27,7 +28,14 @@ type Spec = Options.Spec
 type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
 
-local KINDS: { [string]: string } = { event = "an event", ["function"] = "a function", namespace = "a namespace" }
+local KINDS: { [string]: string } = {
+	type = "a type",
+	event = "an event",
+	channel = "a channel",
+	namespace = "a namespace",
+
+	["function"] = "a function",
+}
 
 type Fields = {
 	_diagnostics: Diagnostics,
@@ -101,6 +109,7 @@ function Resolve.options(self: Self, options: Options, source: Source)
 	self:positive(keyed, Options.file)
 
 	options.scope = options.scope or path:match("([^/\\]+)%.volt$") or path
+	options.stamp = options.stamp or nil -- Off is the schema with no stamp, so it prints and hashes as one
 
 	if options.yield == "promise" then
 		self._promise = options.spans.yield
@@ -156,8 +165,9 @@ function Resolve.declare(self: Self, declarations: { Declaration }, prefix: stri
 end
 
 --[[
-    Binds the references inside every declaration and gives each message
-    the defaults its keys did not set, after checking the keys it did
+    Binds the references inside every declaration and an event's channel,
+    and gives each message the defaults its keys did not set, after
+    checking the keys it did. A channel has nothing to bind
 --]]
 
 function Resolve.bind(self: Self, declarations: { Declaration }, prefix: string, options: Options)
@@ -181,8 +191,21 @@ function Resolve.bind(self: Self, declarations: { Declaration }, prefix: string,
 			if declaration.data then
 				self:type(declaration.data, prefix)
 			end
-		else
+
+			if declaration.channel then
+				self:channel(declaration, prefix)
+			end
+		elseif declaration.kind == "function" then
+			local rate: Span? = declaration.spans.rate
 			self:positive(declaration :: { [string]: any }, Options["function"])
+
+			if declaration.from == "Server" and rate then
+				local message: string =
+					"rate on a from: Server function has no effect; the server limits no reply it reads"
+				self._diagnostics:warn("V3006", message, rate)
+			end
+
+			-- from takes no default, so a function without it stays a client's call and prints as it always did
 			defaults(declaration :: { [string]: any }, Options["function"], options)
 
 			-- The file's yield is spelled in lower case and a function's in upper, so it is not a plain default
@@ -200,6 +223,29 @@ function Resolve.bind(self: Self, declarations: { Declaration }, prefix: string,
 				self:type(declaration["return"], prefix)
 			end
 		end
+	end
+end
+
+--[[
+    Binds an event's channel, a plain name found from the event's namespace
+    outward as a type is, to the channel's full path. A channel carries
+    Reliable events only, and each refusal is reported at the channel key
+--]]
+
+function Resolve.channel(self: Self, event: Event, prefix: string)
+	local name: string = event.channel :: string
+	local key: Span = event.spans.channel
+	local found: Declaration? = self:lookup(prefix, name)
+
+	if not found then
+		self._diagnostics:error("V3001", `unknown channel "{name}"`, key)
+	elseif found.kind ~= "channel" then
+		self._diagnostics:error("V3001", `"{name}" is {KINDS[found.kind]}, not a channel`, key)
+	elseif event.type ~= "Reliable" then
+		local message: string = `event {event.path} is {event.type}; a channel carries Reliable events only`
+		self._diagnostics:error("V3014", message, key)
+	else
+		event.channel = found.path
 	end
 end
 

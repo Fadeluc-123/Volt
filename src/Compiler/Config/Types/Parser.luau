@@ -37,7 +37,6 @@ export type Own = {
 	declaration: (self: Parser) -> Declaration?,
 	option: (self: Parser) -> Token,
 	typeDeclaration: (self: Parser) -> Declaration,
-	message: (self: Parser, shape: { Spec }) -> Declaration,
 	namespace: (self: Parser) -> Declaration,
 	fail: (self: Parser, code: string, message: string, span: Span) -> never,
 }
@@ -56,6 +55,8 @@ export type Tokens = {
 }
 
 export type Records = {
+	message: (self: Parser, shape: { Spec }) -> Declaration,
+	channel: (self: Parser) -> Declaration,
 	record: (self: Parser, target: { [string]: any }, shape: { Spec }, label: string) -> (),
 	entry: (self: Parser, target: { [string]: any }, shape: { Spec }, key: Token, label: string, close: string?) -> (),
 	value: (self: Parser, spec: Spec, key: string) -> any,

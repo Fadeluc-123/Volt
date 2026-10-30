@@ -14,6 +14,8 @@ export type Attribute = {
 
 local Attributes: { Attribute } = {
 	{ name = "private", kinds = { "type" }, exported = false }, -- Keeps a named type out of what the modules export
+	{ name = "delta", kinds = { "event" }, exported = false }, -- Sends a player only the fields that changed
+	{ name = "dictionary", kinds = { "type" }, exported = false }, -- Sends a string as its dictionary id
 }
 
 return Attributes

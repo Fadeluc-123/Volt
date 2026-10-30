@@ -1,8 +1,9 @@
 --[[
-    Proves the failure detail contract for a failure of one message, over
-    the generated modules on the server and on the client: its detail
-    begins with the message's registry name and a colon exactly once, and
-    a handler's error reaches its caller as exactly its text
+    Proves the failure detail contract for a failure of one message on
+    the server, over the generated modules: its detail begins with the
+    message's registry name and a colon exactly once, a stale ordered
+    message included, and a handler's error reaches its caller as exactly
+    its text
 --]]
 
 --!strict
@@ -10,44 +11,44 @@ local task = require("@lune/task")
 
 local Suite = require("./Suite")
 local Failures = require("./Failures")
-local Volt = require("@volt")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
+local across = Failures.across
+local named = Failures.named
 local packet = Failures.packet
 local setup = Failures.setup
 local steps = Failures.steps
 
 type Harness = Failures.Harness
-type Mock = Volt.Mock
-type Report = Failures.Report
 
-local QUEUE: number = 64 -- The queue every event here keeps, the schema's default
-local LONG_REASON: number = 200 -- Past the 128 bytes Example's Inventory.Transfer allows its reason
-local OUT_OF_RANGE: number = 1000 -- Past the 999 a Stack's quantity allows
+local QUEUE: number = Failures.queue
+local LONG_REASON: number = Failures.longReason
+local OUT_OF_RANGE: number = Failures.outOfRange
+local NOT_TEXT: { number } = Failures.notText
 local WRONG_DIR: number = 9 -- Past the 8 Input's dir allows
-local NOT_TEXT: { number } = { 0xC3, 0x28 } -- A two-byte sequence whose second byte does not continue it
-local LINE: number = 1 -- The id Console's line reaches the client with
+local CONFIRM: number = 2 -- The id Prompts' Confirm reply reaches the server with
+local NEVER_GIVEN: number = 9 -- A slot the server never gave a call
+local AIM: number = 1 -- The id Ordered's Aim reaches the server with
+local AIM_RATE: number = 2 -- The Aims a second the server allows Alice in the stale case
+local ALONE: number = 1 -- The id the one event of Rotations, Layouts and Volumes reaches the server with
+local NO_ROTATION: number = 0xFFFFFFFF -- Three kept components that square to 1.5, past the 1 a rotation allows
+local TURN_BYTES: number = 27 -- Turn's least size after its id, with no c
+local LAYOUTS_BYTES: number = 58 -- Layouts' size after its id
+local VOLUMES_BYTES: number = 72 -- Volumes' size after its id
+local RANGE: number = 25 -- Where Layouts' c, a NumberRange of two f32s, begins: past the id, a's 16 bytes and b's 8
+local CORNER: number = 37 -- Where Volumes' c, a Region3, begins: past the id, a's 24 bytes and b's 12
 
--- Runs one step on a thread of its own, so a listener that yields in it is resumed only after a frame has passed
-local function across(mock: Mock)
-	local thread: thread = coroutine.create(function ()
-		mock:step()
-	end)
+-- Sends the server one event by hand behind Alice's handshake: its id, then its bytes, zero but where set writes
+local function sent(harness: Harness, bytes: number, set: (body: buffer) -> ())
+	local body: buffer = buffer.create(1 + bytes)
 
-	coroutine.resume(thread)
-	mock:step()
-	coroutine.resume(thread)
-end
-
--- A failure of a message names it once: the text before the first colon is its registry name, never twice over
-local function named(report: Report?, kind: string, name: string)
-	local found: Report = assert(report, `no {kind} failure was reported`)
-
-	expect(found.kind).is(kind)
-	expect(found.detail:match("^(.-): ")).is(name)
-	expect(found.detail:sub(1, 2 * #name + 4)).never_is(`{name}: {name}: `)
+	buffer.writeu8(body, 0, ALONE)
+	set(body)
+	harness.mock:step()
+	harness.transport.reliable(nil, body)
+	steps(harness.mock)
 end
 
 describe("Failures", function ()
@@ -182,74 +183,66 @@ describe("Failures", function ()
 
 			named(harness.failures.server[1], "queue", "Ready")
 		end)
-	end)
 
-	describe("on the client", function ()
-		test("a decode named once by its reader, one named by a reply's field and one inside a shared pair", function ()
-			local events: Harness = setup("Events")
-			local reply: Harness = setup("Example")
-			local patch: Harness = setup("Example")
-			local stack: { [string]: any } = { item = "a", quantity = OUT_OF_RANGE }
+		test("a reply naming a slot never given names the function", function ()
+			local harness: Harness = setup("Prompts")
 
-			-- A Sync with no value after its id, then a reply to slot 1 whose reason is too long, both straight from the server
-			events.mock.server.reliable(events.player, packet({ 1 }))
-			reply.mock.server.reliable(reply.player, packet({ 2, 1, 0, 0, 2, LONG_REASON }))
-			patch.server.Inventory.Patch.fire(patch.player, { version = 1, set = { [1] = stack }, cleared = {} })
-
-			for _, harness: Harness in { events, reply, patch } do
-				steps(harness.mock)
-			end
-
-			expect(events.failures.client[1].detail).is("Sync: truncated")
-			expect(reply.failures.client[1].detail).is(
-				"Inventory.Transfer: Inventory.Transfer.reason: length out of range"
-			)
-			expect(patch.failures.client[1].detail).is("Inventory.Patch: Stack.quantity: out of range")
-			named(reply.failures.client[1], "decode", "Inventory.Transfer")
-			named(patch.failures.client[1], "decode", "Inventory.Patch")
-		end)
-
-		test("a decode of text that is not UTF-8 inside a shared pair names the event", function ()
-			local harness: Harness = setup("Console")
-			local length: number = #NOT_TEXT
-
-			-- Built by hand, since the server's pair checks the text in every build: the id, Line's u16 length and
-			-- its bytes, then Kind's flag byte
-			harness.mock.server.reliable(harness.player, packet({ LINE, length, 0, NOT_TEXT[1], NOT_TEXT[2], 0 }))
+			-- Behind Alice's handshake, Confirm's reply to a slot no call took: the id, the slot, status ok and the flags
+			harness.mock:step()
+			harness.transport.reliable(nil, packet({ CONFIRM, NEVER_GIVEN, 0, 0, 1 }))
 			steps(harness.mock)
 
-			named(harness.failures.client[1], "decode", "Decree.line")
-			expect(harness.failures.client[1].detail).is("Decree.line: Decree.Line: invalid UTF-8")
+			named(harness.failures.server[1], "decode", "Confirm")
+			expect(harness.failures.server[1].detail).is(`Confirm: no call in slot {NEVER_GIVEN}`)
 		end)
 
-		test("a listener's error and its yield, and a queue overflow, name the event", function ()
-			local harness: Harness = setup("Events")
-			local queued: Harness = setup("Events")
+		test("a stale ordered message past its event's rate names the event", function ()
+			local harness: Harness = setup("Ordered")
+			local heard: number = 0
 
-			harness.client.Sync.on(function (value: number)
-				if value == 1 then
-					error("boom")
-				end
-
-				coroutine.yield()
+			harness.server.Aim.on(function ()
+				heard += 1
 			end)
+			harness.server.rate("Aim", AIM_RATE)
 
-			harness.server.Sync.fire(harness.player, 1)
-			harness.server.Sync.fire(harness.player, 2)
+			-- Behind Alice's handshake, Aims with sequences 1 and 2 take the rate, so 1 again is stale and past it
 			harness.mock:step()
-			harness.mock:step()
-			across(harness.mock)
+			harness.transport.unreliable(
+				nil,
+				packet({ AIM, 1, 0, 0, 0, 0, 0, AIM, 2, 0, 0, 0, 0, 0, AIM, 1, 0, 0, 0, 0, 0 })
+			)
+			steps(harness.mock)
 
-			for value: number = 1, QUEUE + 1 do
-				queued.server.Sync.fire(queued.player, value)
-			end
-
-			steps(queued.mock)
-
-			named(harness.failures.client[1], "listener", "Sync")
-			named(harness.failures.client[2], "listener", "Sync")
-			named(queued.failures.client[1], "queue", "Sync")
-			expect(harness.failures.client[2].detail).is("Sync: a sync listener yielded")
+			named(harness.failures.server[1], "rate", "Aim")
+			expect(harness.failures.server[1].detail).is(`Aim: over {AIM_RATE} a second`)
+			expect(heard).is(AIM_RATE)
 		end)
+
+		test(
+			"a rotation past one, a range whose least passes its most and an infinite corner name the event",
+			function ()
+				local rotations: Harness = setup("Rotations")
+				local layouts: Harness = setup("Layouts")
+				local volumes: Harness = setup("Volumes")
+
+				sent(rotations, TURN_BYTES, function (body: buffer)
+					buffer.writeu32(body, 1, NO_ROTATION)
+				end)
+				sent(layouts, LAYOUTS_BYTES, function (body: buffer)
+					buffer.writef32(body, RANGE, 2)
+					buffer.writef32(body, RANGE + 4, 1)
+				end)
+				sent(volumes, VOLUMES_BYTES, function (body: buffer)
+					buffer.writef32(body, CORNER, -math.huge)
+				end)
+
+				named(rotations.failures.server[1], "decode", "Turn")
+				named(layouts.failures.server[1], "decode", "Layouts")
+				named(volumes.failures.server[1], "decode", "Volumes")
+				expect(rotations.failures.server[1].detail).is("Turn: Turn.a: out of range")
+				expect(layouts.failures.server[1].detail).is("Layouts: Layouts.c: out of range")
+				expect(volumes.failures.server[1].detail).is("Volumes: Volumes.c: out of range")
+			end
+		)
 	end)
 end)

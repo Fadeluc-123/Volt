@@ -56,6 +56,9 @@ export type Event = {
 	data: (Type | Pack)?,
 	queue: number?,
 	rate: (number | string)?,
+	timeout: number?, -- Seconds an AwaitedInstance waits on the client; unset, the file's
+	channel: string?, -- The channel's name as written, then its full path once resolved
+	attributes: { [string]: boolean }?, -- As a type declaration's are
 	spans: { [string]: Span },
 	path: string?,
 	toServer: number?,
@@ -64,9 +67,13 @@ export type Event = {
 	finish: number,
 }
 
+-- An ordered reliable stream of its own, numbered from 1 by analysis in declaration order
+export type Channel = { kind: "channel", name: string, path: string?, number: number?, start: number, finish: number }
+
 export type Function = {
 	kind: "function",
 	name: string,
+	from: string?, -- Server when the server calls one player's client; unset for a client's call
 	data: (Type | Pack)?,
 	yield: string?,
 	timeout: number?,
@@ -90,7 +97,7 @@ export type Namespace = {
 	finish: number,
 }
 
-export type Declaration = TypeDeclaration | Event | Function | Namespace
+export type Declaration = TypeDeclaration | Event | Channel | Function | Namespace
 
 export type Options = {
 	clientOutput: string?,
@@ -105,12 +112,16 @@ export type Options = {
 	maxPacket: number?,
 	maxPacketsPerSecond: number?,
 	unreliableBudget: number?,
+	stamp: boolean?,
 	queue: number?,
 	rate: (number | string)?,
 	functionRate: (number | string)?,
 	timeout: number?,
 	yield: string?,
 	promise: string?,
+	inspectorOutput: string?, -- Where the packet inspector is written, when it is asked for
+	shardSize: number?, -- The most entries one generated file holds
+	profileLabels: boolean?, -- Whether the readers, the flush and the schema table carry MicroProfiler labels
 	spans: { [string]: Span },
 }
 
