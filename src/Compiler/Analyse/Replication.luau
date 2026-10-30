@@ -76,6 +76,11 @@ local function dictionary(node: Type | Pack): boolean
 	return target ~= nil and target.attributes ~= nil and target.attributes.dictionary == true
 end
 
+-- A reference to a recursive type, whose values a delta would walk with no bound on how deep they nest
+local function recursive(node: Type | Pack): boolean
+	return node.kind == "reference" and node.target ~= nil and node.target.depth ~= nil
+end
+
 -- A value a client can read as nil where the server sent one, which a field the mask leaves out would keep
 local function nilable(node: Type | Pack): boolean
 	return (node.kind == "roblox" and node.name == "StreamedInstance")
@@ -109,7 +114,8 @@ end
     A @delta event is the server's and reliable, each refused at its key,
     and carries one struct of 1 to 32 fields reaching nothing a client can
     read as nil, since a field the mask leaves out would keep that nil,
-    and nothing it can wait for, since a waiting message would merge twice
+    nothing it can wait for, since a waiting message would merge twice,
+    and nothing recursive, since a delta compares and copies every value
 --]]
 
 local function delta(diagnostics: Diagnostics, event: Event)
@@ -152,6 +158,10 @@ local function delta(diagnostics: Diagnostics, event: Event)
 	for _, node: Type in found(data, awaited) do
 		diagnostics:error("V3015", `{named} cannot carry {Print.type(node)}, which a client can wait for`, node)
 	end
+
+	for _, node: Type in found(data, recursive) do
+		diagnostics:error("V3015", `{named} cannot carry {Print.type(node)}, which is recursive`, node)
+	end
 end
 
 -- Refuses every @dictionary type a type reaches, at the reference, saying why it may not travel there
@@ -175,7 +185,13 @@ function Replication.check(diagnostics: Diagnostics, declarations: { Declaration
 			Replication.check(diagnostics, declaration.declarations)
 		elseif declaration.kind == "type" then
 			if declaration.attributes and declaration.attributes.dictionary then
-				short(diagnostics, declaration)
+				if declaration.parameters then
+					local message: string =
+						`@dictionary type {declaration.path} cannot take type parameters; its id table is one per schema`
+					diagnostics:error("V3016", message, declaration)
+				else
+					short(diagnostics, declaration)
+				end
 			end
 
 			if declaration.export then

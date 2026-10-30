@@ -298,6 +298,10 @@ local Network = {
 		return runtime:traffic(player)
 	end,
 
+	budget = function (bytesPerSecond: number?)
+		runtime:budget(bytesPerSecond)
+	end,
+
 	isBot = runtime.isBot,
 }
 

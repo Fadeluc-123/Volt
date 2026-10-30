@@ -23,7 +23,7 @@ local test = Suite.test
 local expect = Suite.expect
 
 type Declaration = Schema.Declaration
-type Set = { [string]: boolean }
+type Set = Schema.Attributes
 
 -- The two options every schema must carry, so a fragment compiles clean
 local HEADER: string = `option clientOutput = "Client.luau"\noption serverOutput = "Server.luau"\n`
@@ -148,7 +148,7 @@ describe("Declarations", function ()
 			local text: string = "@stable type Cursor = u16"
 			local file: Schema.File = parse(text)
 			local message: string =
-				`error V2011: unknown attribute "@stable"; attributes are @private, @delta, @dictionary`
+				`error V2011: unknown attribute "@stable"; attributes are @private, @delta, @dictionary, @depth`
 
 			expect(report(text)).is(rendered(text, "@stable", message))
 			expect(#file.declarations).is(1)

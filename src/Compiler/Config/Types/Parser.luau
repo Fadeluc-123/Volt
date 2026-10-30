@@ -16,11 +16,15 @@ type Field = Schema.Field
 type Kind = Lexer.Kind
 type Options = Schema.Options
 type Pack = Schema.Pack
+type Parameter = Schema.Parameter
 type Range = Schema.Range
 type Span = Diagnostics.Span
 type Spec = Options.Spec
 type Token = Lexer.Token
 type Type = Schema.Type
+
+-- An attribute as read in front of a declaration, before its kind is known
+export type Written = { name: string, argument: number?, start: number, finish: number }
 
 export type Fields = {
 	_tokens: { Token },
@@ -60,8 +64,14 @@ export type Records = {
 	record: (self: Parser, target: { [string]: any }, shape: { Spec }, label: string) -> (),
 	entry: (self: Parser, target: { [string]: any }, shape: { Spec }, key: Token, label: string, close: string?) -> (),
 	value: (self: Parser, spec: Spec, key: string) -> any,
-	attributes: (self: Parser) -> { Token },
-	attach: (self: Parser, found: { Token }, kind: string, name: string, export: boolean) -> { [string]: boolean }?,
+	attributes: (self: Parser) -> { Written },
+	attach: (
+		self: Parser,
+		found: { Written },
+		kind: string,
+		name: string,
+		export: boolean
+	) -> (Schema.Attributes?, { [string]: Span }?),
 }
 
 export type TypeForms = {
@@ -77,6 +87,12 @@ export type TypeForms = {
 	range: (self: Parser) -> Range,
 }
 
-export type Parser = Fields & Own & Tokens & Records & TypeForms
+export type Reuse = {
+	parameters: (self: Parser) -> { Parameter }?,
+	arguments: (self: Parser) -> { Type }?,
+	spread: (self: Parser, pack: boolean) -> Field,
+}
+
+export type Parser = Fields & Own & Tokens & Records & TypeForms & Reuse
 
 return {}

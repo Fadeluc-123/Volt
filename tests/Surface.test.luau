@@ -31,7 +31,7 @@ local BROADCASTS: { string } = { "fire", "fireAll", "fireList", "fireExcept", "f
 
 -- The members every module has of its own, then those the server alone has, in camel
 local OWN: { string } = { "version", "hooks", "rate", "flush", "onFailure", "stats", "events", "functions", "exports" }
-local SERVER_OWN: { string } = { "onJoin", "onLeave", "onHandshake", "traffic", "isBot" }
+local SERVER_OWN: { string } = { "onJoin", "onLeave", "onHandshake", "traffic", "budget", "isBot" }
 
 -- The members an event's handle has on one side, in camel: a fire when the side sends it, on and iter when it hears it
 local function members(server: boolean, from: string, mode: string): { string }

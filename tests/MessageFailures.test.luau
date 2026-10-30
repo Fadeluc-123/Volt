@@ -39,6 +39,10 @@ local LAYOUTS_BYTES: number = 58 -- Layouts' size after its id
 local VOLUMES_BYTES: number = 72 -- Volumes' size after its id
 local RANGE: number = 25 -- Where Layouts' c, a NumberRange of two f32s, begins: past the id, a's 16 bytes and b's 8
 local CORNER: number = 37 -- Where Volumes' c, a Region3, begins: past the id, a's 24 bytes and b's 12
+local SCENE: number = 1 -- The id Recursive's Scene reaches the server with
+
+-- Five levels of empty Trees, its writer refusing the value in every build: each level a name's length and a count
+local FIVE_LEVELS: { number } = { SCENE, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0 }
 
 -- Sends the server one event by hand behind Alice's handshake: its id, then its bytes, zero but where set writes
 local function sent(harness: Harness, bytes: number, set: (body: buffer) -> ())
@@ -244,5 +248,17 @@ describe("Failures", function ()
 				expect(volumes.failures.server[1].detail).is("Volumes: Volumes.c: out of range")
 			end
 		)
+
+		test("a recursive value nested past its bound names the event", function ()
+			local harness: Harness = setup("Recursive")
+
+			-- Behind Alice's handshake, since the server reads nothing before it
+			harness.mock:step()
+			harness.transport.reliable(nil, packet(FIVE_LEVELS))
+			steps(harness.mock)
+
+			named(harness.failures.server[1], "decode", "Scene")
+			expect(harness.failures.server[1].detail).is("Scene: Tree: nested deeper than 4")
+		end)
 	end)
 end)

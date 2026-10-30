@@ -22,6 +22,7 @@ export type Runtime = {
 	beforeSend: (name: string, hook: Hook?) -> (),
 	afterReceive: (name: string?, hook: Hook?) -> (),
 	rate: (name: string, perSecond: number, burst: number?) -> (),
+	budget: (self: Runtime, bytesPerSecond: number?) -> (), -- The bytes a second at which it gives way to a player
 	isBot: (value: any) -> boolean,
 	instanceId: (instance: Instance) -> number, -- A server writer's id for an awaited instance
 	instanceById: (id: number) -> Instance?, -- A client reader's awaited instance, nil while the message must wait

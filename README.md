@@ -411,7 +411,7 @@ The hash is the same as without the option. These files now exist:
 
 A shard takes its entry's file name with `Shard` and a number added before `.luau`, counting from 1, and sits in the entry's folder. The entry requires each shard by that name, as `require("./ServerShard1")`, so keep the shards beside it. Rojo syncs each one as a ModuleScript, so with the project file from [Install](#install) they sit beside `Client` and `Server` in `ReplicatedStorage.Shared.Network`.
 
-Your scripts do not change. They require the entry and never a shard, and the entry returns the same `Network` table a one-file module returns: the same messages and namespaces, the same `events`, `functions` and `exports`, `hooks`, `rate`, `flush`, `onFailure` and `stats`, and on the server the same player callbacks, every table frozen. Requiring the server module still never waits, and firing a message costs what it costs in one file, since each message's writer sits in the shard that holds the message.
+Your scripts do not change. They require the entry and never a shard, and the entry returns the same `Network` table a one-file module returns: the same messages and namespaces, the same `events`, `functions` and `exports`, `hooks`, `rate`, `flush`, `onFailure` and `stats`, and on the server the same player callbacks and `budget`, every table frozen. Requiring the server module still never waits, and firing a message costs what it costs in one file, since each message's writer sits in the shard that holds the message.
 
 `shardSize` changes nothing that is sent, so the schema hash and `--ast` leave it out. A client and a server compiled with different `shardSize` values, or with one side split and the other not, still connect.
 
@@ -526,6 +526,12 @@ A call fails with one of these reasons:
 A value the schema does not allow raises an error where you fire it. `Network.Ping.fire(300)` raises `Ping: expected u8`, since 300 does not fit in a `u8`, and nothing is sent.
 
 Volt does not send a message the moment you fire it. It collects what you fire and sends it once per frame, on `RunService.Heartbeat`, so a message arrives about one frame later.
+
+Three options change when that send happens:
+
+- `option flush = 2` sends every second Heartbeat, so more messages share each send.
+- `option manualReplication = true` stops sending on Heartbeat, and your code sends with `Network.flush()`.
+- `option flushBytes = 4096` also sends at the next Heartbeat once the bytes waiting for one target, one player on the server or the server on a client, have reached 4,096. A frame that piles up bytes goes out without waiting for the `flush`-th frame, and a quiet one keeps its batch. It still sends under `manualReplication`, so setting it there means a send can happen without a `Network.flush()`. Reliable and unreliable bytes count together, on every channel, and bytes held for a player whose handshake has not arrived do not count. That Heartbeat sends everything waiting, as any send does. The compiler warns when every frame sends already, as with the default `flush = 1` and no `manualReplication`, since the option would change nothing.
 
 A message that arrives before any listener is connected waits in a queue, up to 64 messages per event. The first listener you connect receives them in the order they arrived.
 
@@ -698,7 +704,9 @@ Types can be combined:
 | `enum { A, B }` | One of the strings `"A"` and `"B"`. | `enum { Red, Blue }` |
 | `enum "tag" { A { ... }, B { ... } }` | A table whose `tag` field names the variant, plus that variant's fields, such as `{ kind = "Sword", damage = 10 }`. | `enum "kind" { Sword { damage: u8 }, Bow { range: u16 } }` |
 | `A \| B` | A value of either type. | `u8 \| string(0..16)` |
+| `struct { ..Name, c: T }` | A struct with `Name`'s fields copied in ([Sharing fields between structs](#sharing-fields-between-structs)). | `struct { ..Stack, slot: u8 }` |
 | a name | A named type, declared below. | `Stack` |
+| a name with arguments | A generic type with its parameters filled in ([Generic types](#generic-types)). | `Pair<u8, u8>` |
 
 An array of booleans is packed into bits: `boolean[8]` takes one byte. A map or a set refuses a duplicate key.
 
@@ -736,7 +744,223 @@ namespace Combat {
 
 The event is then `Network.Combat.Hit`, and the client fires it with `Network.Combat.Hit.fire(12, 30)`. Outside the namespace a name inside it is written `Combat.Name`. A name declared at the top of the file can be used inside every namespace. A type and a message cannot share a name.
 
-Generics, recursive types and struct spread are not part of the language, and the compiler reports them as errors.
+### Sharing fields between structs
+
+`..Name` in a struct stands for the fields of the struct `Name`, in the order `Name` declares them, at the place you write it. This is called a spread. Add this to `Game.volt`:
+
+```
+-- The fields every character has
+struct Base { id: u16, name: string(0..16) }
+
+-- Base's two fields, then one of its own
+struct Unit { ..Base, team: u8 }
+
+-- A spread also works in a tagged enum's variant
+enum Hit "kind" { Melee { ..Base, damage: u16 }, Miss }
+
+event UnitSpawned {
+	from: Server,
+	type: Reliable,
+	call: SingleAsync,
+	data: Unit,
+}
+```
+
+On the server:
+
+```lua
+Network.UnitSpawned.fireAll({ id = 7, name = "Scout", team = 1 })
+```
+
+On the client:
+
+```lua
+Network.UnitSpawned.on(function(unit)
+	print(`{unit.name} joined team {unit.team}`)
+end)
+```
+
+Each client prints `Scout joined team 1`.
+
+- `Unit` above is the struct `{ id: u16, name: string(0..16), team: u8 }` in every way: the same bytes, the same checks, the same Luau type and the same schema hash. A spread costs nothing on the wire.
+- A spread copies fields, so `Unit` and `Base` stay separate types. Changing `Base` changes every struct that spreads it.
+- The name after `..` must be a struct declaration, written `struct Name { ... }` or `type Name = struct { ... }`. It can sit in a namespace, as in `..Combat.Stats`, and a generic one takes its arguments, as in `..Pair<u8, u8>` ([Generic types](#generic-types)).
+
+A field name that comes twice once the spreads are copied in is `V3020`, because a spread never overrides a field. Rename one of the two, or take it out of the struct that writes it:
+
+```
+Game.volt:5:23: error V3020: field "id" comes twice in Unit, from ..Base and as written
+    5 | struct Unit { ..Base, id: u8 }
+      |                       ^^^^^^
+```
+
+`V3019` means the name cannot be spread. It reads `a spread takes a struct, and "Id" is a primitive` for a name that is no struct, a type parameter among them, so spread a struct declaration instead. It reads `"A1" spreads itself through "B1"` when a spread leads back to its own struct, so take one of the spreads out of the loop.
+
+A parameter pack cannot hold a spread: `data: (..Base, team: u8)` is `V2001`, `a parameter pack cannot spread a struct`. Write out the values in the pack, or make `data` a struct that spreads `Base`.
+
+### Generic types
+
+A `type`, `struct` or `enum` can take type parameters in angle brackets after its name. Each use of it fills them in, so one declaration serves many types. Add this to `Game.volt`:
+
+```
+-- A and B are filled in wherever Pair is used
+struct Pair<A, B> { first: A, second: B }
+
+-- A type or an enum takes parameters the same way
+type Maybe<T> = T?
+
+event Moved {
+	from: Client,
+	type: Reliable,
+	call: SingleSync,
+	data: (path: Pair<u8, u8>[0..32], target: Maybe<Pair<u8, u8>>),
+}
+```
+
+On the client:
+
+```lua
+Network.Moved.fire({ { first = 1, second = 2 }, { first = 3, second = 4 } }, nil)
+```
+
+On the server:
+
+```lua
+Network.Moved.on(function(player, path, target)
+	print(`{player.Name} moved through {#path} points`)
+end)
+```
+
+With one player named Alice, the server prints `Alice moved through 2 points`.
+
+- Every use passes one argument per parameter, and an argument can be any type: `Pair<u8, u8>`, `Pair<Stack, string(0..8)>`, `Maybe<Pair<u8, u8>>`.
+- The compiler makes each different set of arguments a named type of its own, so `Pair<u8, u8>` costs exactly what a named `struct { first: u8, second: u8 }` would, on the wire and at run time. Using it twice shares one writer and one reader. A generic that nothing uses generates nothing.
+- The generated modules write it as one Luau type, `export type Pair<A, B> = { first: A, second: B }`, and annotate `Pair<u8, u8>` as `Pair<number, number>`. `@private` works on a generic as on any named type.
+
+A generic cannot be exported. `export` gives a type a `write` and a `read` ([Exported serializers](#exported-serializers)), which need one encoding, and a generic has a different encoding for each set of arguments. So the compiler refuses it with `V2013`:
+
+```
+Game.volt:4:19: error V2013: an exported type cannot take type parameters; export an instantiation, as export type Scores = Pair<u16, u16>
+    4 | export struct Pair<A, B> { first: A, second: B }
+      |                   ^
+```
+
+Do what the message says: keep the generic as it is, and export a name for the one set of arguments you want to save or send. An instantiation is the generic with its arguments filled in. Add this to `Game.volt`:
+
+```
+export type Scores = Pair<u16, u16>
+```
+
+Then, on either side:
+
+```lua
+local packet, side = Network.Scores.write({ first = 10, second = 20 })
+local scores = Network.Scores.read(packet, side)
+print(scores.first, scores.second)
+```
+
+This prints `10 20`, and `packet` is a 4-byte buffer.
+
+The other errors you can meet:
+
+- `V3007`: the wrong number of arguments, as in `"Pair" takes 2 type arguments, got 1`, or arguments on a type that takes none, as in `"Plain" takes no type arguments, got 1`. Pass one argument per parameter, and none to a type with no parameters.
+- `V2002`: a parameter named twice, as in `struct Pair<A, A>`. Give each its own name.
+- `V4002`: a parameter with the same name as a named type of the schema, as in `"Stack" is the label of a named type of the schema and cannot name a type parameter`, or as a type every generated module uses. Rename the parameter.
+- `V3021`: a generic that contains itself with other arguments, as `struct List<T> { value: T, next: List<T[]>? }` does. It would need a new type at every level, so a generic may contain itself only with its own parameters, as in `next: List<T>?`.
+- `V2001` on `event Moved<T>`: an event, a function or a namespace takes no parameters. Use a generic type in its `data`.
+- `V3016` on `@dictionary type Name<T>`: a `@dictionary` type takes no parameters, since a schema has one list of strings. Remove them.
+
+### Recursive types
+
+A named type may contain itself, which is how you send a tree, a chain or a folder of folders. Add this to `Game.volt`:
+
+```
+-- A tree of named parts: each has up to 3 kids, at most 4 levels deep
+@depth(4) struct Tree { name: string(0..8), kids: Tree[0..3] }
+
+event Layout {
+	from: Server,
+	type: Reliable,
+	call: SingleAsync,
+	data: Tree,
+}
+```
+
+On the server:
+
+```lua
+Network.Layout.fireAll({
+	name = "root",
+	kids = {
+		{ name = "a", kids = {} },
+		{ name = "b", kids = { { name = "c", kids = {} } } },
+	},
+})
+```
+
+On the client:
+
+```lua
+Network.Layout.on(function(tree)
+	print(`{tree.name} has {#tree.kids} kids`)
+end)
+```
+
+Each client prints `root has 2 kids`.
+
+`@depth(n)` goes in front of the declaration and sets the deepest level a value of that type may sit at. A `Tree` in a message is at level 1, the `Tree`s in its `kids` are at level 2, and so on, so under `@depth(4)` a `Tree` at level 4 must have empty `kids`. `n` is a whole number from 1 to 1,000. A recursive type with no `@depth` stops at 16. It also goes in front of `export`, as in `@depth(4) export struct Tree { ... }`, and on a generic it applies to every instantiation.
+
+Types can also contain each other. Every named type on the way round counts as one level:
+
+```
+@depth(4) struct Folder { entries: Entry[0..3] }
+@depth(4) enum Entry "kind" { File { size: u16 }, Sub { folder: Folder } }
+```
+
+A `Folder` in a message is level 1, its `Entry` is level 2, the `Folder` inside that is level 3 and its `Entry` is level 4. Each type keeps its own bound, so when they differ, the tightest is the one a value meets first.
+
+A value past the bound never gets through:
+
+- On a write, the fire or the invoke raises an error and nothing is sent, even with `writeValidation` off. The error reads `Tree: nested deeper than 4`. A Luau table that holds itself is refused the same way.
+- On a read, the receiver refuses it before it reads a byte of that level. That is a `decode` failure, and the rest of the packet is dropped, so a cheating player cannot nest past the bound. The default handler warns `Volt: decode failure from Alice: Build: Tree: nested deeper than 4`.
+
+The compiler works out the largest size a recursive type can reach, the deepest and widest value its bounds and ranges allow, and holds it to the same limits as any other type. A tree that branches grows fast. `Tree` above triples at each level:
+
+| `@depth` | Largest `Tree`, in bytes |
+|---|---|
+| 4 | 400 |
+| 5 | 1,210 |
+| 6 | 3,640 |
+| 7 | 10,930 |
+| 16, the default | 215,233,600 |
+
+So a tree a client sends usually needs a small `@depth`. What a client sends must fit in `maxPacket`, 8,192 bytes by default, and with no `@depth` a client's `Tree` event is refused with `V3012`:
+
+```
+Game.volt:5:7: error V3012: event Build can reach 215233601 bytes, over maxPacket 8192 with the 5-byte handshake
+    5 | event Build {
+      |       ^^^^^
+```
+
+Lower `@depth` until it fits, here to 6 or less, or narrow the array's range. The same check covers a `from: Both` event and a function's `data`. An unreliable event must fit in `unreliableBudget`, so `@depth(5)` on this `Tree` is `V3010`, `event A can reach 1211 bytes, over the unreliable budget of 900`, and `@depth(4)` fits. The compiler sets no such limit on a `from: Server` reliable event or a function's `return`, so a deep tree the server sends compiles at the default of 16, and `maxOutgoing` is what limits it as the game runs. A type that does not branch stays small: `struct Chain { value: u8, next: Chain? }` fits in a client's event at 16 levels with no `@depth`. A recursive value has no byte limit of its own beyond these.
+
+A recursive type must have a value that ends. One where every way through leads back to itself could never be finished, so the compiler refuses it with `V3003`:
+
+```
+Game.volt:4:8: error V3003: "Chain" has no finite value: every way through it leads back to it; an optional, a collection that may be empty or another variant on the way ends it
+    4 | struct Chain { next: Chain }
+      |        ^^^^^
+```
+
+The fix is in the message. Make the field optional, as in `next: Chain?`, start a collection's range at 0, as in `kids: Pairs[0..2]` instead of `kids: Pairs[2]`, or add a variant or a union member that does not lead back.
+
+The other errors you can meet:
+
+- `V3009`: a union that is one of its own members, as in `type Node = u8 | Node`. That member takes every class the others do, so Volt could not pick between them. Put the loop inside a struct: `type Node = u8 | Box` with `struct Box { next: Node }`.
+- `V3018`: `@depth` on a type that does not contain itself, as in `"Flat" is not recursive, so @depth changes nothing`. Remove it.
+- `V3005`: a `@depth` below 1 or above 1,000. Use a number in that range.
+- `V2005`: `@depth` with no number. Write `@depth(4)`.
+- `V3015`: a `@delta` event whose `data` reaches a recursive type, as in `@delta event Scene cannot carry Tree, which is recursive`. Remove `@delta` from the event.
 
 ### Waiting for an instance
 
@@ -971,7 +1195,7 @@ How it works:
 - Each fire copies the value once and compares it once with each copy its players hold. Players whose last value came from the same fire hold one copy, and players who need the same fields share one write, so `fireAll` after `fireAll` compares and writes once. That is cheap for a small struct. A large struct where a few fields change often is cheaper as several `@delta` events.
 - A bot is sent `@delta` messages as a player is, and a `@delta` event can ride a [channel](#channels).
 
-The compiler refuses `@delta` with `V3015` on an event that is not `from: Server`, that is not `Reliable`, or whose `data` is not one struct of 1 to 32 fields. It also refuses a struct with an `unknown`, a `StreamedInstance` or an `AwaitedInstance` anywhere inside it: the first two can arrive as `nil` and the last can make the message wait, and either way the client could not fill in the fields a later message leaves out correctly. A `@delta` event `Score` whose `data` is `u16` gives:
+The compiler refuses `@delta` with `V3015` on an event that is not `from: Server`, that is not `Reliable`, or whose `data` is not one struct of 1 to 32 fields. It also refuses a struct with an `unknown`, a `StreamedInstance` or an `AwaitedInstance` anywhere inside it: the first two can arrive as `nil` and the last can make the message wait, and either way the client could not fill in the fields a later message leaves out correctly. It refuses a struct that reaches a [recursive type](#recursive-types) too, since the server compares and copies each value all the way down before it writes it, and a table that holds itself would run that walk into Luau's call limit. A `@delta` event `Score` whose `data` is `u16` gives:
 
 ```
 Game.volt:11:8: error V3015: @delta event Score must carry one struct; it carries u16
@@ -1071,7 +1295,7 @@ The server reads nothing from a player until their handshake arrives. Reliable m
 
 ### Failure kinds
 
-Every problem Volt finds is a failure of one of ten kinds. Each one is counted, then handed to the failure handler.
+Every problem Volt finds is a failure of one of eleven kinds. Each one is counted, then handed to the failure handler.
 
 | Kind | Cause | Scope | What happens | Default handling |
 |---|---|---|---|---|
@@ -1085,6 +1309,7 @@ Every problem Volt finds is a failure of one of ten kinds. Each one is counted, 
 | `outgoing` | A player's outgoing data for one frame went past `maxOutgoing`; on the client, the reliable data for one frame went past `maxPacket`. Each channel's frame counts on its own. A call finds it at its own `invoke`, on either side | packet | the message that went past it is dropped, and on the server every `@delta` value sent to that player is forgotten, so the next fire to them is whole | warn |
 | `queue` | A queue was full | message | the oldest message is dropped | warn, once per event |
 | `departed` | A fire or a call at a player who has left or whose handshake failed; an answer to a caller who has left | packet | the message is dropped | nothing |
+| `budget` | A scope with a [budget](#capping-what-a-player-is-sent) dropped unreliable messages to a player at one send, as in `over the budget, unreliable messages dropped: 3` | packet | those messages are dropped unsent; reliable messages never are | nothing |
 
 An `OrderedUnreliable` message dropped for being older than the last one heard is not a failure, since unreliable messages are expected to arrive out of order.
 
@@ -1188,7 +1413,7 @@ end)
 
 Each one returns a function that disconnects it, and each callback runs on its own thread. `onHandshake` runs at the end of the first flush after the player's handshake is accepted, once that flush has sent the messages held for them. A fire inside it goes out with the next flush, so the player hears it after the held messages. A player who leaves before that flush never reaches `onHandshake`.
 
-`Network.traffic(player)` returns two numbers: the bytes sent to that player in the last second, across every Volt schema on the server (scripts inside an Actor count their own), and the bytes written for them that have not been sent yet.
+`Network.traffic(player)` returns two numbers: the bytes sent to that player in the last second, across every Volt schema on the server (scripts inside an Actor count their own), and the bytes written for them that have not been sent yet, which include what a [budget](#capping-what-a-player-is-sent) is holding back.
 
 ### Looking up messages by name
 
@@ -1218,6 +1443,57 @@ This prints a line such as `Pong 8 left the server 50 ms ago`.
 - The time is when the server's frame sent the packet. A message held for a player until their handshake carries the time it was sent, not the time it was fired.
 - Each server packet costs 8 more bytes, and an unreliable message the server sends must fit in 892 bytes, 8 less than `unreliableBudget`. A player's packets carry no time, since the server never trusts a player's clock.
 - The server module has no `serverTime`, and the client module has it only when the option is on. In `pascal` and `snake` casing it is `ServerTime` and `server_time`, and in any schema, stamped or not, the compiler refuses a top-level declaration with the name in the schema's casing.
+
+### Capping what a player is sent
+
+`Network.budget(bytesPerSecond)` makes one schema give way to a player once that player has been sent that many bytes in the last second. Past that point, its reliable messages to the player wait and its unreliable messages to them are dropped. Call it on the server, at any time while the game runs:
+
+```lua
+-- This schema gives way once a player has been sent 64 KB in the last second
+Network.budget(64 * 1024)
+
+-- This schema no longer gives way
+Network.budget(nil)
+```
+
+Your fires do not change. Say that budget is set and Alice has been sent 70 KB in the last second. A reliable `Network.Pong.fire(alice, 8)` waits, and reaches her in the order it was fired. An unreliable fire at her is dropped, and the failure handler hears one `budget` failure for that send.
+
+- It exists on the server module alone. The client module has no `budget`.
+- It is one setting per scope, and calling it again replaces the last value. No schema option or attribute sets it, so a game sets it while it runs through that scope's own `Network`.
+- It reads the first number `Network.traffic(player)` returns: the bytes sent to that player in the last second across every Volt schema on the server. So every other schema's bytes count toward this schema's budget. It compares at each send, reliable messages first, and a bot is budgeted like a player.
+- With several schemas, the budgets are the ranking. A schema with a lower budget gives way first as the player's count rises, one with a higher budget gives way later, and one with no budget never does.
+- A package built on Volt runs its own scope, and your game never holds its `Network`, so nothing sets a budget on it. Volt never holds it back or drops anything from it. Its bytes still count toward the budgets your own schemas set.
+
+What happens to reliable messages:
+
+- They wait, in order, and the budget never drops one. When the schema next sends to that player, it sends everything that was waiting first, then the current frame, so events, calls and answers stay in the order they were fired. An answer stays behind the events its handler fired. Each [channel](#channels) waits on its own, in its own order.
+- They wait at most about a second. What is waiting goes at the first send where any of these holds: the player's count is under the budget, the oldest packet has waited one second, holding this frame back too would leave more than `maxOutgoing` of that player's bytes waiting on that channel, or the budget was cleared.
+- A frame goes whole, so a message larger than the whole budget still goes once its frame does. A frame sent while the count was under the budget goes whole even when it takes the count far past it. After that, this schema's later reliable messages to that player wait and its unreliable ones are dropped, for at most one second.
+- The first packet a channel sends a player is never held back, so what was held for the handshake goes out and `onHandshake` runs on time.
+- A budget never causes an `outgoing` failure. What waits is limited by `maxOutgoing` and is sent, instead of dropped, when one more frame would pass it.
+- A player who leaves takes their waiting packets with them, unsent and unreported.
+
+What happens to unreliable messages, `OrderedUnreliable` ones included:
+
+- At each send, the schema keeps a player's messages in the order they were fired while the count, plus what that send has already kept, is under the budget. It drops the rest unsent.
+- Each send that drops any reports one `budget` failure for that player, whose detail reads `over the budget, unreliable messages dropped: 3`. The default handler says nothing about it, as with `departed`, so a game that wants to know reads `Network.stats(player).failures.budget or 0`, which counts those sends, or handles the kind itself ([Handling failures yourself](#handling-failures-yourself)).
+
+A function's answer is a reliable message, so it can wait too. With `flush = 1` at 60 frames a second, an answer leaves the server within a second and two frames of being written. The default timeout of 10 seconds is well past that, but a function given a `timeout` of about a second or less can fail with `timeout` while its answer waits. The same goes for a server's `invoke` to a player, whose question can wait in the same way, while its timeout counts from the `invoke`. Give a function under a budgeted schema a `timeout` longer than that wait plus the time a message takes there and back.
+
+There is no priority per event. A budget treats every message of a kind in a schema alike, so a game that wants some of its messages to give way first slows those streams itself, by reading `Network.traffic(player)`:
+
+```lua
+-- A cosmetic update skips a player who has had 48 KB this second
+local function sendCosmetic(player, value)
+	local sent = Network.traffic(player)
+
+	if sent < 48 * 1024 then
+		Network.Pong.fire(player, value)
+	end
+end
+```
+
+A budget changes when bytes leave and never what they are, so the schema hash leaves it out and nothing about it reaches the client. In a schema with `option stamp = true`, a packet that waited carries the time it left. The compiler refuses a top-level declaration named `budget`, in the schema's casing, since the server module uses that name.
 
 ### Bots
 
@@ -1445,8 +1721,9 @@ Options go at the top of a schema, one per line: `option name = value`. A path t
 | `scope` | the schema file's name | The folder under `ReplicatedStorage.Volt` that holds this schema's remotes |
 | `casing` | `camel` | How the module's methods are named: `camel` (`fireAll`, `onFailure`), `pascal` (`FireAll`, `OnFailure`) or `snake` (`fire_all`, `on_failure`) |
 | `writeValidation` | `true` | Whether the sending side checks values before writing them; the receiving side always does |
-| `manualReplication` | `false` | When `true`, Volt does not send on Heartbeat, and your code calls `Network.flush()` |
+| `manualReplication` | `false` | When `true`, Volt does not send on Heartbeat, and your code calls `Network.flush()`; a `flushBytes` the schema sets still sends at its threshold |
 | `flush` | `1` | Send every this many Heartbeats |
+| `flushBytes` | none | Also send at the next Heartbeat once one target's unsent bytes reach this many, between the frames `flush` names and under `manualReplication` too; the compiler warns when every frame sends already ([Use it in your scripts](#use-it-in-your-scripts)). It changes the schema hash only when a schema sets it |
 | `maxPacket` | `8192` | The largest reliable packet the server accepts from a player, in bytes; the client keeps each frame's reliable data under it too |
 | `maxPacketsPerSecond` | `240` | Packets per second the server accepts from each player, both remotes and every channel together |
 | `maxOutgoing` | `262144` | Bytes one player's outgoing data may hold in one frame, on each channel; the message that goes past it is dropped |
@@ -1496,6 +1773,7 @@ Attributes go in front of a declaration, as in `@delta event Status { ... }`:
 | `@private` | a `type`, `struct` or `enum` that is not exported | Keeps its Luau type inside the generated modules ([Types](#types)) |
 | `@delta` | a `from: Server`, `Reliable` event whose `data` is one struct of 1 to 32 fields | Sends each player only the fields that changed since the last value they were sent ([Only the fields that changed](#only-the-fields-that-changed)) |
 | `@dictionary` | a `type` that is a `string` or `string.utf8` of at most 255 bytes | Sends each value as a 2-byte id, and each string to each player once ([Strings sent as ids](#strings-sent-as-ids)) |
+| `@depth(n)` | a `type`, `struct` or `enum` that contains itself, exported or not | Sets the deepest level a value of the type may sit at, from 1 to 1,000; without it the bound is 16 ([Recursive types](#recursive-types)) |
 
 ## Troubleshooting
 
@@ -1524,6 +1802,13 @@ Echo: length out of range
 ```
 
 A fire or an invoke was given a value its type does not allow, and nothing was sent. The text names the message, then the field for a parameter pack: `Input.dir` is the `dir` value of an event `Input` with `data: (dir: u8(0..8), jump: boolean)`. Fix the value, or change the type in the schema.
+
+```
+Tree: nested deeper than 4
+Volt: decode failure from Alice: Build: Tree: nested deeper than 4
+```
+
+A value of a recursive type went past its `@depth`. The first is the error your own fire or invoke raises, with nothing sent, so look for a table deeper than the bound or one that holds itself. The second is the server refusing bytes a player sent, which Volt's own client never writes. Raise `@depth` only if the game really needs the depth, and within what `maxPacket` allows ([Recursive types](#recursive-types)).
 
 ```
 Volt: resolve failure: BossSpawned: instance 1 did not arrive within 5 seconds

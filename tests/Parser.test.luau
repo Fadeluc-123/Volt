@@ -245,7 +245,7 @@ describe("Parser", function ()
 				"option foo = 1\noption flush = 2\nevent Input { form: Client, from: Client, type: Reliable, call: Polling }"
 			local file: Schema.File = parse(text)
 			local options: string =
-				"clientOutput, serverOutput, typesOutput, runtime, scope, casing, writeValidation, manualReplication, flush, maxPacket, maxPacketsPerSecond, maxOutgoing, unreliableBudget, stamp, queue, rate, functionRate, timeout, yield, promise, inspectorOutput, shardSize, profileLabels"
+				"clientOutput, serverOutput, typesOutput, runtime, scope, casing, writeValidation, manualReplication, flush, flushBytes, maxPacket, maxPacketsPerSecond, maxOutgoing, unreliableBudget, stamp, queue, rate, functionRate, timeout, yield, promise, inspectorOutput, shardSize, profileLabels"
 			local first: string =
 				rendered(text, "foo", `error V2003: unknown key "foo" in the options; keys are {options}`)
 			local second: string = rendered(
@@ -303,14 +303,6 @@ describe("Parser", function ()
 			expect(report(text)).is(
 				rendered(text, "Red", `error V2007: variant "Red" has fields but the enum has no tag`)
 			)
-		end)
-
-		test("V2008 names the phase 2 syntax it does not accept", function ()
-			local text: string = "type Box<T> = T\nstruct S { ..Base }"
-			local first: string = rendered(text, "<", "error V2008: generic types are not supported in this version")
-			local second: string = rendered(text, "..", "error V2008: struct spread is not supported in this version")
-
-			expect(report(text)).is(`{first}\n\n{second}`)
 		end)
 
 		test("V2009 reports an option after a declaration and still reads it", function ()

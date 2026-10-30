@@ -20,6 +20,7 @@ local Replication = require("./Analyse/Replication")
 local Roblox = require("./Config/Roblox")
 local Schema = require("./Config/Types/Schema")
 local Sizes = require("./Analyse/Sizes")
+local Unions = require("./Analyse/Unions")
 local Wire = require("./Config/Wire")
 
 type Counts = Packets.Counts
@@ -31,6 +32,7 @@ type Pack = Schema.Pack
 type Range = Schema.Range
 type Roblox = Schema.Roblox
 type Type = Schema.Type
+type TypeDeclaration = Schema.TypeDeclaration
 
 local COUNTS: { string } = { "one", "two" }
 
@@ -112,6 +114,12 @@ function Analyse.file(file: File, diagnostics: Diagnostics): number
 	local analysis: Self = Analyse.new(diagnostics)
 
 	analysis:declarations(file.declarations)
+
+	-- A generic's body is judged through each instantiation, where its arguments are known
+	for _, instantiation: TypeDeclaration in file.instantiations or {} do
+		analysis:type(instantiation.type)
+	end
+
 	Awaits.check(diagnostics, file.declarations)
 	Replication.check(diagnostics, file.declarations)
 
@@ -134,7 +142,9 @@ end
 function Analyse.declarations(self: Self, declarations: { Declaration })
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
-			self:type(declaration.type)
+			if not declaration.parameters then
+				self:type(declaration.type)
+			end
 		elseif declaration.kind == "namespace" then
 			self:declarations(declaration.declarations)
 		elseif declaration.kind == "channel" then
@@ -336,7 +346,7 @@ function Analyse.union(self: Self, node: Type)
 	local seen: { [string]: Type } = {}
 
 	for _, member: Type in (node :: any).members do
-		for _, class: string in Sizes.classes(member) do
+		for _, class: string in Unions.classes(member) do
 			local first: Type? = seen[class]
 
 			if class == "nil" then
@@ -345,7 +355,7 @@ function Analyse.union(self: Self, node: Type)
 				self._diagnostics:error("V3009", message, member)
 			elseif class == "unknown" then
 				self._diagnostics:error("V3009", "unknown cannot be a union member; it already takes any value", member)
-			elseif first and not (Sizes.isUnitEnum(first) and Sizes.isUnitEnum(member)) then
+			elseif first and not (Unions.isUnitEnum(first) and Unions.isUnitEnum(member)) then
 				local both: string = CLASSES[class] or `{class} values`
 				local message: string =
 					`union members {Print.type(first)} and {Print.type(member)} are both {both} at runtime`

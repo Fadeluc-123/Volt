@@ -20,10 +20,12 @@ type Declaration = Schema.Declaration
 type Field = Schema.Field
 type File = Schema.File
 type Pack = Schema.Pack
+type Parameter = Schema.Parameter
 type Range = Schema.Range
 type Size = Sizes.Size
 type Spec = Options.Spec
 type Type = Schema.Type
+type TypeDeclaration = Schema.TypeDeclaration
 
 local printFields: ({ Field }) -> string
 
@@ -94,13 +96,26 @@ function Print.type(node: Type): string
 		return table.concat(members, " | ")
 	end
 
-	return node.target and node.target.path or node.name
+	local target: TypeDeclaration? = node.target
+	local path: string = target and target.path or node.name
+
+	-- An instantiation's path already spells its arguments
+	if not node.arguments or (target and target.generic) then
+		return path
+	end
+
+	local arguments: { string } = {}
+	for _, argument: Type in node.arguments do
+		table.insert(arguments, Print.type(argument))
+	end
+
+	return `{path}<{table.concat(arguments, ", ")}>`
 end
 
 function printFields(list: { Field }): string
 	local parts: { string } = {}
 	for _, field: Field in list do
-		table.insert(parts, `{field.name}: {Print.type(field.type)}`)
+		table.insert(parts, field.spread and `..{Print.type(field.type)}` or `{field.name}: {Print.type(field.type)}`)
 	end
 
 	return table.concat(parts, ", ")
@@ -130,28 +145,41 @@ local function blockBytes(node: (Type | Pack)?, delta: boolean): string
 end
 
 -- A declaration's attributes in the rows' order, so their order in the source never changes the hash
-local function printAttributes(set: { [string]: boolean }?): string
+local function printAttributes(set: Schema.Attributes?): string
 	local attributes: { string } = {}
 	for _, row: Attribute in Attributes do
-		if set and set[row.name] then
-			table.insert(attributes, `@{row.name} `)
+		local value: (boolean | number)? = set and set[row.name]
+
+		if value then
+			table.insert(attributes, typeof(value) == "number" and `@{row.name}({value}) ` or `@{row.name} `)
 		end
 	end
 
 	return table.concat(attributes)
 end
 
+-- A generic's parameters as written after its name, or nothing for any other type
+local function printParameters(list: { Parameter }?): string
+	local names: { string } = {}
+	for _, parameter: Parameter in list or {} do
+		table.insert(names, parameter.name)
+	end
+
+	return #names > 0 and `<{table.concat(names, ", ")}>` or ""
+end
+
 --[[
     What resolution and analysis found out about a declaration, as a
     trailing comment; nothing before resolution, so a parsed tree prints
-    back as written
+    back as written, and nothing for a generic, which is only a template.
+    A recursive type is sized as a value at level 1, its contents at level 2
 --]]
 
 local function annotate(node: Declaration): string
 	local parts: { string } = {}
 
-	if node.kind == "type" and node.references then
-		local size: Size = Sizes.size(node.type)
+	if node.kind == "type" and node.references and not node.parameters then
+		local size: Size = Sizes.size(node.type, node.depth and 2 or nil)
 		local plural: string = node.references == 1 and "" or "s"
 
 		table.insert(parts, bytes(size.min, size.max))
@@ -160,6 +188,10 @@ local function annotate(node: Declaration): string
 		end
 
 		table.insert(parts, `{node.references} reference{plural}`)
+
+		if node.depth then
+			table.insert(parts, `depth {node.depth}`)
+		end
 	elseif node.kind == "event" then
 		if node.toServer then
 			table.insert(parts, `to server {node.toServer}`)
@@ -192,7 +224,10 @@ end
 
 local function printDeclaration(node: Declaration, indent: string): string
 	if node.kind == "type" then
-		local named: string = `{printAttributes(node.attributes)}{node.export and "export " or ""}type {node.name}`
+		local exported: string = node.export and "export " or ""
+		local named: string =
+			`{printAttributes(node.attributes)}{exported}type {node.name}{printParameters(node.parameters)}`
+
 		return `{indent}{named} = {Print.type(node.type)}{annotate(node)}`
 	elseif node.kind == "namespace" then
 		local inner: { string } = {}

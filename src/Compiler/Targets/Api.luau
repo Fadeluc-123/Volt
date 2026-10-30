@@ -67,8 +67,8 @@ end
     The API table's entries: every message's and exported type's, nested
     per namespace, then the members every module has, flush labelled in a
     labelled module, and on the server the player callbacks, the byte
-    count and the bot test after them. With values, each entry is its
-    value by full name rather than its walk
+    count, the budget and the bot test after them. With values, each entry
+    is its value by full name rather than its walk
 --]]
 
 function Api.api(self: Targets, values: { [string]: string }?): string
@@ -107,6 +107,7 @@ function Api.api(self: Targets, values: { [string]: string }?): string
 
 	local traffic: string = "(player: Player | Bot): (number, number)"
 	table.insert(entries, member(self:method("traffic"), traffic, "return runtime:traffic(player)"))
+	table.insert(entries, member(self:method("budget"), "(bytesPerSecond: number?)", "runtime:budget(bytesPerSecond)"))
 	table.insert(entries, `{self:method("isBot")} = runtime.isBot,`)
 
 	return Blocks.paragraphs(entries)

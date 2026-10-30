@@ -19,6 +19,7 @@ local Contract = require("./Config/Contract")
 local Expressions = require("./Emit/Expressions")
 local Frames = require("./Emit/Frames")
 local Instances = require("./Emit/Instances")
+local Named = require("./Targets/Types")
 local Parser = require("./Parser")
 local Primitives = require("./Config/Primitives")
 local Replication = require("./Emit/Replication")
@@ -42,6 +43,8 @@ function Emit.new(options: Options): Self
 	local fields: Fields = {
 		_validate = options.writeValidation ~= false, -- Whether writers check their values
 		_known = false, -- Whether the value being walked already had its Luau type established
+		_recursive = false, -- Whether the walk is inside a recursive pair's function, whose calls take the next level
+		_forward = 0, -- How many forward declarations open functions
 		_constants = {} :: { [string]: string }, -- Constant names by what they hold, so one table serves every use
 		_names = {} :: { [string]: boolean }, -- Every constant name taken
 		_shared = {} :: { [TypeDeclaration]: boolean }, -- The named types whose pair is emitted
@@ -65,6 +68,15 @@ function Emit.parameters(body: string, list: { Parameter }): string
 	for _, parameter: Parameter in list do
 		local used: boolean = body:find(`%f[%w_]{parameter.name}%f[^%w_]`) ~= nil
 		table.insert(parts, `{used and parameter.name or "_"}: {parameter.type}`)
+	end
+	return table.concat(parts, ", ")
+end
+
+-- A parameter list as a forward declaration's type spells it, every parameter under its own name
+local function signature(list: { Parameter }): string
+	local parts: { string } = {}
+	for _, parameter: Parameter in list do
+		table.insert(parts, `{parameter.name}: {parameter.type}`)
 	end
 	return table.concat(parts, ", ")
 end
@@ -128,12 +140,14 @@ end
     The function pair a shared named type is called through, emitted once
     and in dependency order, since walking a type emits the pairs of the
     shared types it references first. A marked type's writer checks its
-    values in every build. Returns the name the pair carries
+    values in every build. A recursive type's pair takes its level last
+    and checks it before anything else in every build, and its halves are
+    declared ahead at the front of the functions, since the pairs of a
+    cycle name each other. Returns the name the pair carries
 --]]
 
 function Emit.shared(self: Self, target: TypeDeclaration): string
-	local path: string = target.path :: string
-	local name: string = path:gsub("%.", "_")
+	local name: string = Named.label(target)
 
 	if self._shared[target] then
 		return name
@@ -141,29 +155,59 @@ function Emit.shared(self: Self, target: TypeDeclaration): string
 
 	self._shared[target] = true
 
+	-- A literal argument's quote or backslash would end or escape a failure's text, so the failure spells it otherwise
+	local path: string = (target.path :: string):gsub('[\\"]', "'")
+	local depth: number? = target.depth
 	local known: boolean = self._known
 	local validated: boolean = self._validate
+	local recursive: boolean = self._recursive
 	local write: Block = Blocks.new("write", path)
 	local read: Block = Blocks.new("read", path)
 
 	self._known = false
 	self._validate = validated or self._checked[target] == true
+	self._recursive = depth ~= nil
+
+	if depth then
+		local past: string = `{Contract.depth.name} > {depth}`
+		local message: string = `{path}: nested deeper than {depth}`
+
+		write.head = Expressions.refusal(past, message, write.refuse)
+		read.head = Expressions.refusal(past, message)
+	end
 
 	local names: { string }, values: { string } = self:block(target.type, write, read)
 	local writeBody: string = write:done()
 	local readBody: string = read:done(`return cursor, sideCursor, {values[1]}`)
 	local taken: { Parameter } = table.clone(Contract.write)
+	local given: { Parameter } = table.clone(Contract.read)
 
 	table.insert(taken, { name = names[1], type = "any" })
+
+	if depth then
+		table.insert(taken, Contract.depth)
+		table.insert(given, Contract.depth)
+	end
+
 	self._known = known
 	self._validate = validated
+	self._recursive = recursive
 
-	table.insert(self.functions, `local function write{name}({Emit.parameters(writeBody, taken)})\n{writeBody}end\n`)
 	-- The reader returns the type the module exports under the pair's name, or a checker widens what it built
+	local returned: string = `(number, number, {Named.of(target)})`
+	local opening: string = depth and "function" or "local function"
+
+	table.insert(self.functions, `{opening} write{name}({Emit.parameters(writeBody, taken)})\n{writeBody}end\n`)
 	table.insert(
 		self.functions,
-		`local function read{name}({Emit.parameters(readBody, Contract.read)}): (number, number, {name})\n{readBody}end\n`
+		`{opening} read{name}({Emit.parameters(readBody, given)}): {returned}\n{readBody}end\n`
 	)
+
+	if depth then
+		table.insert(self.functions, self._forward + 1, `local write{name}: ({signature(taken)}) -> ()\n`)
+		table.insert(self.functions, self._forward + 2, `local read{name}: ({signature(given)}) -> {returned}\n`)
+		self._forward += 2
+	end
 
 	return name
 end
@@ -171,23 +215,38 @@ end
 --[[
     A reference to a shared named type: the write side hands the pair
     what it writes through, then its value; the read side takes the value
-    and the advanced cursors back, both after the block's own bytes
+    and the advanced cursors back, both after the block's own bytes. A
+    recursive type's pair also takes the level: the next one from inside a
+    recursive pair's function, and the first from anywhere else
 --]]
 
 function Emit.call(self: Self, target: TypeDeclaration, write: Block, read: Block, value: string, hint: string): string
 	local name: string = self:shared(target)
 	local result: string = read:name(hint)
 	local passed: { string } = {}
+	local reading: { string } = {}
 
 	for _, parameter: Parameter in Contract.write do
 		table.insert(passed, (write :: any)[parameter.name])
 	end
 
+	for _, parameter: Parameter in Contract.read do
+		table.insert(reading, parameter.name)
+	end
+
 	table.insert(passed, value)
+
+	if target.depth then
+		local level: string = self._recursive and `{Contract.depth.name} + 1` or "1"
+
+		table.insert(passed, level)
+		table.insert(reading, level)
+	end
+
 	write:tail(`write{name}({table.concat(passed, ", ")})`)
 
-	read:line(`local {result}: {name}`)
-	read:tail(`cursor, sideCursor, {result} = read{name}(packet, cursor, side, sideCursor, length)`)
+	read:line(`local {result}: {Named.of(target)}`)
+	read:tail(`cursor, sideCursor, {result} = read{name}({table.concat(reading, ", ")})`)
 
 	return result
 end

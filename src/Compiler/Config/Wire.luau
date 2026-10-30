@@ -21,6 +21,7 @@ local Wire = {
 	channels = 255, -- The most channels the channel byte numbers, 0 being the default stream
 	dictionaryBytes = 2, -- A @dictionary string's id, which is all a message carries of it
 	entryBytes = 255, -- The longest @dictionary string, which an entry's u8 length holds
+	depth = 16, -- The level a recursive value may nest to when its type sets none
 	channelMax = 255, -- A Color3 channel on the wire
 	component = "f32", -- What a vector or CFrame component is carried as when the type names none
 	seconds = "f64", -- What a DateTime's timestamp is carried as

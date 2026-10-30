@@ -15,6 +15,7 @@ local Diagnostics = require("./Diagnostics")
 local Lexer = require("./Lexer")
 local Options = require("./Config/Options")
 local Records = require("./Parser/Records")
+local Reuse = require("./Parser/Reuse")
 local Schema = require("./Config/Types/Schema")
 local Source = require("./Source")
 local Tokens = require("./Parser/Tokens")
@@ -50,6 +51,9 @@ local DECLARATIONS: { [string]: boolean } = {
 
 -- Thrown to abandon a declaration after its error is reported; nothing else is ever thrown on purpose
 local ABANDONED: { nil } = {}
+
+local GENERIC_EXPORT: string =
+	"an exported type cannot take type parameters; export an instantiation, as export type Scores = Pair<u16, u16>"
 
 --[[
     Parses a whole token list into the file's options and declarations
@@ -197,7 +201,7 @@ end
 --]]
 
 function Parser.declaration(self: Self): Declaration?
-	local attributes: { Token } = self:attributes()
+	local attributes: { Types.Written } = self:attributes()
 	local token: Token = self:peek()
 
 	if self:at("option") then
@@ -228,10 +232,14 @@ function Parser.declaration(self: Self): Declaration?
 	end
 
 	local exported: boolean = declaration.kind == "type" and declaration.export
-	local applied: { [string]: boolean }? = self:attach(attributes, declaration.kind, declaration.name, exported)
+	local applied: Schema.Attributes?, spans: { [string]: Span }? =
+		self:attach(attributes, declaration.kind, declaration.name, exported)
 
 	-- No row applies to any other kind, so nothing else ever has a set to keep
-	if declaration.kind == "type" or declaration.kind == "event" then
+	if declaration.kind == "type" then
+		declaration.attributes = applied
+		declaration.spans = spans
+	elseif declaration.kind == "event" then
 		declaration.attributes = applied
 	end
 
@@ -270,6 +278,13 @@ function Parser.typeDeclaration(self: Self): Declaration
 	self:consume()
 
 	local name: Token = self:name()
+
+	-- An exported type's write and read need one encoding, which a template does not have
+	if export and self:at("<") then
+		self._diagnostics:error("V2013", GENERIC_EXPORT, self:peek())
+	end
+
+	local parameters: { Schema.Parameter }? = self:parameters()
 	local declared: Type
 
 	if keyword.value == "struct" then
@@ -277,10 +292,6 @@ function Parser.typeDeclaration(self: Self): Declaration
 	elseif keyword.value == "enum" then
 		declared = self:enum(keyword.start)
 	else
-		if self:at("<") then
-			self:fail("V2008", "generic types are not supported in this version", self:peek())
-		end
-
 		self:expect("punctuation", "=")
 		declared = self:type()
 	end
@@ -290,6 +301,7 @@ function Parser.typeDeclaration(self: Self): Declaration
 		name = name.value,
 		export = export,
 		type = declared,
+		parameters = parameters,
 		start = name.start,
 		finish = name.finish,
 	}
@@ -355,15 +367,18 @@ function Parser.children(node: Type | Pack): { Type }
 		return node.members
 	elseif node.kind == "roblox" then
 		return node.generics or {}
+	elseif node.kind == "reference" then
+		return node.arguments or {}
 	end
 
 	return list
 end
 
-local _: Types.Own, _: Types.Tokens, _: Types.Records, _: Types.TypeForms = Parser, Tokens, Records, TypeForms
+local _: Types.Own, _: Types.Tokens, _: Types.Records, _: Types.TypeForms, _: Types.Reuse =
+	Parser, Tokens, Records, TypeForms, Reuse
 
 -- Each part of the grammar is parsed by the methods of one sibling file, and a name defined twice is a bug
-local parts: { any } = { Tokens, Records, TypeForms }
+local parts: { any } = { Tokens, Records, TypeForms, Reuse }
 
 for _, part in parts do
 	for name: string, method in part do

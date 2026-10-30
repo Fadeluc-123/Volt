@@ -16,6 +16,7 @@ local Print = require("../Analyse/Print")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
 local Types = require("../Targets/Types")
+local Unions = require("../Analyse/Unions")
 
 type Block = Blocks.Block
 type Emit = EmitTypes.Emit
@@ -322,7 +323,7 @@ function Composites.union(
 	path: string
 ): string
 	local members: { Type } = (node :: any).members
-	local variants: { Variant }? = Sizes.flattened(members)
+	local variants: { Variant }? = Unions.flattened(members)
 
 	if variants then
 		local flat: Type = { kind = "enum", variants = variants, start = node.start, finish = node.finish }
@@ -338,7 +339,7 @@ function Composites.union(
 
 	for position: number, member: Type in members do
 		local classes: { string } = {}
-		for _, class: string in Sizes.classes(member) do
+		for _, class: string in Unions.classes(member) do
 			table.insert(classes, `typeof({value}) == "{class}"`)
 		end
 

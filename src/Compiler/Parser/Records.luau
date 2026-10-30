@@ -18,8 +18,11 @@ local Types = require("../Config/Types/Parser")
 type Attribute = Attributes.Attribute
 type Declaration = Schema.Declaration
 type Parser = Types.Parser
+type SchemaAttributes = Schema.Attributes
+type Span = Schema.Span
 type Spec = Options.Spec
 type Token = Lexer.Token
+type Written = Types.Written
 
 local KINDS: { [string]: string } = {
 	number = "a number",
@@ -200,19 +203,35 @@ function Records.value(self: Parser, spec: Spec, key: string): any
 end
 
 --[[
-    Reads the attributes in front of a declaration, each an @ and a name,
-    in source order. A repeat is reported and dropped; each one spans its
-    @ through its name
+    Reads the attributes in front of a declaration, each an @ and a name
+    with a number in parentheses straight after it when it has one, in
+    source order. A repeat is reported and dropped; each one spans its @
+    through what closes it. Whether it may take the number waits for attach
 --]]
 
-function Records.attributes(self: Parser): { Token }
-	local found: { Token } = {}
+function Records.attributes(self: Parser): { Written }
+	local found: { Written } = {}
 	local seen: { [string]: boolean } = {}
 
 	while self:at("@") do
 		local at: Token = self:consume()
 		local name: Token = self:expect("name")
-		local attribute: Token = { kind = "name", value = name.value, start = at.start, finish = name.finish }
+		local argument: number? = nil
+
+		if self:at("(") then
+			self:consume()
+
+			local token: Token = self:peek()
+			if token.kind ~= "number" then
+				self:fail("V2005", `expected a number for "@{name.value}", got {self:describe(token)}`, token)
+			end
+
+			argument = tonumber(self:consume().value)
+			self:expect("punctuation", ")")
+		end
+
+		local attribute: Written =
+			{ name = name.value, argument = argument, start = at.start, finish = self:previous().finish }
 
 		if seen[name.value] then
 			self._diagnostics:error("V2002", `duplicate attribute "@{name.value}"`, attribute)
@@ -227,24 +246,26 @@ end
 
 --[[
     Checks the attributes read in front of a declaration against their
-    rows once its kind is known, reporting one that is no row and one the
-    declaration cannot carry, and returns the set of those that apply
+    rows once its kind is known, reporting one that is no row, one the
+    declaration cannot carry and an argument its row does not fit, and
+    returns the set of those that apply and where each was written
 --]]
 
 function Records.attach(
 	self: Parser,
-	found: { Token },
+	found: { Written },
 	kind: string,
 	name: string,
 	export: boolean
-): { [string]: boolean }?
-	local applied: { [string]: boolean } = {}
+): (SchemaAttributes?, { [string]: Span }?)
+	local applied: SchemaAttributes = {}
+	local spans: { [string]: Span } = {}
 
-	for _, attribute: Token in found do
-		local row: Attribute? = rowOf(attribute.value)
+	for _, attribute: Written in found do
+		local row: Attribute? = rowOf(attribute.name)
 
 		if not row then
-			local message: string = `unknown attribute "@{attribute.value}"; attributes are {namesOf()}`
+			local message: string = `unknown attribute "@{attribute.name}"; attributes are {namesOf()}`
 			self._diagnostics:error("V2011", message, attribute)
 		elseif not table.find(row.kinds, kind) then
 			local kinds: { string } = {}
@@ -256,13 +277,23 @@ function Records.attach(
 			self._diagnostics:error("V2012", message, attribute)
 		elseif export and not row.exported then
 			self._diagnostics:error("V2012", `an exported type cannot be @{row.name}`, attribute)
+		elseif row.argument and attribute.argument == nil then
+			local message: string = `"@{row.name}" takes a number in parentheses, such as @{row.name}(4)`
+			self._diagnostics:error("V2005", message, attribute)
+		elseif not row.argument and attribute.argument ~= nil then
+			self._diagnostics:error("V2005", `"@{row.name}" takes no argument`, attribute)
 		else
-			applied[row.name] = true
+			applied[row.name] = attribute.argument or true
+			spans[row.name] = attribute
 		end
 	end
 
 	-- A declaration with no attribute that applies carries no set at all
-	return next(applied) ~= nil and applied or nil
+	if next(applied) == nil then
+		return nil, nil
+	end
+
+	return applied, spans
 end
 
 return Records

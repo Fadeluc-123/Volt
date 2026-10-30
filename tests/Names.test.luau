@@ -36,6 +36,8 @@ describe("Names", function ()
 			{ "pascal", "Version" },
 			{ "camel", "serverTime" },
 			{ "snake", "server_time" },
+			{ "camel", "budget" },
+			{ "pascal", "Budget" },
 		}
 
 		for _, case: { string } in cases do

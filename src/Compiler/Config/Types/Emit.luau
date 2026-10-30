@@ -18,6 +18,8 @@ type TypeDeclaration = Schema.TypeDeclaration
 export type Fields = {
 	_validate: boolean,
 	_known: boolean,
+	_recursive: boolean,
+	_forward: number,
 	_constants: { [string]: string },
 	_names: { [string]: boolean },
 	_shared: { [TypeDeclaration]: boolean },

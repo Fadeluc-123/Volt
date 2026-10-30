@@ -215,6 +215,7 @@ export type Fields = {
 
 export type Own = {
 	flush: (self: Runtime) -> (),
+	_piled: (self: Runtime, bytes: number) -> boolean,
 }
 
 export type Awaited = {
@@ -371,6 +372,7 @@ export type Wrapper = {
 	_beforeSend: (self: Runtime, name: string, hook: Hook?) -> (),
 	_afterReceive: (self: Runtime, name: string?, hook: Hook?) -> (),
 	_rate: (self: Runtime, name: string, perSecond: number, burst: number?) -> (),
+	budget: (self: Runtime, bytesPerSecond: number?) -> (),
 }
 
 export type Runtime =

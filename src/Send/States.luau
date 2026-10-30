@@ -35,6 +35,9 @@ function States.blank(target: any, stats: Stats?, record: Record?, held: boolean
 		record = record,
 		held = held,
 		refused = false,
+		queued = 0,
+		since = 0,
+		opened = false,
 	}
 end
 
@@ -53,9 +56,16 @@ end
 -- Returns a state to where its last message began and uncounts that message, so it is as if never written
 function States.rollback(state: State, total: Stats)
 	local stats: Stats? = state.stats
+	local marks: { number } = state.marks
 
 	state.cursor = state.committed
 	state.sideCursor = state.sideCommitted
+
+	-- A message a cap drops has marked its end already, and a mark left past the cursor would name bytes that are gone
+	while marks[#marks] and marks[#marks] > state.cursor do
+		table.remove(marks)
+		table.remove(state.sideMarks)
+	end
 
 	if stats then
 		stats.messagesOut -= 1

@@ -21,6 +21,7 @@ type Fields = {
 	source: Source,
 	list: { Diagnostic },
 	errors: number,
+	_reported: { [string]: boolean },
 }
 
 function Diagnostics.new(source: Source): Self
@@ -28,15 +29,25 @@ function Diagnostics.new(source: Source): Self
 		source = source,
 		list = {} :: { Diagnostic },
 		errors = 0,
+		_reported = {} :: { [string]: boolean }, -- Every error so far, by its code, span and message
 	}, Diagnostics)
 end
 
 --[[
     Records an error. The span is any table carrying start and finish byte
-    offsets, which every token and every parsed node does
+    offsets, which every token and every parsed node does. An exact repeat
+    is dropped, so a check that fails in a generic's body is reported once
+    however many instantiations share it
 --]]
 
 function Diagnostics.error(self: Self, code: string, message: string, span: Span)
+	local key: string = `{code}:{span.start}:{span.finish}:{message}`
+
+	if self._reported[key] then
+		return
+	end
+
+	self._reported[key] = true
 	self.errors += 1
 	table.insert(self.list, { severity = "error", code = code, message = message, span = span })
 end

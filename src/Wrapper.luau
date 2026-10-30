@@ -1,9 +1,10 @@
 --[[
     What the wrapper plugs into, merged onto the runtime: the hooks a game
     registers before a message is sent and after one is received, each
-    able to veto it, the rate a message allows, changed while the game
-    runs, and a value serialised on its own through an exported type's
-    pair, for a DataStore or a transport of the game's
+    able to veto it, the rate a message allows and the budget a player
+    gets, changed while the game runs, and a value serialised on its own
+    through an exported type's pair, for a DataStore or a transport of
+    the game's
 --]]
 
 --!strict
@@ -15,10 +16,12 @@ type Hook = Types.Hook
 type Message = Types.Message
 type Outgoing = Types.Outgoing
 type Runtime = Types.Runtime
+type Send = Types.Send
 
 type Rows = { [number]: Message | Outgoing } -- A side's incoming or outgoing rows, cast to this at each find
 
 local GLOBAL: number = 0 -- Where the hook over every received message sits: the one id no message has
+local LEVEL: number = 1 -- The level an exported value sits at, which a recursive type's pair takes and any other ignores
 
 -- The id of an event, or of a function's call too, among a side's rows by its name
 local function find(rows: Rows, name: string, calls: boolean): number?
@@ -86,6 +89,28 @@ function Wrapper._rate(self: Runtime, name: string, perSecond: number, burst: nu
 	self._limits[id] = { rate = perSecond, burst = burst or perSecond }
 end
 
+--[[
+    Sets the bytes a second at which this runtime gives way to a player,
+    counted across the VM, on every reliable send and the unreliable one;
+    nil clears it. Reliable bytes wait for it and unreliable ones are
+    dropped, which each flush reports once per player
+--]]
+
+function Wrapper.budget(self: Runtime, bytesPerSecond: number?)
+	assert(self._server, "Volt: a budget is the server's alone")
+
+	self.reliable.allowance = bytesPerSecond
+	self.unreliable.allowance = bytesPerSecond
+
+	for _, stream: Send in self.streams do
+		stream.allowance = bytesPerSecond
+	end
+
+	self.unreliable.lost = function (target: any, count: number)
+		self:fail(target, "budget", `over the budget, unreliable messages dropped: {count}`)
+	end
+end
+
 -- Whether the hooks let a received message through: the one over every message first, then the message's own
 function Wrapper.guard(self: Runtime, id: number, player: any, ...: any): boolean
 	local after: { [number]: Hook? } = self._after
@@ -108,7 +133,7 @@ function Wrapper.encode(self: Runtime, name: string, write: (...any) -> (), valu
 
 	send.current = send.scratch
 
-	local ok: boolean, refused: any = pcall(write, send.allocate, send.slot, send.refuse, value)
+	local ok: boolean, refused: any = pcall(write, send.allocate, send.slot, send.refuse, value, LEVEL)
 	if not ok then
 		local reason: string = send:undo(name, refused)
 		send.current = was
@@ -122,7 +147,7 @@ end
 
 -- A value read back through an exported type's reader from a buffer and the side array it was encoded with
 function Wrapper.decode(_: Runtime, read: (...any) -> (number, number, any), packet: buffer, side: { any }?): any
-	return select(3, read(packet, 0, side or {}, 1, buffer.len(packet)))
+	return select(3, read(packet, 0, side or {}, 1, buffer.len(packet), LEVEL))
 end
 
 return Wrapper

@@ -1,8 +1,8 @@
 --[[
     One player's byte count, shared by every runtime of a VM: the bytes
     sent to them, kept in slices of the last second so the sum moves as
-    time does, and their send states, whose cursors are what was written
-    for them and not yet flushed
+    time does, and their send states, whose cursors and waiting packets
+    are what was written for them and not yet sent
 --]]
 
 --!strict
@@ -52,11 +52,11 @@ function Traffic.add(record: Record, bytes: number)
 	record.slices[index] += bytes
 end
 
--- The bytes sent over the last second, then the bytes written and not yet flushed, held ones included
-function Traffic.read(record: Record): (number, number)
+-- The bytes sent over the last second, which a budget reads at each flush
+function Traffic.sent(record: Record): number
 	local stamp: number = os.clock() // WIDTH
 	local stamps: { number } = record.stamps
-	local sent: number, pending: number = 0, 0
+	local sent: number = 0
 
 	for index: number, bytes: number in record.slices do
 		if stamp - stamps[index] < SLICES then
@@ -64,11 +64,18 @@ function Traffic.read(record: Record): (number, number)
 		end
 	end
 
+	return sent
+end
+
+-- The bytes sent over the last second, then those written and not yet sent, the held and a budget's waiting included
+function Traffic.read(record: Record): (number, number)
+	local pending: number = 0
+
 	for state: any in record.states do
-		pending += state.cursor
+		pending += state.cursor + state.queued
 	end
 
-	return sent, pending
+	return Traffic.sent(record), pending
 end
 
 return Traffic

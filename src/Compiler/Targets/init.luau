@@ -51,7 +51,8 @@ local HANDSHAKE: string = "Volt" -- What a handshake failure's detail opens with
     place of one of the API's own members is refused first, in the casing
     the schema asks for, so is one named like a handshake failure's
     prefix, and so is a top-level type named like one the modules declare
-    or name, or like a Roblox type
+    or name, or like a Roblox type, and a type parameter named so or like
+    a named type's label
 --]]
 
 function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string, string, { Extra })
@@ -85,6 +86,8 @@ function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (s
 			diagnostics:error("V4002", message, declaration)
 		end
 	end
+
+	Types.parameters(file.declarations, diagnostics)
 
 	local client: string, extra: { Extra } = Targets.new(file, "client"):render(hash, name, diagnostics)
 	local server: string, shards: { Extra } = Targets.new(file, "server"):render(hash, name, diagnostics)
@@ -281,7 +284,9 @@ function Targets.start(self: Self, hash: number): string
 	local labels: { string } = {}
 
 	for _, key: string in Contract.options do
-		table.insert(settings, `\t\t{key} = {tostring(options[key])},`)
+		if options[key] ~= nil then
+			table.insert(settings, `\t\t{key} = {tostring(options[key])},`)
+		end
 	end
 
 	for _, path: string in self._streams do
