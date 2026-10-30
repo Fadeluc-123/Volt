@@ -113,16 +113,16 @@ local function setup(timeout: number?, promise: any?, inert: boolean?): Harness
 		buffer.writeu8(out, offset + 3, value)
 	end
 
-	local function readReply(_, packet: buffer, cursor: number, _, sideCursor: number, length: number)
+	local function readReply(from: any, packet: buffer, cursor: number, _, sideCursor: number, length: number)
 		local slot: number = buffer.readu16(packet, cursor)
 		local status: number = buffer.readu8(packet, cursor + 2)
 		cursor += 3
 
 		if status ~= STATUS.ok then
-			return client:refused(ID, slot, packet, cursor, sideCursor, length)
+			return client:refused(ID, from, slot, status, packet, cursor, sideCursor, length)
 		end
 
-		return client:reply(ID, slot, cursor + 1, sideCursor, buffer.readu8(packet, cursor))
+		return client:reply(ID, from, slot, cursor + 1, sideCursor, buffer.readu8(packet, cursor))
 	end
 
 	local live: Transport = table.clone(transport)

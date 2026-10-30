@@ -1,14 +1,15 @@
 --[[
     The flush, merged onto a send: every target's bytes fired as exact
-    packets, a run of whole messages to a packet while it fits the budget,
-    what a hold or a refusal keeps or drops, the message a cap drops and the
-    runtime told of it once a loop is done, and every packet counted
+    packets, each opening with its channel byte and stamp where the schema
+    has them, a run of whole messages to a packet while it fits the budget,
+    what a hold or a refusal keeps or drops, and the message a cap drops
 --]]
 
 --!strict
 --!native
 local Flush = {}
 
+local Config = require("../Config/Runtime")
 local States = require("./States")
 local Traffic = require("../Traffic")
 local Types = require("../Config/Types/Send")
@@ -18,15 +19,20 @@ type Send = Types.Send
 type State = Types.State
 type Stats = Types.Stats
 
+local STAMP_BYTES: number = Config.stampBytes
+
 --[[
     Fires every target's bytes as exact packets, a run of whole messages
     to a packet while it fits the budget, and empties the states for the
     next frame; a held state keeps its reliable bytes for the flush after
     the handshake, a refused or held unreliable one goes unsent, and a
-    drop is reported once the loop is done, since its handler may fire
+    drop is reported once the loop is done, since its handler may fire.
+    A stamped send's packets carry the server time the flush began at
 --]]
 
-function Flush.flush(self: Send)
+function Flush.flush(self: Send, stamp: number?)
+	self._stamp = stamp or 0
+
 	for target, state: State in self._states do
 		if state.cursor > self._cap then
 			self:_discard(state)
@@ -73,7 +79,12 @@ function Flush._send(self: Send, target: any, state: State)
 	States.reset(state)
 end
 
--- One packet of the bytes and slots between two points of a state, with no side array when it holds no slot, counted
+--[[
+    One packet of the bytes and slots between two points of a state, with
+    no side array when it holds no slot: the channel byte first, then the
+    stamp, then the messages, every byte of it counted
+--]]
+
 function Flush._packet(
 	self: Send,
 	target: any,
@@ -83,14 +94,24 @@ function Flush._packet(
 	sideFrom: number,
 	sideTo: number
 )
-	local bytes: number = to - from
+	local prefix: number = self._prefix
+	local bytes: number = prefix + to - from
 	local packet: buffer = buffer.create(bytes)
 	local side: { any }? = sideTo > sideFrom and table.move(state.side, sideFrom, sideTo - 1, 1, {}) or nil
 	local stats: Stats = state.stats :: Stats
 	local total: Stats = self._total
 	local record: Record? = state.record
+	local channel: number? = self._channel
 
-	buffer.copy(packet, 0, state.out, from, bytes)
+	if channel then
+		buffer.writeu8(packet, 0, channel)
+	end
+
+	if self._stamped then
+		buffer.writef64(packet, prefix - STAMP_BYTES, self._stamp)
+	end
+
+	buffer.copy(packet, prefix, state.out, from, to - from)
 
 	stats.packetsOut += 1
 	stats.bytesOut += bytes

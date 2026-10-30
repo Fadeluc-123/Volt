@@ -142,7 +142,7 @@ local function writeRun(slot: number, value: Commands)
 	writeCommands(allocateReliable, slotReliable, refuseReliable, value)
 end
 
-local function readRun(_: (Player | Bot)?, packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number)
+local function readRun(player: (Player | Bot)?, packet: buffer, cursor: number, side: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Run: truncated")
 	end
@@ -173,10 +173,10 @@ local function readRun(_: (Player | Bot)?, packet: buffer, cursor: number, side:
 		local text: string = buffer.readstring(packet, cursor, textLength)
 		cursor += textLength
 
-		return runtime:reply(2, slot, cursor, sideCursor, kind, text)
+		return runtime:reply(2, player, slot, cursor, sideCursor, kind, text)
 	end
 
-	return runtime:refused(2, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(2, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 runtime = Volt.start({

@@ -3,7 +3,9 @@
     and signals and gets a client side of their own, a packet is copied
     when fired and delivered on the next step to the side it names, one
     for a player who left is dropped, every Heartbeat still connected
-    fires once per step, and a bot connects to the scope once
+    fires once per step, a bot connects to the scope once, the server's
+    clock reads the time a test sets, and an instance's id resolves on
+    every client unless hidden, a reveal heard at the next step
 --]]
 
 --!strict
@@ -155,4 +157,68 @@ describe("Mock", function ()
 		expect(ok).is(false)
 		expect(tostring(message):find("Volt: connected a bot to Mock a second time", 1, true) ~= nil).is(true)
 	end)
+
+	test("the server's clock reads the time a test sets, and 0 until it is set", function ()
+		local mock = Volt.mock(task.spawn)
+		local now = assert(mock.server.now, "the server side has a clock")
+
+		expect(now()).is(0)
+
+		mock.time = 1761700000.25
+
+		expect(now()).is(1761700000.25)
+	end)
+
+	test("gives an instance one id, which every client resolves at once unless the instance is hidden", function ()
+		local mock = Volt.mock(task.spawn)
+		local _, client = mock:join("Alice")
+		local reference = assert(mock.server.reference, "the server side gives instances ids")
+		local resolve = assert(client.resolve, "a client side resolves ids")
+		local model: any, part: any = { Name = "Model" }, { Name = "Part" }
+		local id: number = reference(model)
+
+		expect(`{id} {reference(model)} {reference(part)}`).is("1 1 2")
+		expect(rawequal(resolve(id), model)).is(true)
+
+		mock:hide(model)
+		expect(resolve(id)).is(nil)
+
+		mock:reveal(model)
+		expect(rawequal(resolve(id), model)).is(true)
+	end)
+
+	test(
+		"a revealed instance's id reaches each client's resolved at the start of the next step, before its packets",
+		function ()
+			local mock = Volt.mock(task.spawn)
+			local alice, aliceSide = mock:join("Alice")
+			local _, bobSide = mock:join("Bob")
+			local heard: { string } = {}
+			local model: any = { Name = "Model" }
+			local id: number = assert(mock.server.reference, "the server side gives instances ids")(model)
+
+			assert(aliceSide.resolved, "a client side hears arrivals")(function (arrived: number)
+				table.insert(heard, `Alice {arrived}`)
+			end)
+
+			assert(bobSide.resolved, "a client side hears arrivals")(function (arrived: number)
+				table.insert(heard, `Bob {arrived}`)
+			end)
+
+			aliceSide.receive(function ()
+				table.insert(heard, "packet")
+			end)
+
+			mock:hide(model)
+			mock:reveal(model)
+			mock.server.reliable(alice, buffer.create(1))
+
+			expect(#heard).is(0)
+
+			mock:step()
+			mock:step()
+
+			expect(table.concat(heard, ",")).is(`Alice {id},Bob {id},packet`)
+		end
+	)
 end)

@@ -1,8 +1,8 @@
 --[[
     The player lifecycle on the server, merged onto the runtime: the
     states, counters and buckets each player or bot gets and loses, the
-    target a fire writes into, the callbacks a game or a package hears
-    joins, leaves and handshakes on, and each player's byte count
+    target a fire or a call writes into, the callbacks a game or a package
+    hears joins, leaves and handshakes on, and each player's byte count
 --]]
 
 --!strict
@@ -17,6 +17,8 @@ type Callback = Types.Callback
 type Joined = Types.Joined
 type Record = Types.Record
 type Runtime = Types.Runtime
+type Send = Types.Send
+type State = Types.State
 type Stats = Types.Stats
 
 -- Keeps a callback under a token of its own and returns the closure that takes it out again
@@ -33,20 +35,16 @@ end
 Players.isBot = Hub.isBot -- A plain function, since the generated API hands it out as a value
 
 --[[
-    Points both sends at a player's states before a fire writes, or at
-    the scratch states when no player is given, which is where a
-    broadcast is written before it is copied. A player the transport
-    lists whom this runtime has not set up yet, because a game's own join
-    callback ran first, is set up here. False for a player who has left
-    or whose handshake failed, so the fire writes nothing for them
+    Points both sends at a player's states before a fire or a call
+    writes, and given a channel's number, that channel's send at theirs.
+    A player the transport lists whom this runtime has not set up yet,
+    because a game's own join callback ran first, is set up here. False
+    for a player who has left or whose handshake failed, so nothing is
+    written for them; no player at all is the caller's bug, and raises
 --]]
 
-function Players.target(self: Runtime, player: any): boolean
-	if player == nil then
-		self.reliable.current = self.reliable.scratch
-		self.unreliable.current = self.unreliable.scratch
-		return true
-	end
+function Players.target(self: Runtime, player: any, stream: number?): boolean
+	assert(player ~= nil, "Volt: a message for one player was sent to none")
 
 	local states: Joined? = self._players[player]
 	local present: ((player: any) -> boolean)? = self._present
@@ -68,6 +66,10 @@ function Players.target(self: Runtime, player: any): boolean
 
 	self.reliable.current = states.reliable
 	self.unreliable.current = states.unreliable
+
+	if stream then
+		self.streams[stream].current = states.streams[stream]
+	end
 
 	return true
 end
@@ -123,25 +125,42 @@ function Players._join(self: Runtime, player: any)
 	local stats: Stats = Limits.fresh()
 	local record: Record = self._record(player)
 	local held: boolean = not Hub.isBot(player) -- A bot has no client that could miss what is sent before it loads
+	local streams: { State } = {}
+
+	-- A state in each channel's send too, counted and held with the default one
+	for channel: number, stream: Send in self.streams do
+		streams[channel] = stream:add(player, stats, record, held)
+	end
 
 	self._players[player] = {
 		reliable = self.reliable:add(player, stats, record, held),
 		unreliable = self.unreliable:add(player, stats, record, held),
+		streams = streams,
 		stats = stats,
 		packets = { tokens = self._maxPackets, last = os.clock() },
 		buckets = {}, -- One per event and function the player has sent, by id
+		sequences = {}, -- The last sequence taken from them of each ordered event, by id
 		handshaken = false,
 		warned = {}, -- When the runtime's own handler last warned of each kind about this player
+		calls = {}, -- The calls the server has in flight to them, a slot table per function opened at its first
+		known = 0, -- The dictionary entries they hold, so a joiner's first packet follows all of them
 	}
 
 	self:_announce(self._joins, player)
 end
 
--- Frees a player's states once the callbacks have heard it, and never sets them up again, so a late fire recreates nothing
+--[[
+    Frees a player's states once the callbacks have heard it, then fails
+    the calls the server has in flight to them, and never sets them up
+    again, so a late fire or call recreates nothing
+--]]
+
 function Players._leave(self: Runtime, player: any)
+	local state: Joined? = self._players[player]
+
 	self._left[player] = true
 
-	if not self._players[player] then
+	if not state then
 		return
 	end
 
@@ -150,6 +169,34 @@ function Players._leave(self: Runtime, player: any)
 	self._players[player] = nil
 	self.reliable:remove(player)
 	self.unreliable:remove(player)
+
+	for _, stream: Send in self.streams do
+		stream:remove(player)
+	end
+
+	self:_abandon(state)
+end
+
+--[[
+    Sets up each player listed or set whom the transport lists and this
+    runtime has not set up yet, as a fire at them does, so a broadcast
+    naming a joiner from any callback reaches them
+--]]
+
+function Players._setUp(self: Runtime, targets: { [any]: any }?)
+	local present: ((player: any) -> boolean)? = self._present
+	if not targets or not present then
+		return
+	end
+
+	-- A list carries its players as values and a set as keys
+	for key: any, value: any in targets do
+		local player: any = typeof(key) == "number" and value or key
+
+		if not self._players[player] and present(player) then
+			self:_join(player)
+		end
+	end
 end
 
 -- Runs every callback of a bucket for a player, each on the transport's scheduler so one that yields holds up nothing

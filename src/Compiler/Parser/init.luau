@@ -162,10 +162,10 @@ function Parser.declarations(self: Self, close: string?): { Declaration }
 end
 
 --[[
-    Skips to the next declaration keyword or attribute, or to the brace
-    that closes the enclosing namespace, whichever comes first. A keyword
-    or an @ counts only when a name follows it, which is what tells struct
-    Stack from struct {
+    Skips to the next declaration keyword, attribute or channel, or to the
+    brace that closes the enclosing namespace, whichever comes first. A
+    keyword, an @ or the name channel counts only when a name follows it,
+    which is what tells struct Stack from struct {
 --]]
 
 function Parser.synchronise(self: Self, depth: number, close: string?)
@@ -176,7 +176,7 @@ function Parser.synchronise(self: Self, depth: number, close: string?)
 			and DECLARATIONS[token.value] == true
 			and (token.value == "export" or following.kind == "name")
 
-		if declares or (self:at("@") and following.kind == "name") then
+		if declares or ((self:at("@") or self:at("channel")) and following.kind == "name") then
 			self._depth = depth -- Whatever body was left open is abandoned with its declaration
 			return
 		end
@@ -221,6 +221,8 @@ function Parser.declaration(self: Self): Declaration?
 		declaration = self:message(Options["function"])
 	elseif self:at("namespace") then
 		declaration = self:namespace()
+	elseif self:at("channel") and self:peek(1).kind == "name" then
+		declaration = self:channel()
 	else
 		return self:fail("V2001", `expected a declaration, got {self:describe(token)}`, token)
 	end
@@ -228,7 +230,8 @@ function Parser.declaration(self: Self): Declaration?
 	local exported: boolean = declaration.kind == "type" and declaration.export
 	local applied: { [string]: boolean }? = self:attach(attributes, declaration.kind, declaration.name, exported)
 
-	if declaration.kind == "type" then
+	-- No row applies to any other kind, so nothing else ever has a set to keep
+	if declaration.kind == "type" or declaration.kind == "event" then
 		declaration.attributes = applied
 	end
 
@@ -290,26 +293,6 @@ function Parser.typeDeclaration(self: Self): Declaration
 		start = name.start,
 		finish = name.finish,
 	}
-end
-
---[[
-    Parses an event or a function: the keyword, the name and a record whose
-    keys are checked against the shape
---]]
-
-function Parser.message(self: Self, shape: { Spec }): Declaration
-	local keyword: Token = self:consume()
-	local name: Token = self:name()
-	local node = {
-		kind = keyword.value,
-		name = name.value,
-		spans = {},
-		start = name.start,
-		finish = name.finish,
-	} :: any
-
-	self:record(node, shape, `{keyword.value} {name.value}`)
-	return node
 end
 
 function Parser.namespace(self: Self): Declaration

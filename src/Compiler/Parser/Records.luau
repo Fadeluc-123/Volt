@@ -1,9 +1,9 @@
 --[[
-    The record grammar, merged onto the parser class: a brace-delimited
-    list of key: value entries checked against a shape of specs, which is
-    how events, functions and the file's options are read, reporting
-    unknown, duplicate, missing and wrongly shaped keys with the span of
-    each; and the attributes in front of a declaration, checked by rows
+    The record grammar, merged onto the parser class: events and functions,
+    each a brace-delimited list of key: value entries checked against a
+    shape of specs, as the file's options are, reporting unknown, duplicate,
+    missing and wrongly shaped keys with the span of each; a channel; and
+    the attributes in front of a declaration, checked by rows
 --]]
 
 --!strict
@@ -12,9 +12,11 @@ local Records = {}
 local Attributes = require("../Config/Attributes")
 local Lexer = require("../Lexer")
 local Options = require("../Config/Options")
+local Schema = require("../Config/Types/Schema")
 local Types = require("../Config/Types/Parser")
 
 type Attribute = Attributes.Attribute
+type Declaration = Schema.Declaration
 type Parser = Types.Parser
 type Spec = Options.Spec
 type Token = Lexer.Token
@@ -83,6 +85,39 @@ local function namesOf(): string
 		table.insert(names, `@{row.name}`)
 	end
 	return table.concat(names, ", ")
+end
+
+--[[
+    Parses an event or a function: the keyword, the name and a record whose
+    keys are checked against the shape
+--]]
+
+function Records.message(self: Parser, shape: { Spec }): Declaration
+	local keyword: Token = self:consume()
+	local name: Token = self:name()
+	local node = {
+		kind = keyword.value,
+		name = name.value,
+		spans = {},
+		start = name.start,
+		finish = name.finish,
+	} :: any
+
+	self:record(node, shape, `{keyword.value} {name.value}`)
+	return node
+end
+
+--[[
+    Parses a channel: the name channel, which opens a declaration only when
+    a name follows it, so a field, parameter or type may still be named
+    channel, and the channel's own name
+--]]
+
+function Records.channel(self: Parser): Declaration
+	self:consume()
+
+	local name: Token = self:name()
+	return { kind = "channel", name = name.value, start = name.start, finish = name.finish }
 end
 
 --[[

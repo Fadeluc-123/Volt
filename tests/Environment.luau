@@ -27,6 +27,11 @@ local Environment: { [string]: any } = {
 	DateTime = DateTime,
 	Enum = roblox.Enum,
 	Instance = roblox.Instance,
+	NumberRange = roblox.NumberRange,
+	Ray = roblox.Ray,
+	Rect = roblox.Rect,
+	Region3 = roblox.Region3,
+	UDim2 = roblox.UDim2,
 	Vector2 = roblox.Vector2,
 	Vector3 = roblox.Vector3,
 

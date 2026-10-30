@@ -2,8 +2,8 @@
     Assembles the client, server and types modules from a resolved schema:
     the entry point that refuses a name the API owns, the shell of a
     module (header, requires, types, send locals and the schema table) and
-    the assembly of every piece in reading order. The API tables and the
-    walk of each message are the methods of one sibling file each
+    the assembly of every piece in reading order. The API tables, the walk
+    of each message and a side's shards are the methods of a sibling each
 --]]
 
 --!strict
@@ -16,100 +16,45 @@ local Blocks = require("./Blocks")
 local Contract = require("./Config/Contract")
 local Diagnostics = require("./Diagnostics")
 local Emit = require("./Emit")
-local Helpers = require("./Emit/Helpers")
+local Inspector = require("./Targets/Inspector")
 local Messages = require("./Targets/Messages")
+local Output = require("./Config/Output")
+local Pieces = require("./Targets/Pieces")
 local Reserved = require("./Config/Reserved")
+local Roblox = require("./Config/Roblox")
 local Schema = require("./Config/Types/Schema")
+local Shards = require("./Targets/Shards")
 local Sizes = require("./Analyse/Sizes")
 local TargetsTypes = require("./Config/Types/Targets")
 local Types = require("./Targets/Types")
 
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
+type Emit = TargetsTypes.Emit
+type Extra = TargetsTypes.Extra
 type Fields = TargetsTypes.Fields
 type File = Schema.File
-type Parameter = Contract.Parameter
+type Pack = Schema.Pack
 type Self = TargetsTypes.Targets
-
--- A send function of the runtime as a writer names it, and where it is taken from once the runtime exists
-type Send = { name: string, type: string, from: string }
+type Send = Pieces.Send
+type Type = Schema.Type
 
 local VERSION: string = Contract.version
+local FILE_LOCALS: number = Output.fileLocals
 local BOT: string = "type Bot = Volt.Bot" -- A bot is the runtime's type, which every player in a signature may be
 local HANDSHAKE: string = "Volt" -- What a handshake failure's detail opens with, as a message's name opens its own
 
--- The send functions a writer may name, in the order they are declared; filled from the contract below
-local SENDS: { Send } = {}
-
-for _, reliability: string in { "Reliable", "Unreliable" } do
-	for _, parameter: Parameter in { Contract.begin, Contract.trim, table.unpack(Contract.write) } do
-		table.insert(SENDS, {
-			name = `{parameter.name}{reliability}`,
-			type = parameter.type,
-			from = `runtime.{reliability:lower()}.{parameter.name}`,
-		})
-	end
-end
-
-table.insert(SENDS, { name = "markUnreliable", type = "() -> ()", from = "runtime.unreliable.mark" })
-
--- Whether a text reaches for a module-level name: calls it, indexes it or hands it on, never a field so named
-local function reaches(text: string, name: string): boolean
-	-- A refusal's message opens with the message's name, so a string's text is blanked first, escapes before quotes
-	local code: string = text:gsub("\\.", ""):gsub('"[^"]*"', '""')
-
-	for after: string in (`\n{code}`):gmatch(`[^%w_.:]{name}%f[^%w_]%s*(=?=?)`) do
-		if after ~= "=" then
-			return true
-		end
-	end
-	return false
-end
-
 --[[
-    The module-level pieces a module keeps, each a helper, a constant or
-    one half of a shared pair: walked from the last, since a piece names
-    only those above it, and kept when the text below that is kept names
-    the one local it declares
+    The three modules of a file, the client's, the server's and the types,
+    then the shards of a side too big for one file and the inspector when
+    the schema asks for one. A top-level declaration that would take the
+    place of one of the API's own members is refused first, in the casing
+    the schema asks for, so is one named like a handshake failure's
+    prefix, and so is a top-level type named like one the modules declare
+    or name, or like a Roblox type
 --]]
 
-local function kept(pieces: { string }, below: string): { string }
-	local list: { string } = {}
-	local used: string = below
-
-	for index: number = #pieces, 1, -1 do
-		local piece: string = pieces[index]
-		local name: string = piece:match("local function ([%w_]+)") or piece:match("local ([%w_]+)") :: string
-
-		if reaches(used, name) then
-			table.insert(list, 1, piece)
-			used = `{used}\n{piece}`
-		end
-	end
-
-	return list
-end
-
--- The rows of a schema table by id, or an empty table when the side has none
-local function rows(list: { [number]: string }, count: number): string
-	local lines: { string } = {}
-	for id: number = 1, count do
-		if list[id] then
-			table.insert(lines, `\t\t[{id}] = {list[id]},`)
-		end
-	end
-	return #lines == 0 and "{}" or `\{\n{table.concat(lines, "\n")}\n\t}`
-end
-
---[[
-    The three modules of a file: the client's, the server's and the types.
-    A top-level declaration that would take the place of one of the API's
-    own members is refused first, in the casing the schema asks for, so is
-    one named like a handshake failure's prefix, and so is a top-level
-    type named like one the modules declare or name
---]]
-
-function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string, string)
+function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (string, string, string, { Extra })
 	local casing: string = file.options.casing :: string
 	local path: string = diagnostics.source.path
 	local name: string = path:match("([^/\\]+)$") or path
@@ -133,34 +78,56 @@ function Targets.modules(file: File, diagnostics: Diagnostics, hash: number): (s
 			local message: string =
 				`"{declaration.name}" is a type the generated modules declare or name and cannot name a type`
 			diagnostics:error("V4002", message, declaration)
+		elseif declaration.kind == "type" and Roblox[declaration.name] then
+			-- The parser reads the name as the Roblox type, so no reference could reach this one
+			local message: string =
+				`"{declaration.name}" is a Roblox type the schema language names and cannot name a type`
+			diagnostics:error("V4002", message, declaration)
 		end
 	end
 
-	local client: string = Targets.new(file, "client"):render(hash, name)
-	local server: string = Targets.new(file, "server"):render(hash, name)
+	local client: string, extra: { Extra } = Targets.new(file, "client"):render(hash, name, diagnostics)
+	local server: string, shards: { Extra } = Targets.new(file, "server"):render(hash, name, diagnostics)
 
-	return client, server, Types.module(file, name)
+	table.move(shards, 1, #shards, #extra + 1, extra)
+
+	-- Both sides walked again, unlabelled, through the one emitter of the inspector's own that they share
+	if file.options.inspectorOutput then
+		local walk: Self = Targets.new(file, "server", Inspector.emitter(file.options))
+		table.insert(extra, Inspector.module(walk, Targets.new(file, "client", walk._emitter), name, diagnostics))
+	end
+
+	return client, server, Types.module(file, name), extra
 end
 
-function Targets.new(file: File, side: string): Self
+function Targets.new(file: File, side: string, emitter: Emit?): Self
 	local fields: Fields = {
 		_file = file,
 		_side = side,
 		_server = side == "server",
 		_casing = file.options.casing :: string,
-		_emitter = Emit.new(file.options),
+		_emitter = emitter or Emit.new(file.options), -- Given, it is the one an inspector's two walks share
+		_label = not emitter and file.options.profileLabels and `Volt {file.options.scope}` or nil, -- Opens every label
 		_toServer = 0, -- The last id in each direction, functions included, which is what sets how wide ids are
 		_toClient = 0,
-		_promise = false, -- Whether a function on this side yields a promise, so the module requires the library
+		_promise = false, -- Whether a function this side calls yields a promise, so the module requires the library
+		_reversed = Types.reversed(file.declarations), -- Whether the schema declares a from: Server function
+		_ordered = false, -- Whether the schema declares an ordered event, whose writers take a sequence
+		_dictionary = false, -- Whether the schema declares a @dictionary type, whose strings the runtime keeps
+		_streams = {} :: { string }, -- Each channel's path, by its number
+		_sends = {} :: { Send }, -- The send functions this module's writers may name, filled once the schema is counted
+		_reserve = {} :: { string }, -- The schema's own send locals, which no writer's field or parameter may shadow
 		_functions = {} :: { string }, -- A writer per message sent and a reader per message heard, in declaration order
 		_messages = {} :: { [number]: string }, -- The schema row of every message heard, by id
 		_outgoing = {} :: { [number]: string }, -- The schema row of every message sent, by id
 		_registry = { events = {}, functions = {}, exports = {} } :: { [string]: { string } }, -- Every entry's full name, by kind
+		_entries = {} :: { TargetsTypes.Entry }, -- Every API entry as its walk left it, in declaration order
 	}
 
 	local self: Self = setmetatable(fields, Targets) :: any
 	self:count(file.declarations)
 	self:mark(file.declarations)
+	self._sends, self._reserve = Pieces.sends(self._streams, self._ordered)
 
 	return self
 end
@@ -169,60 +136,36 @@ end
     The module text: the API first, since walking the events is what
     emits the functions and the rows, then every piece in the order the
     file reads, the helpers, constants and shared halves only when a kept
-    function names them. The named types and this side's handle types are
-    always spelled out, the handles local when a types module exports them
+    function names them. A side whose one file would declare more locals
+    than FILE_LOCALS, or hold more entries than shardSize, is written as an
+    entry and its shards instead, which come back beside it
 --]]
 
-function Targets.render(self: Self, hash: number, name: string): string
-	local emitter = self._emitter
-	local file: File = self._file
+function Targets.render(self: Self, hash: number, name: string, diagnostics: Diagnostics): (string, { Extra })
 	local api: string = self:api()
 	local registry: string = self:registry()
 	local body: string = table.concat(self._functions, "\n")
-	local named: { string } = Types.named(file.declarations, {})
 	local declared: { string } = { "local runtime: Volt.Runtime" }
 	local assigned: { string } = {}
-	local helpers: { string } = {}
-	local pieces: { string } = {}
+	local pieces: { string } = Pieces.list(self._emitter)
+	local needed: { string }, sends: { Send } = Pieces.needed(pieces, self._sends, `{body}\n{api}`)
 
-	for _, send: Send in SENDS do
-		if body:find(send.name, 1, true) then
-			table.insert(declared, `local {send.name}: {send.type}`)
-			table.insert(assigned, `{send.name} = {send.from}`)
-		end
+	for _, send: Send in sends do
+		table.insert(declared, `local {send.name}: {send.type}`)
+		table.insert(assigned, `{send.name} = {send.from}`)
 	end
 
-	for helper: string in emitter.helpers do
-		table.insert(helpers, helper)
-	end
+	local about: string = table.concat({
+		`    The {self._side} module Volt {VERSION} generated from {name}: a writer per`,
+		"    message this side sends, a reader per message it hears, the schema",
+		"    table the runtime starts from and the API a game calls. Generated code:",
+		"    change the schema and run volt again rather than editing this file",
+	}, "\n")
+	local parts: { string } = { self:header(about, self._promise) }
+	local aliases: { string } = self:aliases(false)
 
-	table.sort(helpers)
-
-	for _, helper: string in helpers do
-		table.move(Helpers[helper], 1, #Helpers[helper], #pieces + 1, pieces)
-	end
-	for _, constant: string in emitter.constants do
-		table.insert(pieces, `{constant}\n`)
-	end
-
-	table.move(emitter.functions, 1, #emitter.functions, #pieces + 1, pieces)
-
-	local parts: { string } = { self:header(name) }
-
-	if #named > 0 then
-		table.insert(parts, `{table.concat(named, "\n")}\n`)
-	end
-
-	table.insert(parts, `{BOT}\n`)
-
-	for _, handle: string in Types.handles(self._side, self._casing, not file.options.typesOutput) do
-		table.insert(parts, `{handle}\n`)
-	end
-
+	table.move(aliases, 1, #aliases, #parts + 1, parts)
 	table.insert(parts, `{table.concat(declared, "\n")}\n`)
-
-	local needed: { string } = kept(pieces, `{body}\n{api}`)
-
 	table.move(needed, 1, #needed, #parts + 1, parts)
 	table.move(self._functions, 1, #self._functions, #parts + 1, parts)
 	table.insert(parts, self:start(hash))
@@ -240,25 +183,29 @@ function Targets.render(self: Self, hash: number, name: string): string
 	table.insert(parts, `{registry}\n`)
 	table.insert(parts, "return table.freeze(Network)\n")
 
-	return table.concat(parts, "\n")
+	local text: string = table.concat(parts, "\n")
+	local size: number? = self._file.options.shardSize
+
+	if (size and #self._entries > size) or Pieces.declared(text) > FILE_LOCALS then
+		return self:sharded(hash, name, pieces, diagnostics)
+	end
+
+	return text, {}
 end
 
 --[[
-    The header naming the schema and the compiler, the directives, the
-    services the runtime path and the promise library's start from, the
-    runtime require and the promise require when a function yields one
+    The header saying what the file is, the directives, the services the
+    runtime path and the promise library's start from, the runtime require
+    and the promise require when the file needs one
 --]]
 
-function Targets.header(self: Self, name: string): string
+function Targets.header(self: Self, about: string, promised: boolean): string
 	local options: { [string]: any } = self._file.options :: any
 	local requires: { string } = { `local Volt = require({options.runtime})` }
 	local services: { string } = { options.runtime:match("^[^.]+") or options.runtime }
 	local lines: { string } = {
 		"--[[",
-		`    The {self._side} module Volt {VERSION} generated from {name}: a writer per`,
-		"    message this side sends, a reader per message it hears, the schema",
-		"    table the runtime starts from and the API a game calls. Generated code:",
-		"    change the schema and run volt again rather than editing this file",
+		about,
 		"--]]",
 		"",
 		"--!strict",
@@ -266,7 +213,7 @@ function Targets.header(self: Self, name: string): string
 		"--!optimize 2",
 	}
 
-	if self._promise then
+	if promised then
 		local promise: string = options.promise
 		local service: string = promise:match("^[^.]+") or promise
 
@@ -290,26 +237,62 @@ function Targets.header(self: Self, name: string): string
 end
 
 --[[
+    The type lines a file spells out, one part each: every named type, the
+    bot and this side's handle types. A module exports the named types but
+    a private one, and the handles unless a types module does; a shard's
+    are all local, since its types are its own
+--]]
+
+function Targets.aliases(self: Self, shard: boolean): { string }
+	local named: { string } = Types.named(self._file.declarations, {})
+	local exported: boolean = not shard and not self._file.options.typesOutput
+	local parts: { string } = {}
+
+	for index: number, line: string in named do
+		named[index] = shard and (line:gsub("^export ", "")) or line
+	end
+
+	if #named > 0 then
+		table.insert(parts, `{table.concat(named, "\n")}\n`)
+	end
+
+	table.insert(parts, `{BOT}\n`)
+
+	for _, handle: string in Types.handles(self._side, self._casing, exported, self._reversed) do
+		table.insert(parts, `{handle}\n`)
+	end
+
+	return parts
+end
+
+--[[
     The schema table the runtime is started with: what the compiler knows
-    and the runtime must not derive, the promise library when a function
-    yields one, the messages heard by id with their readers, and the
-    messages sent by id for their names and sizes
+    and the runtime must not derive, the stamp, each channel's label and
+    the dictionary message's id width when the schema has them, the
+    promise library when a function yields one, the profiler when the
+    module labels, the messages heard by id with their readers, and the
+    messages sent by id for their names, sizes and sends
 --]]
 
 function Targets.start(self: Self, hash: number): string
 	local options: { [string]: any } = self._file.options :: any
 	local server: boolean = self._server
 	local settings: { string } = {}
+	local labels: { string } = {}
 
 	for _, key: string in Contract.options do
 		table.insert(settings, `\t\t{key} = {tostring(options[key])},`)
 	end
 
+	for _, path: string in self._streams do
+		table.insert(labels, `"{(path:gsub("%.", "_"))}"`)
+	end
+
 	-- The three tables stand apart from each other, as entries of a large table literal do
 	local tables: string = Blocks.paragraphs({
 		`\toptions = \{\n{table.concat(settings, "\n")}\n\t},`,
-		`\tmessages = {rows(self._messages, server and self._toServer or self._toClient)},`,
-		`\toutgoing = {rows(self._outgoing, server and self._toClient or self._toServer)},`,
+		`\tmessages = {Pieces.rows(self._messages, server and self._toServer or self._toClient)},`,
+		`\toutgoing = {Pieces.rows(self._outgoing, server and self._toClient or self._toServer)},`,
 	})
 
 	local lines: { string } = {
@@ -321,8 +304,26 @@ function Targets.start(self: Self, hash: number): string
 		`\tidBytes = {Sizes.idBytes(server and self._toServer or self._toClient)},`,
 	}
 
+	if options.stamp then
+		table.insert(lines, "\tstamp = true,")
+	end
+
+	if #labels > 0 then
+		table.insert(lines, `\tstreams = \{ {table.concat(labels, ", ")} },`)
+	end
+
+	-- The dictionary message goes to the client, so it takes that direction's id width on both sides
+	if self._dictionary then
+		table.insert(lines, `\tdictionary = {Sizes.idBytes(self._toClient)},`)
+	end
+
 	if self._promise then
 		table.insert(lines, "\tpromise = Promise,")
+	end
+
+	-- What the runtime labels each packet and each Heartbeat with, handed over only by a module whose readers label
+	if self._label then
+		table.insert(lines, "\tprofiler = debug,")
 	end
 
 	table.insert(lines, tables)
@@ -336,22 +337,51 @@ function Targets.method(self: Self, name: string): string
 	return Types.cased(name, self._casing)
 end
 
--- The last id given in each direction, functions included, since a function's ids count towards the width
+--[[
+    The last id given in each direction, functions included, since a
+    function's ids count towards the width; each channel's path by its
+    number; whether any event is ordered; and whether any type is
+    @dictionary
+--]]
+
 function Targets.count(self: Self, declarations: { Declaration })
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "namespace" then
 			self:count(declaration.declarations)
-		elseif declaration.kind ~= "type" then
+		elseif declaration.kind == "channel" then
+			self._streams[declaration.number :: number] = declaration.path :: string
+		elseif declaration.kind == "type" then
+			self._dictionary = self._dictionary or Sizes.dictionary(declaration)
+		else
 			self._toServer = math.max(self._toServer, declaration.toServer or 0)
 			self._toClient = math.max(self._toClient, declaration.toClient or 0)
+			self._ordered = self._ordered or (declaration.kind == "event" and declaration.type == "OrderedUnreliable")
 		end
 	end
 end
 
-local _: TargetsTypes.Own, _: TargetsTypes.Api, _: TargetsTypes.Messages = Targets, Api, Messages
+--[[
+    Marks every named type a function's return reaches, before any message
+    is walked, so a return is checked whichever message walks the pair of
+    a type it holds first, an event's included
+--]]
 
--- The API tables and the walk of an event are the methods of one sibling each, and a name defined twice is a bug
-local parts: { any } = { Api, Messages }
+function Targets.mark(self: Self, declarations: { Declaration })
+	for _, declaration: Declaration in declarations do
+		if declaration.kind == "namespace" then
+			self:mark(declaration.declarations)
+		elseif declaration.kind == "function" and declaration["return"] then
+			-- Whiteoak TODO: unchecked, a marked pair checks its other uses too; a second, unchecked pair for them
+			self._emitter:mark(declaration["return"] :: Type | Pack)
+		end
+	end
+end
+
+local _: TargetsTypes.Own, _: TargetsTypes.Api, _: TargetsTypes.Messages, _: TargetsTypes.Shards =
+	Targets, Api, Messages, Shards
+
+-- The API tables, the walk of an event and a side's shards are the methods of a sibling each; a name defined twice is a bug
+local parts: { any } = { Api, Messages, Shards }
 
 for _, part in parts do
 	for name: string, method in part do

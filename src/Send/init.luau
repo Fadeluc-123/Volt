@@ -20,6 +20,8 @@ local Types = require("./Config/Types/Send")
 
 local GROWTH: number = Config.growth
 local POSITION: string = Config.position
+local CHANNEL_BYTES: number = Config.channelBytes
+local STAMP_BYTES: number = Config.stampBytes
 
 export type Send = Types.Send
 export type State = Types.State
@@ -31,14 +33,24 @@ type Self = Types.Send
 type Stats = Types.Stats
 
 --[[
-    A send for one reliability over the transport's fire, counting into the
+    A send for one stream over the transport's fire, counting into the
     runtime's totals and reporting a dropped message for its target, with the
-    cap a target's frame may hold and, unreliable, the budget one fire may
-    carry. A writer's calls are plain functions, as writers take them as values
+    cap a target's frame may hold, unreliable the budget one fire may carry,
+    and the channel byte and stamp its packets open with when the schema has
+    them. A writer's calls are plain functions, as writers take them as values
 --]]
 
-function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: number, budget: number?): Self
+function Send.new(
+	fire: Fire,
+	total: Stats,
+	dropped: (target: any) -> (),
+	cap: number,
+	budget: number?,
+	channel: number?,
+	stamped: boolean?
+): Self
 	local scratch: State = States.blank(nil, nil, nil, false)
+	local prefix: number = (channel and CHANNEL_BYTES or 0) + (stamped and STAMP_BYTES or 0)
 	local send: Self -- What a writer's calls reach, the send itself once it is built below
 
 	-- Takes bytes at the end of the current buffer, growing it when the frame needs more than it holds
@@ -111,6 +123,11 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		table.insert(state.sideMarks, state.sideCursor)
 	end
 
+	-- The current target's next sequence of an ordered event, which its writer puts after the id
+	local function order(id: number): number
+		return States.next(send.current, id)
+	end
+
 	local fields: Fields = {
 		begin = begin,
 		trim = trim,
@@ -118,16 +135,21 @@ function Send.new(fire: Fire, total: Stats, dropped: (target: any) -> (), cap: n
 		slot = slot,
 		refuse = refuse,
 		mark = mark,
+		order = order,
 		current = scratch, -- The state the next write lands in, pointed by the runtime's target
 		scratch = scratch, -- Where a broadcast is written before it is copied to every target
 		_fire = fire,
 		_total = total,
 		_dropped = dropped,
 		_cap = cap,
-		_budget = budget or math.huge,
+		_budget = budget and budget - prefix or math.huge, -- A run is split short enough to leave room for what opens it
 		_keeps = budget == nil, -- A reliable send has no budget and keeps a held state's bytes; an unreliable one drops them
 		_states = {} :: { [any]: State },
 		_drops = {} :: { any }, -- Whom a copy or a flush dropped a message for, told once its loop is done
+		_channel = channel, -- The byte every packet opens with in a schema with a channel: 0, or the channel's number
+		_stamped = stamped == true, -- Whether the server time follows it
+		_prefix = prefix, -- The bytes before a packet's first message
+		_stamp = 0, -- The server time of the flush in progress
 	}
 
 	-- The closures keep a local of their own, since the checker retypes the table handed to setmetatable

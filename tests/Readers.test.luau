@@ -1,9 +1,9 @@
 --[[
     Proves the emitter's readers refuse what a packet must not carry: a
-    byte out of range, a block, payload or run past the packet's end, a
-    64-bit integer a number cannot hold, an empty or wrong-class slot, a
-    key that appears twice and text that is not UTF-8, each with the
-    field's name
+    byte out of range, a quaternion whose kept components square past one,
+    a range reversed, an infinite rectangle or region, a block, payload or
+    run past the packet's end, a 64-bit integer a number cannot hold, an
+    empty or wrong-class slot, a key twice and text that is not UTF-8
 --]]
 
 --!strict
@@ -16,11 +16,15 @@ local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
 
+local CFrame = Environment.CFrame
 local Instance = Environment.Instance
+local NumberRange = Environment.NumberRange
 
 local TEXT_BYTES: number = 4 -- What Text's exact takes and its short at its longest, which a run is padded to
+local MIDDLES: number = 512 * 2 ^ 20 + 512 * 2 ^ 10 + 512 -- Three kept quaternion components at zero
 local EXACT_AT: number = 1 -- Where Text's exact sits in its packet, after the short's prefix
 local SHORT_AT: number = 7 -- And where the short's bytes do, after the fixed bytes
+local RANGE_AT: number = 24 -- Where Layouts.c's minimum sits in its packet, after two UDim2s, its maximum four on
 
 local least = Families.least
 local fire = Families.fire
@@ -35,6 +39,11 @@ local BYTES: { { any } } = {
 	{ "Roblox", "Colours", 3, "u16", 9999, "Colours.b: out of range" },
 	{ "Roblox", "Colours", 5, "f64", 0 / 0, "Colours.c.UnixTimestamp: out of range" },
 	{ "Frames", "Frames", 42, "u8", 24, "Frames.c: out of range" },
+	{ "Rotations", "Turn", 0, "u32", 0xFFFFFFFF, "Turn.a: out of range" }, -- Three kept components at 1023 square to 1.5
+	{ "Rotations", "Turn", 0, "u32", 0, "Turn.a: out of range" }, -- And three at 0 to a little more
+	{ "Layouts", "Layouts", 32, "u16", 0x0A32, "Layouts.d: out of range" }, -- Its ends as 32 0A, 50 then 10
+	{ "Layouts", "Layouts", 34, "f32", math.huge, "Layouts.e: out of range" }, -- 00 00 80 7F over its Min.X
+	{ "Volumes", "Volumes", 36, "f32", math.huge, "Volumes.c: out of range" }, -- And over its Min.X
 	{ "Objects", "Items", 0, "u16", 65535, "Items.a: out of range" },
 	{ "Objects", "Items", 3, "u16", 65535, "Items.b: out of range" },
 	{ "Enums", "Enums", 0, "u8", 3, "Enums.c: out of range" },
@@ -101,6 +110,34 @@ describe("Emit", function ()
 
 			local bytes: buffer, side: { any } = packetOf("Lists", "Lists", written)
 			refused("Lists", "Lists", bytes, side, 10, "Lists.a: truncated")
+		end)
+
+		test("reads each index with its three kept components at zero as the rotation the dropped one makes", function ()
+			local bytes: buffer, side: { any } = packetOf("Rotations", "Turn")
+
+			for index: number = 0, 3 do
+				local dropped: { number } = { 0, 0, 0, 0 }
+				dropped[index + 1] = 1
+
+				buffer.writeu32(bytes, 0, index * 2 ^ 30 + MIDDLES)
+
+				local read: { any } = { modules.Rotations.Turn.read(bytes, 0, side, 1, buffer.len(bytes)) }
+				expect(read[3].Rotation).is(CFrame.new(0, 0, 0, table.unpack(dropped)))
+			end
+		end)
+
+		test("a range read as 2 then 1, while one of equal ends and a UDim2 holding an infinity read back", function ()
+			local bytes: buffer, side: { any } = packetOf("Layouts", "Layouts")
+			buffer.writef32(bytes, RANGE_AT, 2)
+			buffer.writef32(bytes, RANGE_AT + 4, 1)
+			refused("Layouts", "Layouts", bytes, side, buffer.len(bytes), "Layouts.c: out of range")
+
+			buffer.writef32(bytes, RANGE_AT + 4, 2)
+			buffer.writef32(bytes, 0, math.huge) -- Layouts.a's X.Scale
+
+			local read: { any } = { modules.Layouts.Layouts.read(bytes, 0, side, 1, buffer.len(bytes)) }
+			expect(read[5]).is(NumberRange.new(2, 2))
+			expect(read[3].X.Scale).is(math.huge)
 		end)
 
 		test("an empty slot where an instance must be", function ()

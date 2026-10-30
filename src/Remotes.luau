@@ -1,9 +1,9 @@
 --[[
     The real transport: the remotes under ReplicatedStorage.Volt.<scope>,
-    found or created by the server and awaited by the client, the frame,
-    the player list and its signals, the scheduler and the VM's one hub;
-    the one file in the runtime that touches the DataModel. Outside a
-    running game it is a transport that drops every packet
+    found or created by the server and awaited by the client, the instance
+    ids beside them, the frame, the players and their signals, the clock,
+    the VM's hub; the one file in the runtime that touches the DataModel.
+    Outside a running game it is a transport that drops every packet
 --]]
 
 --!strict
@@ -19,6 +19,8 @@ type Transport = Types.Transport
 local FOLDER: string = Config.folder
 local RELIABLE: string = Config.reliable
 local UNRELIABLE: string = Config.unreliable
+local REFERENCES: string = Config.references
+local COUNTER: string = Config.counter
 local WAIT_SECONDS: number = Config.waitSeconds
 
 local Remotes = {}
@@ -30,6 +32,19 @@ local function nothing() end
 
 local function nobody(): { any }
 	return {}
+end
+
+local function never(): number
+	return 0
+end
+
+local function absent(): Instance?
+	return nil
+end
+
+-- The server's clock, which a stamped server's packets carry
+local function now(): number
+	return workspace:GetServerTimeNow()
 end
 
 -- Connects a callback to every frame and returns what disconnects it, as the hub takes it
@@ -60,6 +75,101 @@ local function ensure(parent: Instance, name: string, class: string): Instance
 	child.Parent = parent
 
 	return child
+end
+
+--[[
+    The server's id for an instance a message names in one scope: the
+    next one the scope's References folder counts, the folder made at the
+    first, and then the same one for the instance's life. An ObjectValue
+    named by the id holds it for the clients, and goes when it does
+--]]
+
+local function referencer(folder: Instance): (instance: Instance) -> number
+	local ids: { [Instance]: number } = {}
+
+	return function (instance: Instance): number
+		local id: number? = ids[instance]
+		if id then
+			return id
+		end
+
+		local holder: Instance = ensure(folder, REFERENCES, "Folder")
+		local given: number = holder:GetAttribute(COUNTER) :: number? or 1
+		local value: ObjectValue = Instance.new("ObjectValue")
+
+		holder:SetAttribute(COUNTER, given + 1)
+		value.Name = tostring(given)
+		value.Value = instance
+		value.Parent = holder
+		ids[instance] = given
+
+		-- Fires once, and the instance's destruction disconnects it either way
+		instance.Destroying:Once(function ()
+			ids[instance] = nil
+			value:Destroy()
+		end)
+
+		return given
+	end
+end
+
+-- The client's instance for an id: its ObjectValue's, which is nil until the instance streams in
+local function resolver(folder: Instance): (id: number) -> Instance?
+	return function (id: number): Instance?
+		local holder: Instance? = folder:FindFirstChild(REFERENCES)
+		local value = holder and holder:FindFirstChild(tostring(id)) :: ObjectValue?
+
+		return value and value.Value
+	end
+end
+
+--[[
+    Calls back on the client with an id each time its ObjectValue holds
+    an instance: when it arrives with one, and when its Value is set to
+    one as the instance streams in. The folder is the server's to make,
+    so it is watched for until it exists. Each connection lives as long
+    as the place, or as the ObjectValue it watches
+--]]
+
+local function arrivals(folder: Instance): (callback: (id: number) -> ()) -> ()
+	return function (callback: (id: number) -> ())
+		local function watch(child: Instance)
+			local id: number? = tonumber(child.Name)
+			if not id or not child:IsA("ObjectValue") then
+				return
+			end
+
+			local value = child :: ObjectValue
+			local function arrived()
+				if value.Value then
+					callback(id :: number)
+				end
+			end
+
+			arrived()
+			value:GetPropertyChangedSignal("Value"):Connect(arrived)
+		end
+
+		local function open(holder: Instance)
+			holder.ChildAdded:Connect(watch)
+
+			for _, child: Instance in holder:GetChildren() do
+				watch(child)
+			end
+		end
+
+		local holder: Instance? = folder:FindFirstChild(REFERENCES)
+
+		if holder then
+			open(holder)
+		else
+			folder.ChildAdded:Connect(function (child: Instance)
+				if child.Name == REFERENCES then
+					open(child)
+				end
+			end)
+		end
+	end
 end
 
 -- A child by name, waited for and warned about until it exists, since the server may not have made it yet
@@ -101,6 +211,10 @@ function Remotes.open(scope: string, server: boolean): Transport
 			players = nobody,
 			playerAdded = nothing,
 			playerRemoving = nothing,
+			now = never,
+			reference = never,
+			resolve = absent,
+			resolved = nothing,
 		}
 	end
 
@@ -153,6 +267,9 @@ function Remotes.open(scope: string, server: boolean): Transport
 			present = function (player: any): boolean
 				return player.Parent ~= nil
 			end,
+
+			now = now,
+			reference = referencer(folder),
 		})
 	end
 
@@ -177,6 +294,8 @@ function Remotes.open(scope: string, server: boolean): Transport
 
 		heartbeat = heartbeat,
 		spawn = spawn,
+		resolve = resolver(folder),
+		resolved = arrivals(folder),
 	}
 end
 

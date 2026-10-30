@@ -40,6 +40,7 @@ export type State = {
 	record: Record?, -- The target's byte count across the VM, for a player or a bot
 	held: boolean, -- Until the player's handshake: a flush keeps reliable bytes and drops unreliable ones
 	refused: boolean, -- After a failed handshake: nothing is written or kept for the player again
+	sequences: { [number]: number }?, -- The last sequence of each ordered event sent to the target, made at the first
 }
 
 export type Fields = {
@@ -49,6 +50,7 @@ export type Fields = {
 	slot: (value: any) -> (),
 	refuse: (message: string) -> never,
 	mark: () -> (),
+	order: (id: number) -> number,
 	current: State,
 	scratch: State,
 	_fire: Fire,
@@ -59,6 +61,10 @@ export type Fields = {
 	_keeps: boolean,
 	_states: { [any]: State },
 	_drops: { any },
+	_channel: number?,
+	_stamped: boolean,
+	_prefix: number,
+	_stamp: number,
 }
 
 export type Own = {
@@ -69,13 +75,13 @@ export type Own = {
 }
 
 export type Broadcast = {
-	broadcast: (self: Send, targets: { [any]: any }?, except: any?) -> (),
+	broadcast: (self: Send, targets: { [any]: any }?, except: any?, id: number?, sequence: number?) -> (),
 	take: (self: Send) -> (buffer, { any }?),
-	_copy: (self: Send, state: State?) -> (),
+	_copy: (self: Send, state: State?, id: number?, sequence: number?) -> (),
 }
 
 export type Flush = {
-	flush: (self: Send) -> (),
+	flush: (self: Send, stamp: number?) -> (),
 	_discard: (self: Send, state: State) -> (),
 	_tell: (self: Send) -> (),
 	_send: (self: Send, target: any, state: State) -> (),

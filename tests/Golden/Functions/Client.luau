@@ -49,7 +49,7 @@ local function writeEcho(slot: number, value: number)
 	buffer.writeu8(out, offset + 3, value)
 end
 
-local function readEcho(_: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readEcho(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Echo: truncated")
 	end
@@ -66,10 +66,10 @@ local function readEcho(_: (Player | Bot)?, packet: buffer, cursor: number, _: {
 		local value: number = buffer.readu8(packet, cursor)
 		cursor += 1
 
-		return runtime:reply(1, slot, cursor, sideCursor, value)
+		return runtime:reply(1, player, slot, cursor, sideCursor, value)
 	end
 
-	return runtime:refused(1, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(1, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 local function writePing(slot: number)
@@ -78,7 +78,7 @@ local function writePing(slot: number)
 	buffer.writeu16(out, offset + 1, slot)
 end
 
-local function readPing(_: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readPing(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Ping: truncated")
 	end
@@ -88,10 +88,10 @@ local function readPing(_: (Player | Bot)?, packet: buffer, cursor: number, _: {
 	cursor += 3
 
 	if status == 0 then
-		return runtime:reply(2, slot, cursor, sideCursor)
+		return runtime:reply(2, player, slot, cursor, sideCursor)
 	end
 
-	return runtime:refused(2, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(2, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 local function writeDivide(slot: number, dividend: number, divisor: number)
@@ -112,7 +112,7 @@ local function writeDivide(slot: number, dividend: number, divisor: number)
 	buffer.writef64(out, offset + 11, divisor)
 end
 
-local function readDivide(_: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readDivide(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Divide: truncated")
 	end
@@ -145,10 +145,10 @@ local function readDivide(_: (Player | Bot)?, packet: buffer, cursor: number, _:
 			quotient = quotient_2
 		end
 
-		return runtime:reply(3, slot, cursor, sideCursor, bit32.btest(flags, 1), quotient)
+		return runtime:reply(3, player, slot, cursor, sideCursor, bit32.btest(flags, 1), quotient)
 	end
 
-	return runtime:refused(3, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(3, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 local function writeInventory_Transfer(slot: number, source: number, destination: number, quantity: number)
@@ -175,7 +175,7 @@ local function writeInventory_Transfer(slot: number, source: number, destination
 	buffer.writeu16(out, offset + 5, quantity)
 end
 
-local function readInventory_Transfer(_: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
+local function readInventory_Transfer(player: (Player | Bot)?, packet: buffer, cursor: number, _: { any }, sideCursor: number, length: number): (number, number)
 	if cursor + 3 > length then
 		error("Inventory.Transfer: truncated")
 	end
@@ -215,10 +215,10 @@ local function readInventory_Transfer(_: (Player | Bot)?, packet: buffer, cursor
 			reason = reason_2
 		end
 
-		return runtime:reply(4, slot, cursor, sideCursor, bit32.btest(flags, 1), reason)
+		return runtime:reply(4, player, slot, cursor, sideCursor, bit32.btest(flags, 1), reason)
 	end
 
-	return runtime:refused(4, slot, packet, cursor, sideCursor, length)
+	return runtime:refused(4, player, slot, status, packet, cursor, sideCursor, length)
 end
 
 runtime = Volt.start({

@@ -114,6 +114,29 @@ describe("Resolve", function ()
 		expect(mine.references).is(0)
 	end)
 
+	test("binds an event's channel from its namespace outward to the channel's full path", function ()
+		local text: string = schema(
+			"channel Bulk\nnamespace Net {\n\tchannel Fast\n\tevent A { from: Client, type: Reliable, call: Polling, channel: Fast }\n\tevent B { from: Server, type: Reliable, call: Polling, channel: Bulk }\n}\nevent C { from: Both, type: Reliable, call: Polling }"
+		)
+		local file: Schema.File, diagnostics = resolve(text)
+		local net: any, c: any = file.declarations[2], file.declarations[3]
+		local fast: any, a: any, b: any = table.unpack(net.declarations)
+
+		expect(diagnostics:render()).is("")
+		expect(fast.path).is("Net.Fast")
+		expect(a.channel).is("Net.Fast")
+		expect(b.channel).is("Bulk")
+		expect(c.channel).is(nil)
+	end)
+
+	test("a stamp set false is no stamp, so the schema prints and hashes as one without it", function ()
+		local off: Schema.File = resolve(schema("option stamp = false"))
+		local on: Schema.File = resolve(schema("option stamp = true"))
+
+		expect(off.options.stamp).is(nil)
+		expect(on.options.stamp).is(true)
+	end)
+
 	describe("diagnostics", function ()
 		test("V3001 reports an unknown name and a name that is not a type", function ()
 			local text: string = schema(
@@ -199,6 +222,38 @@ describe("Resolve", function ()
 			local fourth: string = rendered(text, "timeout", "error V3005: timeout must be a positive number, got 0", 2)
 
 			expect(report(text)).is(`{first}\n\n{second}\n\n{third}\n\n{fourth}`)
+		end)
+
+		test("V3001 reports an unknown channel, a name that is no channel and a channel where a type goes", function ()
+			local text: string = schema(
+				"channel Bulk\nevent Chat { from: Client, type: Reliable, call: Polling, channel: Bluk }\nevent Ping { from: Client, type: Reliable, call: Polling, channel: Chat }\ntype T = Bulk"
+			)
+			local expected: { string } = {
+				rendered(text, "channel", `error V3001: unknown channel "Bluk"`, 2),
+				rendered(text, "channel", `error V3001: "Chat" is an event, not a channel`, 3),
+				rendered(text, "Bulk", `error V3001: "Bulk" is a channel, not a type`, 2),
+			}
+
+			expect(report(text)).is(table.concat(expected, "\n\n"))
+		end)
+
+		test("V3002 reports a channel and an event of one name, which share the name space", function ()
+			local text: string = schema("channel Chat\nevent Chat { from: Client, type: Reliable, call: Polling }")
+
+			expect(report(text)).is(rendered(text, "Chat", `error V3002: "Chat" is declared twice`, 2))
+		end)
+
+		test("V3014 refuses a channel on an Unreliable and an OrderedUnreliable event, at the key", function ()
+			local text: string = schema(
+				"channel Bulk\nevent Spray { from: Server, type: Unreliable, call: Polling, channel: Bulk }\nevent Aim { from: Client, type: OrderedUnreliable, call: Polling, channel: Bulk }"
+			)
+			local carries: string = "a channel carries Reliable events only"
+			local expected: { string } = {
+				rendered(text, "channel", `error V3014: event Spray is Unreliable; {carries}`, 2),
+				rendered(text, "channel", `error V3014: event Aim is OrderedUnreliable; {carries}`, 3),
+			}
+
+			expect(report(text)).is(table.concat(expected, "\n\n"))
 		end)
 
 		test("V3006 warns about a rate on a Server event", function ()

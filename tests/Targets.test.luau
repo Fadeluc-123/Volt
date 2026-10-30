@@ -133,6 +133,12 @@ describe("Targets", function ()
 		expect(Config.handshakeBytes).is(Wire.handshakeBytes)
 	end)
 
+	test("agrees with the runtime on the channel byte, the stamp and how far a sequence counts", function ()
+		expect(Config.channelBytes).is(Wire.channelBytes)
+		expect(Config.stampBytes).is(Wire.stampBytes)
+		expect(256 ^ Wire.sequenceBytes).is(Config.sequences)
+	end)
+
 	test("renames every member in the casing asked for, the handle types with them", function ()
 		local schema: string = MODULES.Broadcasts.schema
 		local client: string, pascal: string, pascalTypes: string =

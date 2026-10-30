@@ -29,8 +29,14 @@ end
 
 describe("Names", function ()
 	test("refuses a top-level name the API owns, in the schema's casing", function ()
-		-- The casing, then the name a declaration may not take in it
-		local cases: { { string } } = { { "pascal", "OnFailure" }, { "camel", "version" }, { "pascal", "Version" } }
+		-- The casing, then the name a declaration may not take in it; a stamped client's accessor is refused in any schema
+		local cases: { { string } } = {
+			{ "pascal", "OnFailure" },
+			{ "camel", "version" },
+			{ "pascal", "Version" },
+			{ "camel", "serverTime" },
+			{ "snake", "server_time" },
+		}
 
 		for _, case: { string } in cases do
 			local declaration: string = `event {case[2]} \{ from: Client, type: Reliable, call: SingleSync }`
@@ -51,7 +57,8 @@ describe("Names", function ()
 	end)
 
 	test("refuses a type the modules declare or name, which the namespaced one never collides with", function ()
-		for _, name: string in { "Bot", "Player" } do
+		-- A from: Server function's handle type is refused in a schema that declares none, so the name space is one
+		for _, name: string in { "Bot", "Player", "ClientHandler" } do
 			local errors: number, rendered: string =
 				refused(`{EVENTS}\ntype {name} = u8\nnamespace Arena \{ type {name} = u8 }`)
 			local expected: string = `error V4002: "{name}" is a type the generated modules declare or name`

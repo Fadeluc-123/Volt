@@ -1,8 +1,9 @@
 --[[
     The receive side, merged onto the runtime: the loop over a packet's
-    messages, delivery to listeners by call mode, the queue a message
-    waits in until a listener exists or a poll drains it, and the
-    iterator a polled event is drained through
+    messages, delivery to listeners by call mode, an ordered event's stale
+    messages dropped, the queue a message waits in until a listener or a
+    poll takes it, the server time of the message being handled, and the
+    profiler labels around what the transport calls
 --]]
 
 --!strict
@@ -17,11 +18,14 @@ type Entry = Types.Entry
 type Joined = Types.Joined
 type Limit = Types.Limit
 type Message = Types.Message
+type Profiler = Types.Profiler
 type Runtime = Types.Runtime
 type Stats = Types.Stats
 
 local NO_SLOTS: { any } = table.freeze({} :: { any }) -- What a reader indexes when the packet carried no instances
 local POSITION: string = Config.position
+local SEQUENCES: number = Config.sequences
+local NEWER: number = SEQUENCES // 2 - 1 -- How many sequences after the last taken count as newer: 1 to 32767
 
 -- Calls a listener with the player first on the server and with the values alone on the client
 local function invoke(listener: (...any) -> (), player: any, ...: any)
@@ -167,13 +171,28 @@ function Receive.packet(self: Runtime, player: any, packet: any, side: any)
 	end
 
 	local id: number? = self._reading
-	local detail: string = (tostring(message):gsub(POSITION, ""))
 
 	if id then
-		self:fail(player, "decode", detail, self._messages[id].name)
+		self:_undecoded(player, id, message)
 	else
-		self:fail(player, "packet", detail)
+		self:fail(player, "packet", (tostring(message):gsub(POSITION, "")))
 	end
+end
+
+-- Reports what a reader raised, in a packet or read again, as a decode failure named for its message
+function Receive._undecoded(self: Runtime, player: any, id: number, problem: any)
+	local message: Message = self._messages[id]
+	local profiler: Profiler? = self._profiler
+
+	-- An id the reader asked for before it raised must not make the next awaited message wait
+	table.clear(self._missing)
+
+	-- A generated reader raises only inside its own label, never left to the engine; the dictionary's reader opens none
+	if profiler and message.kind ~= "dictionary" then
+		profiler.profileend()
+	end
+
+	self:fail(player, "decode", (tostring(problem):gsub(POSITION, "")), message.name)
 end
 
 --[[
@@ -218,6 +237,53 @@ function Receive.deliver(
 end
 
 --[[
+    An ordered event's reader's tail: a message newer than the last taken
+    from its sender, by at most half the sequence's span, is kept and
+    delivered; a duplicate or an older one was decoded, spends the
+    event's rate and is dropped before any hook, queue or listener, which
+    is no failure. Returns the cursors, so a reader's tail is this one call
+--]]
+
+function Receive.ordered(
+	self: Runtime,
+	id: number,
+	sequence: number,
+	player: any,
+	cursor: number,
+	sideCursor: number,
+	...: any
+): (number, number)
+	local kept: { [number]: number } = self._sequences
+
+	if player ~= nil then
+		local state: Joined? = self._players[player]
+
+		-- A player who left part way through the packet, kicked by a listener before this, is heard no more
+		if not state then
+			return cursor, sideCursor
+		end
+
+		kept = state.sequences
+	end
+
+	local last: number? = kept[id]
+
+	if last and (sequence - last - 1) % SEQUENCES >= NEWER then
+		local limit: Limit? = self._limits[id]
+
+		if limit and not self:allow(player, id, limit) then
+			self:_limited(player, self._messages[id].name, limit)
+		end
+
+		return cursor, sideCursor
+	end
+
+	kept[id] = sequence
+
+	return self:deliver(id, player, cursor, sideCursor, ...)
+end
+
+--[[
     Connects a listener and returns the closure that disconnects it. A
     single mode holds one listener, so a second is an error rather than
     a silent replacement; the first listener takes what queued before
@@ -232,12 +298,17 @@ function Receive.on(self: Runtime, id: number, listener: (...any) -> ()): () -> 
 	table.insert(listeners, listener)
 	channel.listeners = listeners
 
-	if #listeners == 1 then
-		local entry: Entry? = pop(channel)
+	-- Each queued message is handled under its own packet's stamp, and the newest packet's is back once they are done
+	local entry: Entry? = #listeners == 1 and pop(channel) or nil
+
+	if entry then
 		while entry do
+			self._stamp = entry.stamp
 			run(self, channel, listener, table.unpack(entry, 1, entry.n))
 			entry = pop(channel)
 		end
+
+		self._stamp = self._newest
 	end
 
 	-- Cleanup and disconnect from listener
@@ -254,7 +325,8 @@ end
 --[[
     An iterator over the messages queued for a polled event, each popped
     as it is reached: the index, the player on the server, then the
-    values
+    values, each handed out under its own packet's stamp, and the newest
+    packet's once the queue is empty
 --]]
 
 function Receive.iter(self: Runtime, id: number): () -> ...any
@@ -264,18 +336,39 @@ function Receive.iter(self: Runtime, id: number): () -> ...any
 	return function (): ...any
 		local entry: Entry? = pop(channel)
 		if not entry then
+			self._stamp = self._newest
 			return nil
 		end
 
 		index += 1
+		self._stamp = entry.stamp
 
 		return index, table.unpack(entry, entry[1] == nil and 2 or 1, entry.n)
 	end
 end
 
+--[[
+    The server time a stamped server's packet opened with: the packet
+    holding the message being handled, or the queued one being handed
+    out, and otherwise the newest; 0 before the first packet
+--]]
+
+function Receive.serverTime(self: Runtime): number
+	return self._stamp
+end
+
 -- The error a listener or a handler raised with the stack that raised it, taken before the stack unwinds
 function Receive._trace(message: any): string
 	return debug.traceback(tostring(message), 2)
+end
+
+-- A callback the transport calls, run inside a profiler label opened before it and closed once it returns
+function Receive._labelled(profiler: Profiler, label: string, callback: (...any) -> ()): (...any) -> ()
+	return function (...: any)
+		profiler.profilebegin(label)
+		callback(...)
+		profiler.profileend()
+	end
 end
 
 -- Queues a message behind the others, dropping the oldest when the queue is full
@@ -290,8 +383,12 @@ function Receive._push(self: Runtime, channel: Channel, player: any, ...: any)
 		end
 	end
 
+	-- A queued message keeps the stamp of the packet it came in, which serverTime reads when it is handed out
+	local entry: Entry = table.pack(player, ...) :: any
+	entry.stamp = self._stamp
+
 	channel.tail += 1
-	channel.queue[channel.tail] = table.pack(player, ...)
+	channel.queue[channel.tail] = entry
 end
 
 return Receive

@@ -1,8 +1,8 @@
 --[[
     The hub every server transport of one VM is served through: the bots
     a harness adds, which every scope it serves takes as players, the
-    packets between a bot's client sides and their scopes' servers, who
-    is present, and one byte count per player for the whole VM
+    packets and instance ids between a bot's client sides and their
+    scopes' servers, who is present, and one byte count per player
 --]]
 
 --!strict
@@ -23,8 +23,9 @@ type Callback = (player: any) -> ()
 type Connect = (callback: () -> ()) -> () -> () -- Connects a callback to every frame and returns what disconnects it
 type Packet = { packet: buffer, side: { any }? }
 
--- A scope the hub serves: its server runtime's receive, and the join and leave callbacks a bot is handed to
-type Scope = { receive: Handler?, added: { Callback }, removing: { Callback } }
+-- A scope the hub serves: its server runtime's receive, the join and leave callbacks a bot is handed to, and each
+-- instance its server gave an id, by the id, which a bot's client side resolves at once
+type Scope = { receive: Handler?, added: { Callback }, removing: { Callback }, instances: { [number]: Instance } }
 
 -- A bot's client side of a scope: its runtime's receive, what the server sent it, what waits for the server, its frames
 type Side = { receive: Handler?, queue: { Packet }, waiting: { Packet }, disconnects: { () -> () } }
@@ -66,7 +67,8 @@ end
     Serves a scope's server transport: the players it lists and the joins
     and leaves it signals take in the hub's bots, a fire at a bot goes to
     the bot's client side of the scope, or nowhere when no harness
-    connected one, and presence and the byte count answer for both
+    connected one, presence and the byte count answer for both, and the
+    instance ids the server gives are kept for the bots' client sides
 --]]
 
 function Hub.serve(self: Self, name: string, transport: Transport): Transport
@@ -90,6 +92,15 @@ function Hub.serve(self: Self, name: string, transport: Transport): Transport
 			if client then
 				table.insert(client.queue, { packet = packet, side = side })
 			end
+		end
+	end
+
+	-- Each id the server gives is kept with its instance, since a bot's client side shares the server's VM
+	local function remember(reference: (instance: Instance) -> number): (instance: Instance) -> number
+		return function (instance: Instance): number
+			local id: number = reference(instance)
+			scope.instances[id] = instance
+			return id
 		end
 	end
 
@@ -128,6 +139,8 @@ function Hub.serve(self: Self, name: string, transport: Transport): Transport
 		end,
 
 		traffic = self._record,
+		now = transport.now,
+		reference = transport.reference and remember(transport.reference),
 	}
 end
 
@@ -248,6 +261,11 @@ function Hub.connect(self: Self, bot: Bot, name: string): Transport
 
 		heartbeat = heartbeat,
 		spawn = self._spawn,
+
+		-- Every instance the server named has arrived, so no message the bot hears ever waits for one
+		resolve = function (id: number): Instance?
+			return scope.instances[id]
+		end,
 	}
 end
 
@@ -258,7 +276,13 @@ function Hub._scope(self: Self, name: string): Scope
 		return scope
 	end
 
-	local made: Scope = { receive = nil, added = {}, removing = {} }
+	local made: Scope = {
+		receive = nil,
+		added = {},
+		removing = {},
+		instances = setmetatable({}, { __mode = "v" }) :: any, -- Weak, so an instance destroyed and gone is not kept
+	}
+
 	self._scopes[name] = made
 
 	return made

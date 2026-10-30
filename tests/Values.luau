@@ -6,35 +6,17 @@
 --]]
 
 --!strict
-local Environment = require("./Environment")
+local RobloxValues = require("./RobloxValues")
 local Primitives = require("@volt/Compiler/Config/Primitives")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Sizes = require("@volt/Compiler/Analyse/Sizes")
-local Wire = require("@volt/Compiler/Config/Wire")
 
 type Field = Schema.Field
 type Type = Schema.Type
 type Variant = Schema.Variant
 
-local BrickColor = Environment.BrickColor
-local CFrame = Environment.CFrame
-local Color3 = Environment.Color3
-local DateTime = Environment.DateTime
-local Enum = Environment.Enum
-local Instance = Environment.Instance
-local Vector2 = Environment.Vector2
-local Vector3 = Environment.Vector3
-
 local FREE_LENGTH: number = 100 -- As long as an unbounded string, buffer or list gets in a test
 local FLOAT_REACH: { [string]: number } = { f16 = 65504, f32 = 2 ^ 20, f64 = 2 ^ 40 } -- How far a random float goes each way
-local ROTATION_DRIFT: { [string]: number } = { f16 = math.pi / 1024, f32 = 1e-6, f64 = 1e-12 } -- Per float rotation component
-local ALIGNED_DRIFT: number = 1e-5 -- What an aligned rotation may drift by and still be the same one
-local TIME_REACH: number = 2 ^ 40 -- The latest timestamp a test sends
-local PALETTE: number = 127 -- The last index BrickColor.palette takes
-local QUARTER: number = math.pi / 2 -- One aligned turn
-local CREATABLE: { [string]: string } = { BasePart = "Part" } -- A class Instance.new accepts for an abstract one
-local ITEM_ENUMS: { any } = { Enum.Material, Enum.KeyCode } -- Where an untyped enum item comes from
-local COMPONENT: Type = { kind = "primitive", name = Wire.component, start = 0, finish = 0 } -- A vector's default numeric type
 
 -- The least and most code point of a UTF-8 character of each width in bytes
 local CODE_POINTS: { { number } } = { { 0, 0x7F }, { 0x80, 0x7FF }, { 0x800, 0xFFFF }, { 0x10000, 0x10FFFF } }
@@ -93,10 +75,6 @@ local function lengthOf(range: any, ends: string?): number
 	return ends == "min" and low or ends == "max" and high or math.random(low, high)
 end
 
-local function unitVector(): any
-	return Vector3.new(math.random() - 0.5, math.random() - 0.5, math.random() - 0.5).Unit
-end
-
 --[[
     A value of a primitive: its least or most when an end is asked for,
     or one at random within its bounds
@@ -135,55 +113,6 @@ local function primitiveOf(shape: any, ends: string?): any
 end
 
 --[[
-    A value of a Roblox type built from its components at an end or at
-    random: an identity rotation at the least, a half turn at the most
---]]
-
-local function robloxOf(shape: any, ends: string?): any
-	local name: string = shape.name
-	local generics: { Type } = shape.generics or {}
-	local component: Type = generics[1] or COMPONENT
-
-	if name == "Vector3" then
-		return Vector3.new(valueOf(component, ends), valueOf(component, ends), valueOf(component, ends))
-	elseif name == "Vector2" then
-		return Vector2.new(valueOf(component, ends), valueOf(component, ends))
-	elseif name == "CFrame" then
-		local position = Vector3.new(valueOf(component, ends), valueOf(component, ends), valueOf(component, ends))
-		local rotation = ends == "min" and CFrame.new()
-			or ends == "max" and CFrame.fromAxisAngle(Vector3.yAxis, math.pi)
-			or CFrame.fromAxisAngle(unitVector(), math.random() * math.pi)
-
-		return rotation + position
-	elseif name == "AlignedCFrame" then
-		local position = Vector3.new(valueOf(component, ends), valueOf(component, ends), valueOf(component, ends))
-		local turns: number = ends == "min" and 0 or ends == "max" and 3 or math.random(0, 3)
-
-		return CFrame.Angles(turns * QUARTER, math.random(0, 3) * QUARTER, math.random(0, 3) * QUARTER) + position
-	elseif name == "Color3" then
-		local function channel(): number
-			return ends == "min" and 0 or ends == "max" and Wire.channelMax or math.random(0, Wire.channelMax)
-		end
-
-		return Color3.fromRGB(channel(), channel(), channel())
-	elseif name == "BrickColor" then
-		return BrickColor.palette(ends == "min" and 1 or ends == "max" and PALETTE or math.random(1, PALETTE))
-	elseif name == "DateTime" or name == "DateTimeMillis" then
-		local stamp: number = ends == "min" and 0
-			or ends == "max" and TIME_REACH
-			or math.floor(math.random() * TIME_REACH)
-		return name == "DateTime" and DateTime.fromUnixTimestamp(stamp) or DateTime.fromUnixTimestampMillis(stamp)
-	elseif name == "Instance" or name == "StreamedInstance" then
-		local class: string = shape.class or "Folder"
-		return Instance.new(CREATABLE[class] or class)
-	elseif name == "Enum" then
-		return pick(Enum[shape.item]:GetEnumItems(), ends)
-	end
-
-	return pick(pick(ITEM_ENUMS, ends):GetEnumItems(), ends)
-end
-
---[[
     A value of any type: its least or most when an end is asked for, or
     one at random; a list takes its length the same way
 --]]
@@ -197,7 +126,7 @@ function valueOf(node: Type, ends: string?): any
 	elseif kind == "literal" then
 		return shape.value
 	elseif kind == "roblox" then
-		return robloxOf(shape, ends)
+		return RobloxValues.valueOf(shape, ends, Values)
 	elseif kind == "struct" then
 		local value: { [string]: any } = {}
 		for _, field: Field in shape.fields do
@@ -248,51 +177,6 @@ function valueOf(node: Type, ends: string?): any
 	return value
 end
 
--- How far a rotation component drifts through its numeric type, in radians
-local function rotationDrift(node: Type): number
-	local shape: any = Sizes.resolved(node)
-	local name: string = shape.name
-	local levels: number? = Primitives[name].levels
-	local low: number, high: number = bounds(shape)
-
-	return ROTATION_DRIFT[name] or levels and (high - low) / levels or 2 * math.pi / (high - low)
-end
-
---[[
-    Whether a Roblox value read back matches the one written: component
-    by component through the numeric type each carries, and a rotation
-    within what its components can drift
---]]
-
-local function robloxNear(shape: any, expected: any, actual: any): boolean
-	local name: string = shape.name
-	local generics: { Type } = shape.generics or {}
-	local component: Type = generics[1] or COMPONENT
-
-	if name == "Vector3" then
-		return near(component, expected.X, actual.X)
-			and near(component, expected.Y, actual.Y)
-			and near(component, expected.Z, actual.Z)
-	elseif name == "Vector2" then
-		return near(component, expected.X, actual.X) and near(component, expected.Y, actual.Y)
-	elseif name == "CFrame" or name == "AlignedCFrame" then
-		local drift: number = name == "CFrame" and 2 * rotationDrift(generics[2] or COMPONENT) or ALIGNED_DRIFT
-
-		return near(component, expected.X, actual.X)
-			and near(component, expected.Y, actual.Y)
-			and near(component, expected.Z, actual.Z)
-			and expected.Rotation:FuzzyEq(actual.Rotation, drift + ALIGNED_DRIFT)
-	elseif name == "BrickColor" then
-		return expected.Number == actual.Number
-	elseif name == "DateTime" then
-		return expected.UnixTimestamp == actual.UnixTimestamp
-	elseif name == "DateTimeMillis" then
-		return expected.UnixTimestampMillis == actual.UnixTimestampMillis
-	end
-
-	return expected == actual
-end
-
 --[[
     Whether a value read back matches the one written: exactly for most
     types, within the precision the wire has for halves, singles and
@@ -305,7 +189,7 @@ function near(node: Type, expected: any, actual: any): boolean
 	local name: string = shape.name
 
 	if kind == "roblox" then
-		return robloxNear(shape, expected, actual)
+		return RobloxValues.near(shape, expected, actual, Values)
 	elseif kind == "literal" then
 		return expected == shape.value and actual == shape.value
 	elseif kind == "struct" then
@@ -386,5 +270,7 @@ end
 
 Values.valueOf = valueOf
 Values.near = near
+Values.bounds = bounds
+Values.pick = pick
 
 return Values

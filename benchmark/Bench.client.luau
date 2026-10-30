@@ -11,8 +11,9 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Stats = game:GetService("Stats")
 
-local Benchmark: Folder = ReplicatedStorage:WaitForChild("Benchmark")
+local Benchmark = ReplicatedStorage:WaitForChild("Benchmark")
 local Benches = require(Benchmark.Benches)
+local Dispatch = require(Benchmark.Dispatch)
 local Modes = require(Benchmark.Modes)
 
 local Sample: RemoteFunction = Benchmark.Sample
@@ -236,7 +237,7 @@ for _, bench in Benches.list do
 	end
 end
 
-local text: string = report(results)
+local text: string = `{report(results)}\n{Dispatch.run(frames)}`
 
 print(text)
 Done:FireServer(text)

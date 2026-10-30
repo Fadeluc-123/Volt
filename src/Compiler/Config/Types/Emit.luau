@@ -61,6 +61,29 @@ export type Scalars = {
 
 export type RobloxTypes = {
 	roblox: (self: Emit, node: Roblox, write: Block, read: Block, value: string, hint: string, path: string) -> string,
+	components: (
+		self: Emit,
+		node: Roblox,
+		write: Block,
+		read: Block,
+		value: string,
+		hint: string,
+		path: string,
+		result: string
+	) -> (),
+	corners: (
+		self: Emit,
+		node: Roblox,
+		write: Block,
+		read: Block,
+		value: string,
+		hint: string,
+		path: string,
+		result: string
+	) -> (),
+}
+
+export type Frames = {
 	cframe: (
 		self: Emit,
 		node: Roblox,
@@ -72,7 +95,7 @@ export type RobloxTypes = {
 		result: string
 	) -> (),
 	turn: (self: Emit, node: Type, write: Block, read: Block, value: string, hint: string, path: string) -> string,
-	aligned: (
+	rotated: (
 		self: Emit,
 		node: Roblox,
 		write: Block,
@@ -82,6 +105,9 @@ export type RobloxTypes = {
 		path: string,
 		result: string
 	) -> (),
+}
+
+export type Instances = {
 	instance: (
 		self: Emit,
 		node: Roblox,
@@ -91,6 +117,7 @@ export type RobloxTypes = {
 		hint: string,
 		path: string
 	) -> string,
+	awaited: (self: Emit, node: Roblox, write: Block, read: Block, value: string, hint: string, path: string) -> string,
 }
 
 export type Composites = {
@@ -128,6 +155,19 @@ export type Collections = {
 	map: (self: Emit, node: Type, write: Block, read: Block, value: string, hint: string, path: string) -> string,
 }
 
-export type Emit = Fields & Own & Scalars & RobloxTypes & Composites & Collections
+export type Replication = {
+	delta: (self: Emit, node: Type, write: Block, read: Block) -> (string, string, string, string),
+	dictionary: (
+		self: Emit,
+		target: TypeDeclaration,
+		write: Block,
+		read: Block,
+		value: string,
+		hint: string,
+		path: string
+	) -> string,
+}
+
+export type Emit = Fields & Own & Scalars & RobloxTypes & Frames & Instances & Composites & Collections & Replication
 
 return {}

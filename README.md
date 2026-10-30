@@ -12,6 +12,7 @@ Networking for Roblox games: one file describes every message, and a tool turns 
 - [Use it in your scripts](#use-it-in-your-scripts)
 - [Types](#types)
 - [Choosing how a message travels](#choosing-how-a-message-travels)
+- [Sending less](#sending-less)
 - [Safety defaults](#safety-defaults)
 - [More tools](#more-tools)
 - [Colors in VS Code](#colors-in-vs-code)
@@ -149,7 +150,7 @@ Here is what each line does.
 - `data: u8` is what the message carries: one whole number from 0 to 255. `u8` is short for "unsigned 8-bit", a number that is never negative and fits in one byte. [Types](#types) lists every type.
 - `}` ends the event. Each key inside it ends with a comma.
 - `event Pong { ... }` is the same shape with `from: Server`, so the server fires it and the players listen.
-- `function Echo {` starts a function. A function is a question with an answer: a player calls it, the server runs a handler, and the handler's return value goes back to that player. Functions always go from a client to the server.
+- `function Echo {` starts a function. A function is a question with an answer: a player calls it, the server runs a handler, and the handler's return value goes back to that player. A function goes from a client to the server unless it says otherwise; [When the server asks a player](#when-the-server-asks-a-player) shows one that goes the other way.
 - `data: string(0..32)` is what the player sends: a string from 0 to 32 bytes long.
 - `return: string(0..32)` is what the server answers with.
 
@@ -186,15 +187,18 @@ These files now exist:
 | `src/Shared/Network/Client.luau` | your LocalScripts |
 | `src/Shared/Network/Server.luau` | your server Scripts |
 | `src/Shared/Network/Types.luau` | shared code that wants the types; written only when `typesOutput` is set |
+| the path `inspectorOutput` gives, such as `src/Shared/Network/Inspector.luau` | PacketProfiler, which shows what each packet holds; written only when `inspectorOutput` is set, which `Game.volt` does not do ([The packet inspector](#the-packet-inspector)) |
 
 Each one starts with a comment saying it was generated. Never edit them. Change the schema and run `volt` again instead.
+
+A schema too large for one client module and one server module also writes shard files beside them, such as `ServerShard1.luau`; [A schema too big for one module](#a-schema-too-big-for-one-module) explains them.
 
 Run `volt` again after every change to the schema. The client module and the server module must come from the same schema, or the server kicks every player (see [Safety defaults](#safety-defaults)).
 
 When the schema has a mistake, `volt` prints each one with its line, its column and a code, writes nothing and exits with code 1:
 
 ```
-Game.volt:5:2: error V2003: unknown key "form" in event Ping; keys are from, type, call, data, queue, rate
+Game.volt:5:2: error V2003: unknown key "form" in event Ping; keys are from, type, call, data, queue, rate, timeout, channel
     5 | 	form: Client,
       | 	^^^^
 
@@ -203,15 +207,22 @@ Game.volt:4:7: error V2004: missing key "from" in event Ping
       |       ^^^^
 ```
 
-The command takes three flags:
+The command takes four flags:
 
 ```
-usage: volt <schema.volt | folder> [<file.volt> ...] [--check] [--ast] [--quiet]
+usage: volt <schema.volt | folder> [<file.volt> ...] [--check | --watch] [--ast] [--quiet]
 ```
 
-- `--check` writes nothing. It compiles the schema and compares the result with the files already on disk, line endings aside.
+- `--check` writes nothing. It compiles the schema and compares each file it would write with the one already on disk, line endings aside: the client and server modules, the types module, every shard and the packet inspector.
+- `--watch` keeps running and compiles the schema again each time you save it ([Compiling on every save](#compiling-on-every-save)).
 - `--ast` also prints the schema in its full form, with every default filled in.
 - `--quiet` leaves out the `ok` line.
+
+`--check` and `--watch` cannot be used together. Given both, `volt` prints the usage line above and exits with code 2. It does the same when it is given no schema, a folder with no `.volt` file directly inside it, or a further argument that is not an existing `.volt` file. A schema file that does not exist is named, and the command exits with code 1:
+
+```
+volt: Game.volt is missing
+```
 
 Use `--check` in continuous integration (CI), the checks that run on every push, to prove the committed modules match the schema:
 
@@ -224,6 +235,18 @@ When they match, it prints the usual `ok` line and exits with code 0. When they 
 ```
 Game.volt: src/Shared/Network/Client.luau is out of date
 Game.volt: src/Shared/Network/Server.luau is out of date
+```
+
+A file that should exist and does not, such as a shard nobody committed or an inspector the schema has just asked for, is reported as missing:
+
+```
+Game.volt: src/Shared/Network/ServerShard2.luau is missing
+```
+
+A shard file the schema no longer writes is reported as no longer generated ([A schema too big for one module](#a-schema-too-big-for-one-module)):
+
+```
+Game.volt: src/Shared/Network/ServerShard3.luau is no longer generated
 ```
 
 Each module's first comment names the Volt version that wrote it, so after you upgrade `volt` every module reads as out of date until you compile again.
@@ -330,6 +353,82 @@ Game/Schemas/Types.volt:1:8: error V3002: "Hit" is declared twice
 ```
 
 There is no `import`. The files are read in a fixed order, the options file first, then the folder's other files by name, then the extra files in the order given, so every machine gets the same result. An option in any file but the options file is an error.
+
+### Compiling on every save
+
+`--watch` compiles the schema, then keeps running and compiles it again each time it changes, so the modules follow your edits with no second command:
+
+```sh
+volt Game.volt --watch
+```
+
+It prints the usual line for the first compile, and again for each compile after it. Change `Pong`'s `data` from `u8` to `u16` and save, and a second line follows:
+
+```
+Game.volt: ok, schema hash 0x894D330D
+Game.volt: ok, schema hash 0xD2A7CAA1
+```
+
+- It reads the schema files' modification times every quarter of a second. Once it sees a change, it waits until the files read the same at two checks in a row, then compiles. The modules are written a quarter to half a second after your last save, and a save that writes several files compiles once.
+- It watches what the command reads: the one file, or every `.volt` file directly inside the folder, plus any further files you name. A `.volt` file added to the folder or removed from it counts as a change. It never watches the modules it writes, so writing them starts no compile.
+- A schema with a mistake prints its errors, as in [Compile](#compile), and writes nothing. The watch goes on, and the next save that fixes the mistake writes the modules.
+- A schema file that goes missing is reported as `volt: Game.volt is missing`, and the watch waits for the next change. Any other error, such as an output folder that does not exist, prints `volt: internal error:` followed by the error and a stack trace, and the watch goes on.
+- Each compile is the command run again with the same flags, so `--quiet` leaves out the `ok` lines and `--ast` prints the full form every time.
+- It never ends on its own: it runs until its process is stopped.
+
+### A schema too big for one module
+
+Luau compiles a module only if its top level declares at most 200 local variables at once. A generated module declares one for each writer, reader and helper it keeps, so a schema with a few hundred messages could pass that limit, and Roblox could not load the module. Volt keeps each generated file under it by splitting such a module into shards: an entry module, written where `clientOutput` or `serverOutput` says, and shard files beside it, each holding the writers and readers of some of the messages.
+
+A side is split into shards when either is true:
+
+- Its one module would declare more than 150 locals at its top level. That is Luau's 200, less the margin Luau's documentation asks code near a limit to keep.
+- The schema sets `option shardSize = N`, and the side has more than N entries. An entry is one event, one function or one exported type.
+
+Volt fills the shards in the order the schema declares its entries. It starts the next shard when the current one already holds `shardSize` entries, or when the next entry would take it past 150 locals. The client module and the server module decide on their own, so one side can be split while the other is one file. A side that meets neither condition is one module, the same file it would be without `shardSize`. The types module and the [packet inspector](#the-packet-inspector) are never split.
+
+To see it, add `option shardSize = 2` below the options of the schema from [Your first schema](#your-first-schema), which has three entries, and compile again:
+
+```sh
+volt Game.volt
+```
+
+```
+Game.volt: ok, schema hash 0x894D330D
+```
+
+The hash is the same as without the option. These files now exist:
+
+| File | What it holds | Required by |
+|---|---|---|
+| `src/Shared/Network/Client.luau` | the client's entry module | your LocalScripts |
+| `src/Shared/Network/ClientShard1.luau` | `Ping` and `Pong`, for the client | `Client.luau` |
+| `src/Shared/Network/ClientShard2.luau` | `Echo`, for the client | `Client.luau` |
+| `src/Shared/Network/Server.luau` | the server's entry module | your server Scripts |
+| `src/Shared/Network/ServerShard1.luau` | `Ping` and `Pong`, for the server | `Server.luau` |
+| `src/Shared/Network/ServerShard2.luau` | `Echo`, for the server | `Server.luau` |
+| `src/Shared/Network/Types.luau` | the types, never split | shared code that wants the types |
+
+A shard takes its entry's file name with `Shard` and a number added before `.luau`, counting from 1, and sits in the entry's folder. The entry requires each shard by that name, as `require("./ServerShard1")`, so keep the shards beside it. Rojo syncs each one as a ModuleScript, so with the project file from [Install](#install) they sit beside `Client` and `Server` in `ReplicatedStorage.Shared.Network`.
+
+Your scripts do not change. They require the entry and never a shard, and the entry returns the same `Network` table a one-file module returns: the same messages and namespaces, the same `events`, `functions` and `exports`, `hooks`, `rate`, `flush`, `onFailure` and `stats`, and on the server the same player callbacks, every table frozen. Requiring the server module still never waits, and firing a message costs what it costs in one file, since each message's writer sits in the shard that holds the message.
+
+`shardSize` changes nothing that is sent, so the schema hash and `--ast` leave it out. A client and a server compiled with different `shardSize` values, or with one side split and the other not, still connect.
+
+When a schema shrinks, or loses its `shardSize`, `volt` deletes the shard files it no longer writes, so none is left behind. Remove `option shardSize = 2` from `Game.volt` and compile again, and only `Client.luau`, `Server.luau` and `Types.luau` remain. If you commit the generated modules, commit those deletions with them. `--check` catches a shard that should have been deleted. Run before that compile, it reports:
+
+```
+Game.volt: src/Shared/Network/Client.luau is out of date
+Game.volt: src/Shared/Network/Server.luau is out of date
+Game.volt: src/Shared/Network/ClientShard1.luau is no longer generated
+Game.volt: src/Shared/Network/ServerShard1.luau is no longer generated
+```
+
+It names the first leftover shard of each side and exits with code 1. A shard that should exist and does not is reported as missing, like any module.
+
+Volt never splits one entry: a message's writer, its reader and the helpers they use always share a shard. When one entry alone needs more than 150 locals, the compiler refuses the schema with `V4003`, reported at that entry. An event `Big` whose struct has 150 fields, each of its own exported type, gives `Big needs 154 module-level locals on the server, more than one generated file holds (150)`. Give such a message fewer distinct named types, or split it into several messages.
+
+The entry module declares a local for each shard, so it can require only so many. A `shardSize` so small that a side needs more shards than that is `V4003` too, reported at the top of the options file: `the server module needs 150 shards, more than its entry can require (146)`. Raise `shardSize`, or leave it out so that Volt splits only where it must.
 
 ## Use it in your scripts
 
@@ -470,6 +569,82 @@ Network.Vote.fire(2)
 
 The server prints `Alice voted for map 2`. Each step of the loop gives a running count, the player and the data, and removes that message from the queue. On the client the loop gives the count and the data, with no player. The queue holds 64 messages by default, and when it is full the oldest is dropped.
 
+### When the server asks a player
+
+A function can also go the other way. The server asks one player a question, and that player's client answers it. Add `from: Server` to the function. Add this to `Game.volt` and run `volt Game.volt` again:
+
+```
+-- The server asks a player to accept a trade, and waits up to 15 seconds
+function ConfirmTrade {
+	from: Server,
+	timeout: 15,
+	data: (offer: string(1..64)),
+	return: boolean,
+}
+```
+
+Now the client answers. In the LocalScript, connect the handler right after you require the module:
+
+```lua
+-- Runs every time the server asks; what it returns goes back to the server
+Network.ConfirmTrade.on(function(offer)
+	print(`The server offers {offer}`)
+	return true
+end)
+
+print(`Answering trades: {Network.ConfirmTrade.connected()}`)
+```
+
+The server asks. This server Script asks each player once their client has connected:
+
+```lua
+Network.onHandshake(function(player)
+	local ok, accepted = Network.ConfirmTrade.invoke(player, "3 wood for 1 stone")
+	if ok then
+		print(`{player.Name} answered {accepted}`)
+	else
+		warn(`ConfirmTrade failed: {accepted}`)
+	end
+end)
+```
+
+With one player named Alice, the client prints:
+
+```
+Answering trades: true
+The server offers 3 wood for 1 stone
+```
+
+and the server prints:
+
+```
+Alice answered true
+```
+
+On the server:
+
+- `Network.ConfirmTrade.invoke(player, ...)` sends the question to that one player and waits. The player comes first, then the data. It returns `true` and the answer, or `false` and the reason it failed. With `yield = promise` it returns a Promise instead. Passing `nil` as the player raises an error, as a fire at `nil` does.
+- The server module has no `on` for this function, because the server never answers it.
+
+On the client:
+
+- `Network.ConfirmTrade.on(handler)` connects the one handler. It receives the data with no player in front, since the question always comes from the server. Its return values are the answer. It runs on its own thread, so it may wait, for example for the player to press a button, and the client never times it out. The function's `timeout` still ends the call on the server.
+- `Network.ConfirmTrade.connected()` returns `true` while a handler is connected. It returns `false` before `on` and after you call the function `on` returned. A framework can check it at startup, so a question the server may ask never goes unanswered.
+- The client module has no `invoke` for this function, because the client never asks it.
+
+If no handler is connected when the question arrives, the client answers at once and `invoke` returns `false` and `no handler`. The question can only arrive after the client's handshake, which goes out in the first frame after the client requires the module. So a client that connects its handlers right after the `require`, without waiting, never answers `no handler`.
+
+When the client's handler raises an error, the client reports a `handler` failure with no player, whose detail starts with the function's name, as in `ConfirmTrade: ...`. The server's `invoke` gets the first line of the error as its reason, the same as for a call from a client.
+
+A call from the server fails for the same reasons as a call from a client, with these differences:
+
+- `departed`: the player left before the answer came back, had already left, or failed the handshake. A call to a player who leaves ends at once, not at its timeout.
+- `too many calls`: 256 calls to this function are already waiting for that one player. Calls to other players still go out.
+- `dropped`: the call did not fit in what the server may send that player in one frame (`maxOutgoing`), so Volt dropped it and reported an `outgoing` failure naming the player.
+- `rate limited` never happens, because the client limits nothing. `rate` means nothing on a `from: Server` function: the compiler warns if you set it, and `Network.rate` on the server raises an error for its name.
+
+A call to a player whose client has not connected yet waits with the other reliable messages for that player, and goes out right after the handshake. Its timeout counts from the `invoke`, so ask a new player from `onHandshake`, as above, rather than from `onJoin`.
+
 ## Types
 
 Every value in `data` and `return` has a type. The type decides which values are allowed and how many bytes they take.
@@ -492,15 +667,24 @@ A range in parentheses narrows a type. Both ends are included: `u8(0..8)` allows
 | `Vector2`, `Vector2<T>` | A Vector2. | 8 by default | `Vector2<i16>` |
 | `CFrame`, `CFrame<P, R>` | A CFrame: the position as three `P`, the rotation as three `R`, both `f32` by default. | 24 by default | `CFrame<f32, q16(-3.2..3.2)>` |
 | `AlignedCFrame`, `AlignedCFrame<P>` | A CFrame turned to one of the 24 rotations that line up with the axes, plus a position. | 13 by default | `AlignedCFrame` |
+| `QuaternionCFrame`, `QuaternionCFrame<P>` | A CFrame with any rotation packed into 4 bytes, which comes back within about 0.28 degrees of the one sent, plus the position as three `P`. A CFrame with no real rotation, such as one holding NaN, is refused where you fire it, even with `writeValidation` off. | 16 by default | `QuaternionCFrame<q16(-512..512)>` (10 bytes) |
+| `UDim2`, `UDim2<S, O>` | A UDim2: each scale sent as `S` and each offset as `O`, both `f32` unless you give them. | 16 by default | `UDim2<q16(0..1), i16>` (8 bytes) |
+| `NumberRange`, `NumberRange<T>` | A NumberRange, its `Min` and `Max` each sent as `T`. The receiver refuses one whose `Min` is above its `Max`. | 8 by default | `NumberRange<u8(0..100)>` (2 bytes) |
+| `Rect`, `Rect<T>` | A Rect, its four numbers each sent as `T`. | 16 by default | `Rect<q16(0..1)>` (8 bytes) |
+| `Ray`, `Ray<O, D>` | A Ray: the origin as three `O` and the direction, at whatever length it has, as three `D`. | 24 by default | `Ray<i16(-2048..2048), q16(-512..512)>` (12 bytes) |
+| `Region3`, `Region3<T>` | A Region3, sent as its two corners, each as three `T`, and rebuilt with `Region3.new`. It comes back with the position and size it had, and never rotated. | 24 by default | `Region3<i16(-4096..4096)>` (12 bytes) |
 | `Color3` | A color, 0 to 255 per channel. | 3 | `Color3` |
 | `BrickColor` | A BrickColor. | 2 | `BrickColor` |
 | `DateTime`, `DateTimeMillis` | A DateTime, to the second or to the millisecond. | 8 | `DateTimeMillis` |
 | `Instance`, `Instance(Class)` | An instance the receiver can see, of the class if you name one. | none; it travels beside the buffer | `Instance(BasePart)` |
 | `StreamedInstance(Class)` | An instance the receiver may not have streamed in yet. It arrives as `nil` when it has not. | none; it travels beside the buffer | `StreamedInstance(Model)` |
+| `AwaitedInstance`, `AwaitedInstance(Class)` | An instance the server names that a player may not have streamed in yet. The player's client holds the message until the instance arrives, so the listener always gets it. See [Waiting for an instance](#waiting-for-an-instance). | 4 | `AwaitedInstance(Model)` |
 | `Enum.Material` and every other `Enum.` name | An item of that one Roblox enum. | 2 | `Enum.KeyCode` |
 | `EnumItem` | An item of any Roblox enum. The enum's name travels with it. | 4 or more | `EnumItem` |
 
 A string, buffer or array with a range stores its length in the smallest number that holds the range, and one with an exact length stores none. With no range, the length takes 2 bytes and the most allowed is 65,535.
+
+A range on a type argument bounds every number that argument carries, so `Region3<i16(-4096..4096)>` refuses a region with a corner more than 4,096 studs from the origin along any axis. A `Rect` or a `Region3` whose numbers are a float with an open end, such as the default `f32`, also refuses an infinite number, since two infinite corners give it a size of NaN: the sender refuses it as `expected Rect` or `expected Region3`, and the receiver as `out of range`.
 
 Types can be combined:
 
@@ -554,19 +738,143 @@ The event is then `Network.Combat.Hit`, and the client fires it with `Network.Co
 
 Generics, recursive types and struct spread are not part of the language, and the compiler reports them as errors.
 
+### Waiting for an instance
+
+With StreamingEnabled, a player's client has only the parts of the world near them, so an `Instance` the server sends can be one the client does not have yet. `AwaitedInstance` waits for it: the client holds the message until the instance has streamed in, then runs the listener with it. Add this to `Game.volt`:
+
+```
+-- The server tells every player a boss has spawned, which a player far away may not have streamed in yet
+event BossSpawned {
+	from: Server,
+	type: Reliable,
+	call: SingleAsync,
+	timeout: 5,
+	data: (boss: AwaitedInstance(Model), health: u16),
+}
+```
+
+On the server:
+
+```lua
+Network.BossSpawned.fireAll(workspace.Dragon, 500)
+```
+
+On the client:
+
+```lua
+Network.BossSpawned.on(function(boss, health)
+	print(`{boss.Name} spawned with {health} health`)
+end)
+```
+
+Each client prints `Dragon spawned with 500 health` once the `Dragon` model has streamed in for that player.
+
+- The listener always gets the instance, as the class the schema names, never `nil`.
+- `timeout` is how many seconds a message waits: 5 here, and the `timeout` option, 10 by default, for an event that does not set one. A message whose instance has not arrived by then is dropped, so its listener never runs, and the client reports a `resolve` failure naming the event. The default handler warns `Volt: resolve failure: BossSpawned: instance 1 did not arrive within 5 seconds`. An instance the server destroys, or keeps where players never get it, such as in ServerStorage, never arrives.
+- A waiting message holds back only later messages that name an instance it still waits for, so the messages about one instance arrive in the order they were fired. Every other message goes ahead of it, so a boss far from a player never delays the rest of that player's messages. Messages waiting for different instances arrive in the order their instances do. This is the one exception to reliable messages arriving in the order they were fired.
+- An instance that arrives as another class, such as a Part where the event says `Model`, is a `decode` failure, and the message is dropped.
+- Each instance costs 4 bytes: an id the server gives it the first time a message names it, and keeps for as long as the instance exists. The server keeps one ObjectValue per id in a folder named `References` beside the schema's remotes, and each goes when its instance does.
+- Only the server sends one. `AwaitedInstance` can only be in the `data` of a `from: Server` event that is `Reliable` or `Unreliable`, and the compiler refuses it anywhere else with `V3022`. It can be optional, in an array or in a struct the event carries, but not in an exported type, a map key or a set element. A `timeout` on an event whose `data` holds no `AwaitedInstance` does nothing, and the compiler warns about it.
+- A bot gets every instance at once, since it lives on the server.
+
 ## Choosing how a message travels
 
 ### Events or functions
 
 Use an event when the sender does not need an answer: a player pressed a button, the round started, a door opened. Events can go either way, or both ways with `from: Both`.
 
-Use a function when a player needs the server's answer before going on: buying an item, loading an inventory. Functions go from a client to the server only.
+Use a function when one side needs the other's answer before going on: a player buying an item or loading an inventory, or the server asking a player to accept a trade. A function goes from a client to the server, or, with `from: Server`, from the server to one player ([When the server asks a player](#when-the-server-asks-a-player)).
 
 ### Reliable or unreliable
 
-A reliable message always arrives, exactly once, in the order it was fired. Use it for almost everything.
+A reliable message always arrives, exactly once, in the order it was fired. Use it for almost everything. The one exception to the order is a message waiting for an instance the player has not streamed in ([Waiting for an instance](#waiting-for-an-instance)).
 
 An unreliable message can be lost, and unreliable messages are not kept in order. Use it for something sent many times a second where the next message replaces the last, such as a position. Each unreliable message must fit in 900 bytes (`unreliableBudget` in [Options](#options)), and the compiler refuses one that could be larger, or that has no largest size at all, such as one with a string that has no range.
+
+### Unreliable, in order
+
+Because unreliable messages are not kept in order, an old message can arrive after a newer one and undo it: a player's aim from two frames ago lands after the aim from the last frame. `type: OrderedUnreliable` stops that. Each message carries a count, and the side that hears it drops any message that is not newer than the last one it heard of that event from that sender. Add this to `Game.volt`:
+
+```
+-- Where a player aims, sent every frame; an older aim that arrives late is dropped
+event Aim {
+	from: Client,
+	type: OrderedUnreliable,
+	call: SingleSync,
+	data: (yaw: q16(-3.2..3.2), pitch: q16(-1.6..1.6)),
+}
+```
+
+Your scripts use it like any event. On the client:
+
+```lua
+Network.Aim.fire(1.5, 0.25)
+```
+
+On the server:
+
+```lua
+-- Runs for each aim newer than the last one this player sent
+Network.Aim.on(function(player, yaw, pitch)
+	print(string.format("%s aims %.2f, %.2f", player.Name, yaw, pitch))
+end)
+```
+
+With one player named Alice, the server prints `Alice aims 1.50, 0.25`.
+
+- It is still unreliable. A message can be lost, and Volt never waits for one or sends it again. A newer message that arrives first makes the older one too old to use.
+- The count takes 2 bytes per message, inside the 900-byte limit.
+- The server keeps a count per player, and the client one per event. When the server sends to several players at once, such as with `fireAll`, each player gets their own next count.
+- A message dropped for being old is counted in `stats()` as received, and it is not a failure. It still counts toward the event's `rate`, so a player cannot get past the limit by sending old messages again.
+- The count runs from 1 to 65,535 and then wraps to 0. A side that misses 32,768 or more messages of one event in a row, over nine minutes of them at 60 a second, drops the next ones until the count passes the last one it heard.
+
+### Channels
+
+Reliable messages from one side arrive in the order they were fired, one after another in a single line. A channel is a second line of reliable messages. Declare it once, then name it in the reliable events that use it:
+
+```
+-- Chat has its own line, so a burst of chat never crowds out the game's other messages
+channel Social
+
+event Chat {
+	from: Both,
+	type: Reliable,
+	call: ManySync,
+	channel: Social,
+	data: string(0..200),
+}
+```
+
+Your scripts do not change. On the server:
+
+```lua
+-- Pass every chat line on to every player
+Network.Chat.on(function(player, text)
+	Network.Chat.fireAll(`{player.Name}: {text}`)
+end)
+```
+
+On the client:
+
+```lua
+Network.Chat.on(function(text)
+	print(text)
+end)
+
+Network.Chat.fire("hello")
+```
+
+With one player named Alice, the client prints `Alice: hello`.
+
+What a channel changes:
+
+- Messages on a channel arrive in the order they were fired on that channel. Messages on the default line, which every event without `channel` and every function uses, arrive in the order they were fired on it. Between two lines nothing is promised, so a `Chat` can arrive before a `Pong` fired just before it.
+- Each line has its own frame. A frame that is full on one line, past `maxPacket` on the client or `maxOutgoing` on the server, drops messages on that line only. A message that fails its checks drops the rest of its own packet only, and a sync listener that waits holds up only its own packet.
+- A function's call and its answer always use the default line. A handler's fires at its caller on the default line still arrive before its answer, as in [Use it in your scripts](#use-it-in-your-scripts); fires on a channel can arrive after it.
+- A channel adds no remote. Its messages ride the scope's one `Reliable` RemoteEvent, and Roblox sends all of one player's reliable messages over one connection, so a channel cannot get past a message the engine is still resending.
+- In a schema that declares a channel, every packet starts with one byte naming its line. Each packet, reliable or unreliable, costs one more byte, and an unreliable message must fit in one byte less, 899 bytes by default.
+- Every line's packets count toward `maxPacketsPerSecond`. A client that sends on a channel every frame sends up to 60 more packets a second, so raise the option in a schema whose client does.
+- Only a `Reliable` event can name a channel, and a schema declares at most 255. A channel can be declared inside a namespace, and an event finds it by name as it finds a type.
 
 ### Listener modes
 
@@ -586,19 +894,149 @@ An async listener may wait. Each message costs one new thread per listener, and 
 
 A function's handler always runs on its own thread.
 
+## Sending less
+
+Two attributes cut the bytes of messages the server sends often. Each goes in front of a declaration, and your scripts call the same functions as before.
+
+### Only the fields that changed
+
+`@delta` in front of an event makes the server send each player only the fields of the event's struct that changed since the last value it sent that player. Add this to `Game.volt`:
+
+```
+-- A player's vitals: sent whole the first time, then only the fields that changed
+struct Vitals {
+	health: u8,
+	stamina: u8(0..100),
+	title: string(0..16),
+}
+
+@delta event Status {
+	from: Server,
+	type: Reliable,
+	call: SingleAsync,
+	data: Vitals,
+}
+```
+
+The server sends each player their vitals when they join, and again whenever they change:
+
+```lua
+-- Each player's vitals, as the server last set them
+local vitals = {}
+
+-- A player who joins is sent their vitals whole
+Network.onJoin(function(player)
+	vitals[player] = { health = 100, stamina = 50, title = "Scout" }
+	Network.Status.fire(player, vitals[player])
+end)
+
+Network.onLeave(function(player)
+	vitals[player] = nil
+end)
+
+-- A hit changes one field, and only that field is sent
+local function hurt(player, damage)
+	local status = vitals[player]
+	status.health -= damage
+	Network.Status.fire(player, status)
+end
+```
+
+The client listens as it would to any event:
+
+```lua
+Network.Status.on(function(status)
+	print(`health {status.health}, stamina {status.stamina}, {status.title}`)
+end)
+```
+
+With one player named Alice, after `hurt(alice, 10)` the client prints:
+
+```
+health 100, stamina 50, Scout
+health 90, stamina 50, Scout
+```
+
+The first message is 10 bytes. The second is 3: the event's id, one byte saying which fields follow, and the new health. Without `@delta` each is 9 bytes. A fire whose value has not changed costs 2 bytes and still reaches the listener, so sending a value again to be sure always lands.
+
+How it works:
+
+- The server keeps a copy of the value it last sent each player through each `@delta` event. Each fire compares the value's fields with that copy and sends only the fields that differ. A table inside a field is compared all the way down, so a struct inside the value that you change in place counts as changed, and all of it is sent.
+- The first fire to a player sends every field, since there is nothing to compare with. Send that whole value from `onJoin`, as above. Volt never sends a player who joins anything on its own: it keeps no current value of any event, and it replays no message fired before they joined.
+- `fire`, `fireAll`, `fireList`, `fireSet` and `fireExcept` all work, and each player is sent the fields that changed for them.
+- The listener always receives the whole struct. Volt fills each field the message left out from the value it delivered last time.
+- That struct is frozen with `table.freeze`. Read it and never write into it, or into a table inside it, since the fields that did not change are the same tables as last time. Copy it with `table.clone` when your code needs a version of its own.
+- When a message to a player is dropped because their frame went past `maxOutgoing` (an `outgoing` failure), the server forgets every `@delta` value it sent them, so the next fire to them is whole again. A fire that raises an error, such as one with a value its type does not allow, sends nothing and changes nothing.
+- Which fields follow takes one bit per field: one byte for up to 8 fields and two for up to 16.
+- Each fire copies the value once and compares it once with each copy its players hold. Players whose last value came from the same fire hold one copy, and players who need the same fields share one write, so `fireAll` after `fireAll` compares and writes once. That is cheap for a small struct. A large struct where a few fields change often is cheaper as several `@delta` events.
+- A bot is sent `@delta` messages as a player is, and a `@delta` event can ride a [channel](#channels).
+
+The compiler refuses `@delta` with `V3015` on an event that is not `from: Server`, that is not `Reliable`, or whose `data` is not one struct of 1 to 32 fields. It also refuses a struct with an `unknown`, a `StreamedInstance` or an `AwaitedInstance` anywhere inside it: the first two can arrive as `nil` and the last can make the message wait, and either way the client could not fill in the fields a later message leaves out correctly. A `@delta` event `Score` whose `data` is `u16` gives:
+
+```
+Game.volt:11:8: error V3015: @delta event Score must carry one struct; it carries u16
+   11 | 	data: u16,
+      | 	      ^^^
+```
+
+### Strings sent as ids
+
+`@dictionary` in front of a string type makes each of its values travel as a 2-byte id. The server sends each player each string once, just before the first packet that uses it, and from then on only its id. Add this to `Game.volt`:
+
+```
+-- Item names repeat in many messages, so each one is sent once and then as a 2-byte id
+@dictionary type ItemName = string(1..32)
+
+event Picked {
+	from: Server,
+	type: Reliable,
+	call: ManySync,
+	data: (item: ItemName, count: u8),
+}
+```
+
+Your scripts use strings as before. On the server:
+
+```lua
+Network.Picked.fire(player, "Iron Sword", 1)
+Network.Picked.fire(player, "Iron Sword", 2)
+```
+
+On the client:
+
+```lua
+Network.Picked.on(function(item, count)
+	print(`picked {count} {item}`)
+end)
+```
+
+The client prints `picked 1 Iron Sword`, then `picked 2 Iron Sword`. The first fire costs that player 20 bytes: 16 to send the string `Iron Sword` and 4 for the message. The second costs 4. Without `@dictionary` each is 13 bytes, so the dictionary pays for itself from the second time a player is sent a string.
+
+- The strings form one list per schema, kept by the server and shared by every `@dictionary` type in the schema. It grows as messages name new strings, and it never forgets one.
+- A player who joins is sent every string so far ahead of everything else, the messages held for them until their handshake included. Each player is sent each string exactly once. A bot is sent them as a player is.
+- The list holds at most 4,096 strings. A fire that would add one more raises an error, `Picked.item: dictionary full`, and sends nothing. Use `@dictionary` for a set of names that stays small, such as items, abilities or maps, and never for text players type or anything else whose values have no end.
+- The type must be a `string` or a `string.utf8` whose range allows at most 255 bytes, and the compiler refuses any other with `V3016`. A `string.utf8` value is still checked as UTF-8 before it gets an id.
+- Only the server sends an id, on the default line of reliable messages. A `@dictionary` type can be in the `data` of a `from: Server`, `Reliable` event with no `channel`, and in the `return` of a function a player calls, including inside a struct, an array, a map or an optional. The compiler refuses it anywhere else with `V3017`: in an event a client fires, an `Unreliable` or `OrderedUnreliable` event, an event on a channel, a function's `data`, the `return` of a `from: Server` function, or an exported type. A `from: Client` event `Use` whose `data` is an `ItemName` gives:
+
+```
+Game.volt:18:8: error V3017: @dictionary type ItemName travels only on the server's default reliable stream; Use is from: Client
+   18 | 	data: ItemName,
+      | 	      ^^^^^^^^
+```
+
 ## Safety defaults
 
 Volt checks everything the server receives, and these checks cannot be turned off.
 
 ### Every value is checked
 
-The server reads a packet from a player only after checking that it is a buffer, that it is at most 8,192 bytes (`maxPacket`), and that the player has sent at most 240 packets in the last second (`maxPacketsPerSecond`). Then it checks every value in every message against the schema: each number in its range and never NaN, each length within its bounds, each enum value known, each instance present and of its class, no key twice in a map or a set.
+The server reads a packet from a player only after checking that it is a buffer, that it is at most 8,192 bytes (`maxPacket`), that the player has sent at most 240 packets in the last second (`maxPacketsPerSecond`), and, in a schema with a [channel](#channels), that it starts with a byte naming the default line or a channel. Then it checks every value in every message against the schema: each number in its range and never NaN, each length within its bounds, each enum value known, each instance present and of its class, no key twice in a map or a set.
 
 The sending side checks your values too, before anything is written, so a bad value raises an error where you fire it. `option writeValidation = false` removes those sending checks for speed. The receiving checks stay.
 
 ### Rate limits
 
-Each event a client fires is limited to 120 messages per second per player, and each function to 60 calls per second per player. Change them in the schema:
+Each event a client fires is limited to 120 messages per second per player, and each function a client calls to 60 calls per second per player. Change them in the schema:
 
 ```
 event Ping {
@@ -633,23 +1071,26 @@ The server reads nothing from a player until their handshake arrives. Reliable m
 
 ### Failure kinds
 
-Every problem Volt finds is a failure of one of nine kinds. Each one is counted, then handed to the failure handler.
+Every problem Volt finds is a failure of one of ten kinds. Each one is counted, then handed to the failure handler.
 
 | Kind | Cause | Scope | What happens | Default handling |
 |---|---|---|---|---|
-| `packet` | A packet that is not a buffer or is over `maxPacket`; one sent before the handshake or by a player who has left; a message id cut short or naming no message; a second handshake | packet | the packet is dropped, or the rest of it for a bad id | warn |
-| `rate` | Over `maxPacketsPerSecond`, or over an event's or a function's `rate` | packet for the packet rate, message for a message's rate | the packet is dropped, or the message is skipped | warn |
+| `packet` | A packet that is not a buffer or is over `maxPacket`; one sent before the handshake or by a player who has left; a message id cut short or naming no message; a second handshake; in a schema with a channel, a packet with no channel byte or one naming no channel, as in `unknown channel 5`, on either side; on a client with `stamp`, a server packet shorter than its stamp | packet | the packet is dropped, or the rest of it for a bad id | warn |
+| `rate` | Over `maxPacketsPerSecond`, every channel's packets counted together, or over an event's or a function's `rate`, which an `OrderedUnreliable` message dropped for being old still counts toward | packet for the packet rate, message for a message's rate | the packet is dropped, or the message is skipped | warn |
 | `handshake` | The client's schema hash differs from the server's | packet | the packet is dropped | kick, with both hashes in the message; a warning for a bot |
-| `decode` | Any other check while reading a message | message | the rest of the packet is dropped | warn |
+| `decode` | Any other check while reading a message, including, on the client, an `AwaitedInstance` that arrives as another class, a `@delta` message that leaves out fields when the client has no earlier value to fill them from, a dictionary id the client was never sent a string for, and a dictionary message the client cannot take | message | the rest of the packet is dropped, or for an instance that arrived late, that message | warn |
+| `resolve` | On the client, an `AwaitedInstance` that did not arrive within its event's `timeout` | message | that message is dropped, and its listener never runs | warn |
 | `listener` | A sync listener raised an error or waited | message | the packet goes on | warn |
-| `handler` | A function's handler raised an error, or returned a value its `return` type does not allow | message | the caller gets the error as its reason | warn |
-| `outgoing` | A player's outgoing data for one frame went past `maxOutgoing`; on the client, the reliable data for one frame went past `maxPacket`, which a call finds at its own `invoke` | packet | the message that went past it is dropped | warn |
+| `handler` | A function's handler raised an error, or returned a value its `return` type does not allow, on the side that answers; on the client the player is `nil` | message | the caller gets the error as its reason | warn |
+| `outgoing` | A player's outgoing data for one frame went past `maxOutgoing`; on the client, the reliable data for one frame went past `maxPacket`. Each channel's frame counts on its own. A call finds it at its own `invoke`, on either side | packet | the message that went past it is dropped, and on the server every `@delta` value sent to that player is forgotten, so the next fire to them is whole | warn |
 | `queue` | A queue was full | message | the oldest message is dropped | warn, once per event |
-| `departed` | A fire at a player who has left or whose handshake failed; an answer to a caller who has left | packet | the message is dropped | nothing |
+| `departed` | A fire or a call at a player who has left or whose handshake failed; an answer to a caller who has left | packet | the message is dropped | nothing |
+
+An `OrderedUnreliable` message dropped for being older than the last one heard is not a failure, since unreliable messages are expected to arrive out of order.
 
 The default handler's warning reads `Volt: <kind> failure from <Name>: <detail>`, or `from a bot` for a bot, and `Volt: <kind> failure: <detail>` on the client. It warns at most once a minute per player and kind, so an attack cannot flood the Output, while the counts stay exact.
 
-The detail of a message-scoped failure (a `rate` on a message, `decode`, `listener`, `handler` and `queue`) starts with the message's name, a colon and a space, exactly once, as in `Ping: over 120 a second`. A message in a namespace gives its full name, such as `Combat.Hit: ...`. The detail of a packet-scoped failure names no message, as in `over 240 packets a second`.
+The detail of a message-scoped failure (a `rate` on a message, `decode`, `resolve`, `listener`, `handler` and `queue`) starts with the message's name, a colon and a space, exactly once, as in `Ping: over 120 a second`. A message in a namespace gives its full name, such as `Combat.Hit: ...`. The message that carries [dictionary](#strings-sent-as-ids) strings is named `Volt.dictionary`, as in `Volt.dictionary: out of order`, a name none of your messages can have. The detail of a packet-scoped failure names no message, as in `over 240 packets a second`.
 
 ### Handling failures yourself
 
@@ -753,6 +1194,31 @@ Each one returns a function that disconnects it, and each callback runs on its o
 
 `Network.events`, `Network.functions` and `Network.exports` map each full name to the same entry the module has: `Network.events["Combat.Hit"]` is `Network.Combat.Hit`, and `Network.exports["Save"]` is `Network.Save`. A name that does not exist gives `nil`. This lets a framework connect messages by name.
 
+### When the server sent a message
+
+`option stamp = true` makes the server write its clock, the `workspace:GetServerTimeNow()` of the frame that sends, at the start of every packet it sends. The client module gains `Network.serverTime()`, which returns that time for the message being handled. Add the option to `Game.volt` and compile again:
+
+```
+option stamp = true
+```
+
+Then, on the client:
+
+```lua
+Network.Pong.on(function(value)
+	local age = workspace:GetServerTimeNow() - Network.serverTime()
+	print(`Pong {value} left the server {math.round(age * 1000)} ms ago`)
+end)
+```
+
+This prints a line such as `Pong 8 left the server 50 ms ago`.
+
+- `serverTime()` gives the time of the packet that held the message: inside a sync listener, an async listener before it first waits, a hook after a receive, and right after an `invoke` returns.
+- A message that waited in a queue keeps its packet's time, inside `iter` and when the first `on` takes the queue. Anywhere else `serverTime()` gives the time of the last packet, and 0 before the first.
+- The time is when the server's frame sent the packet. A message held for a player until their handshake carries the time it was sent, not the time it was fired.
+- Each server packet costs 8 more bytes, and an unreliable message the server sends must fit in 892 bytes, 8 less than `unreliableBudget`. A player's packets carry no time, since the server never trusts a player's clock.
+- The server module has no `serverTime`, and the client module has it only when the option is on. In `pascal` and `snake` casing it is `ServerTime` and `server_time`, and in any schema, stamped or not, the compiler refuses a top-level declaration with the name in the schema's casing.
+
 ### Bots
 
 A bot is a stand-in player that only exists on the server. Every server module treats it as a player, with its own counters, rate limits and handshake, so code that drives a bot goes through the same checks a player's client does. On the server of a running game:
@@ -760,6 +1226,8 @@ A bot is a stand-in player that only exists on the server. Every server module t
 - `Volt.addBot(name)` adds a bot to every Volt schema on the server, including ones started later.
 - `Volt.removeBot(bot)` removes it, and every server module hears it leave.
 - `Volt.connectBot(bot, scope)` returns the client side of one scope for the bot, which a test harness starts a client module on.
+
+The server can call a bot with a `from: Server` function as it calls a player. The client module a harness started on the bot's transport answers, and with none started the call ends with `timeout`.
 
 A bot is a table `{ Name = name }`, with no `UserId` and no `Kick`. A listener's player can be a bot, so strict code checks before it uses what only a `Player` has. `Network.isBot(value)` tells them apart. Volt never kicks a bot, and its warnings say `from a bot`.
 
@@ -774,7 +1242,9 @@ The mock lets you test your networking without Studio. It stands in for the remo
 - `mock:leave(player)` tells the server the player is leaving, then forgets them.
 - A player's `Kick(message)` keeps the message in `player.kicked` and makes the player leave.
 - `mock:step()` moves time forward one frame.
+- `mock.time` is the server's clock, 0 until a test sets it. A schema with `option stamp = true` writes it into each packet the server sends, so once a test sets `mock.time = 100`, the client's listener of the next message the server sends reads 100 from `Network.serverTime()`.
 - `mock:addBot(name)`, `mock:removeBot(bot)` and `mock:connectBot(bot)` work like the `Volt` functions above. `mock.players`, `join`, `leave` and `step` never see a bot.
+- `mock:hide(instance)` makes an instance invisible to every player's client, as if it had not streamed in, so a message naming it as an `AwaitedInstance` waits. `mock:reveal(instance)` makes it visible again, and each client hears of it at the start of the next step, before that step's packets. A bot still sees a hidden instance.
 - `Volt.start(schema, transport)` starts a runtime over the transport given instead of the remotes.
 
 A generated module calls `Volt.start(schema)` itself, so a test loads the module with a `require` that hands back a Volt whose `start` passes the mock's transport. This test runs under [Lune](https://github.com/lune-org/lune), which you can add with `rokit add lune-org/lune`. It needs an alias named `volt` in your `.luaurc` that points at the folder holding Volt's `init.luau`:
@@ -856,7 +1326,7 @@ botClient.Ping.fire(3) -- the server's Ping listener hears it from the bot on th
 
 Each `mock:step()` first delivers every packet that earlier flushes queued, in both directions, then fires one Heartbeat on every runtime, which is when each one sends. So with `flush = 1`, a fire made outside `step` reaches the other side on the second step, as the test above shows. A server fire at a player who has not handshaken waits for the step after their handshake arrives.
 
-The mock differs from the real engine in six ways, which a test that leans on it must know:
+The mock differs from the real engine in seven ways, which a test that leans on it must know:
 
 1. A server packet for a player with no client runtime is dropped at the next step, where the engine keeps it until the client connects. Holding reliable messages until the handshake makes this rarely matter.
 2. Callbacks for a joining player run at once inside `mock:join`, in the order they were registered, before `join` returns the client transport.
@@ -864,6 +1334,81 @@ The mock differs from the real engine in six ways, which a test that leans on it
 4. Each side holds one receiver per player. A second server runtime on one mock, or a second client runtime for one player, replaces the first. Two scopes cannot share a mock, so a test with several scopes uses one mock per scope and translates players between them.
 5. Players are plain tables, `{ Name, UserId, Kick, kicked }`, not frozen, and the same table reaches every callback, handler and listener, so a test may add fields to one.
 6. Heartbeat callbacks get no `deltaTime`.
+7. An instance the server names in an `AwaitedInstance` is on every client at once unless the test hides it, where the engine streams it in by distance.
+
+### MicroProfiler labels
+
+`option profileLabels = true` labels Volt's work in Roblox's MicroProfiler, so you can see what it costs in each frame. Add it to `Game.volt` and compile again:
+
+```
+option profileLabels = true
+```
+
+Each label starts with `Volt` and the schema's scope:
+
+- `Volt Game receive` wraps each packet a module handles: its checks, every message in it and any failure it reports.
+- `Volt Game Ping`, inside it, wraps each message: reading it, then what happens when it arrives, such as a sync listener running, an async listener's thread or a handler's thread starting, or the message joining a queue. A message in a namespace uses its full name, as in `Volt Game Combat.Hit`.
+- `Volt Game flush` wraps each Heartbeat's send, and each `Network.flush()` your code calls. Every Heartbeat gets one, even a Heartbeat that sends nothing, such as the ones between sends with `flush = 2`.
+
+When Alice's client fires `Ping` and calls `Echo` in one frame, the server labels her packet `Volt Game receive`, with `Volt Game Ping` and then `Volt Game Echo` inside it. Its `Volt Game flush` labels come separately, one per Heartbeat.
+
+Firing a message has no label of its own. A fire's checks and writing run inside whatever label your own code opens around it, and its bytes go out inside `Volt Game flush`.
+
+With the option off, which is the default, the modules are byte for byte what they are without it. With it on, each packet, each message and each flush costs two more calls. It changes nothing that is sent, so the schema hash leaves it out, and a client compiled with labels connects to a server compiled without them.
+
+Lune's `debug` has no profiler, so under Lune a module compiled with `profileLabels` raises `attempt to call a nil value` at the first `mock:step()`. Compile the modules your tests load without the option, or put a `debug` table with `profilebegin` and `profileend` functions in the environment the test loads them with ([The mock transport](#the-mock-transport)).
+
+### The packet inspector
+
+PacketProfiler is a community tool that shows how much data each remote sends. All of a Volt schema's messages travel on its two remotes, so on its own PacketProfiler sees Volt's remotes and not the messages inside them. `option inspectorOutput` writes one more module, the packet inspector, which reads a packet back into the messages it holds. Add this to `Game.volt` and compile again:
+
+```
+option inspectorOutput = "src/Shared/Network/Inspector.luau"
+```
+
+The inspector module returns a function, which takes a remote and then everything that remote's event passed: on the server the player, the packet and its side array, and on the client the packet and its side array. It returns a list with one entry per message, each `{ Name = ..., Arguments = { ... } }`, or `nil` for a remote outside the schema's folder, `ReplicatedStorage.Volt.Game`.
+
+When Alice's client fires `Ping` with 7 and calls `Echo` with `"hello"` in one frame, it returns this for her packet. `2303537933` is the schema hash, `0x894D330D`:
+
+```lua
+{
+	{ Name = "Volt handshake", Arguments = { 2303537933 } },
+	{ Name = "Ping", Arguments = { 7 } },
+	{ Name = "Echo (call)", Arguments = { "hello" } },
+}
+```
+
+When the server answers with `Network.Pong.fire(alice, 8)` and its `Echo` handler returns `"HELLO"`, it returns this for the server's packet to her:
+
+```lua
+{
+	{ Name = "Pong", Arguments = { 8 } },
+	{ Name = "Echo (reply)", Arguments = { true, "HELLO" } },
+}
+```
+
+The entries it gives:
+
+- `Volt handshake`, with the schema hash, at the start of a client's first packet to the server.
+- `Volt stamp`, with the server's time, at the start of each packet a client receives in a schema with `option stamp = true`.
+- Each event by its full name, with its values. An `OrderedUnreliable` event's count comes first, and a `@delta` event gives the mask of the fields it carries, then a table of those fields.
+- A call as `Echo (call)` with its data, and its answer as `Echo (reply)` with `true` and the returned values, or `false` and the reason.
+- `Volt dictionary`, on the client, for the message that brings new `@dictionary` strings: the first new string's id, then the strings.
+- An `AwaitedInstance` and a `@dictionary` string appear as the numbers they travel as, since only the client's runtime knows what each number names. A [channel](#channels) byte is checked, and gets no entry.
+
+A message that fails a check ends the list, as it ends the packet for the side that receives it. The entries before it stay, and one more is added: `decode: ` and the message's name, with the error as its argument, or `packet: ` and the problem for anything else wrong with the packet, such as a message id that names no message. One byte more, a 9, at the end of Alice's packet above adds `{ Name = "packet: unknown message 9", Arguments = { "unknown message 9" } }`. The inspector never raises an error.
+
+It reads each message with every check the receiving side makes, and only for display: nothing it reads reaches a listener, a handler, a hook, a queue or the counters. It requires no runtime, starts nothing and connects to nothing, so it is as safe to require in a plugin as in the game.
+
+PacketProfiler 3.0.2 looks for a ModuleScript named `RemoteName.profiler` anywhere under `ReplicatedStorage`, requires it, and calls the function it returns for each remote call it records. Give the inspector that file name:
+
+```
+option inspectorOutput = "src/Shared/Network/RemoteName.profiler.luau"
+```
+
+Rojo builds the file as a ModuleScript named `RemoteName.profiler`, so with the project file from [Install](#install) it sits in `ReplicatedStorage.Shared.Network`. A game with several Volt schemas has one inspector for each, and PacketProfiler takes one `RemoteName.profiler`, so write that module yourself: require each schema's inspector, and return the first answer that is not `nil`.
+
+The inspector is never split into shards. One that would need more than 150 locals is refused with `V4003`, reported at the top of the options file, as in `the inspector needs 154 module-level locals, more than one generated file holds (150)`. `inspectorOutput` changes nothing that is sent, so the schema hash leaves it out. `volt` writes the inspector and `--check` compares it like any other module.
 
 ## Colors in VS Code
 
@@ -895,6 +1440,7 @@ Options go at the top of a schema, one per line: `option name = value`. A path t
 | `clientOutput` | required | Where the client module is written, relative to the schema file (the options file, for a folder) |
 | `serverOutput` | required | Where the server module is written |
 | `typesOutput` | none | Where the types module is written; without it, none is written |
+| `inspectorOutput` | none | Where the packet inspector is written, relative to the schema file; without it, none is written ([The packet inspector](#the-packet-inspector)). It changes nothing that is sent, so the schema hash leaves it out |
 | `runtime` | `ReplicatedStorage.Packages.Volt` | Where the generated modules require the Volt runtime from |
 | `scope` | the schema file's name | The folder under `ReplicatedStorage.Volt` that holds this schema's remotes |
 | `casing` | `camel` | How the module's methods are named: `camel` (`fireAll`, `onFailure`), `pascal` (`FireAll`, `OnFailure`) or `snake` (`fire_all`, `on_failure`) |
@@ -902,15 +1448,18 @@ Options go at the top of a schema, one per line: `option name = value`. A path t
 | `manualReplication` | `false` | When `true`, Volt does not send on Heartbeat, and your code calls `Network.flush()` |
 | `flush` | `1` | Send every this many Heartbeats |
 | `maxPacket` | `8192` | The largest reliable packet the server accepts from a player, in bytes; the client keeps each frame's reliable data under it too |
-| `maxPacketsPerSecond` | `240` | Packets per second the server accepts from each player, both remotes together |
-| `maxOutgoing` | `262144` | Bytes one player's outgoing data may hold in one frame; the message that goes past it is dropped |
-| `unreliableBudget` | `900` | The most bytes in one unreliable remote call, and the largest an unreliable message may be |
+| `maxPacketsPerSecond` | `240` | Packets per second the server accepts from each player, both remotes and every channel together |
+| `maxOutgoing` | `262144` | Bytes one player's outgoing data may hold in one frame, on each channel; the message that goes past it is dropped |
+| `unreliableBudget` | `900` | The most bytes in one unreliable remote call, and the largest an unreliable message may be, less the byte a channel adds and, for the server's messages, the 8 that `stamp` adds |
+| `stamp` | `false` | When `true`, every packet the server sends starts with its clock, which the client reads with `Network.serverTime()` (see [When the server sent a message](#when-the-server-sent-a-message)) |
 | `queue` | `64` | How many messages wait per event for a listener or for `iter` |
 | `rate` | `120` | Messages per second each player may fire per event; `unlimited` turns the limit off |
 | `functionRate` | `60` | Calls per second each player may make per function; `unlimited` turns the limit off |
-| `timeout` | `10` | Seconds before a call fails with `timeout`; decimals are allowed |
+| `timeout` | `10` | Seconds before a call fails with `timeout`, and how long a message waits for an `AwaitedInstance`; decimals are allowed |
 | `yield` | `coroutine` | How `invoke` waits: `coroutine` pauses the calling thread, and `promise` returns a Promise |
 | `promise` | none | The path of your Promise library, such as `ReplicatedStorage.Packages.Promise`; required when `yield = promise` |
+| `shardSize` | none | The most entries (events, functions and exported types) one generated file holds; a side with more is split into shards, and a side past 150 locals is split without it ([A schema too big for one module](#a-schema-too-big-for-one-module)). It changes nothing that is sent, so the schema hash leaves it out and changing it never breaks a client's handshake |
+| `profileLabels` | `false` | When `true`, Volt labels each packet, each message and each flush in the MicroProfiler ([MicroProfiler labels](#microprofiler-labels)). It changes nothing that is sent, so the schema hash leaves it out |
 
 With `yield = promise`, `invoke` returns a Promise that resolves with the answer, with no `true` in front, or rejects with the reason.
 
@@ -919,21 +1468,34 @@ Keys of an event:
 | Key | Values | Default |
 |---|---|---|
 | `from` | `Client`, `Server`, `Both` | required |
-| `type` | `Reliable`, `Unreliable` | required |
+| `type` | `Reliable`, `Unreliable`, `OrderedUnreliable` | required |
 | `call` | `SingleSync`, `SingleAsync`, `ManySync`, `ManyAsync`, `Polling` | required |
 | `data` | a type, or a parameter pack such as `(x: f32, y: f32)` | none; the event carries nothing |
 | `queue` | a whole number | the `queue` option |
 | `rate` | a whole number, or `unlimited` | the `rate` option; on a `Server` event it means nothing and the compiler warns |
+| `timeout` | a number of seconds a message waits for its `AwaitedInstance` before it is dropped; only for an event whose `data` holds one, and the compiler warns on any other | the `timeout` option |
+| `channel` | the name of a channel the schema declares with `channel Name`; `Reliable` events only | none; the default line |
+
+A schema declares a channel with `channel Name` on a line of its own, at the top level or in a namespace, and at most 255 of them ([Channels](#channels)).
 
 Keys of a function:
 
 | Key | Values | Default |
 |---|---|---|
+| `from` | `Client`, `Server`: who calls it; the other side answers | `Client` |
 | `data` | a type, or a parameter pack | none |
 | `return` | a type, or a parameter pack | none |
 | `yield` | `Coroutine`, `Promise` | the `yield` option |
 | `timeout` | a number of seconds | the `timeout` option |
-| `rate` | a whole number, or `unlimited` | the `functionRate` option |
+| `rate` | a whole number, or `unlimited` | the `functionRate` option; on a `from: Server` function it means nothing and the compiler warns |
+
+Attributes go in front of a declaration, as in `@delta event Status { ... }`:
+
+| Attribute | Goes in front of | What it does |
+|---|---|---|
+| `@private` | a `type`, `struct` or `enum` that is not exported | Keeps its Luau type inside the generated modules ([Types](#types)) |
+| `@delta` | a `from: Server`, `Reliable` event whose `data` is one struct of 1 to 32 fields | Sends each player only the fields that changed since the last value they were sent ([Only the fields that changed](#only-the-fields-that-changed)) |
+| `@dictionary` | a `type` that is a `string` or `string.utf8` of at most 255 bytes | Sends each value as a 2-byte id, and each string to each player once ([Strings sent as ids](#strings-sent-as-ids)) |
 
 ## Troubleshooting
 
@@ -964,6 +1526,31 @@ Echo: length out of range
 A fire or an invoke was given a value its type does not allow, and nothing was sent. The text names the message, then the field for a parameter pack: `Input.dir` is the `dir` value of an event `Input` with `data: (dir: u8(0..8), jump: boolean)`. Fix the value, or change the type in the schema.
 
 ```
+Volt: resolve failure: BossSpawned: instance 1 did not arrive within 5 seconds
+```
+
+A message named an `AwaitedInstance` that this player's client did not get within the event's `timeout`, so the client dropped the message. The instance may have been destroyed, may sit where players never get it, such as ServerStorage, or may have stayed too far from the player to stream in. Fire the message only for instances the player can get, or raise `timeout` on the event ([Waiting for an instance](#waiting-for-an-instance)).
+
+```
+Picked.item: dictionary full
+```
+
+A fire named a new string of a `@dictionary` type when the schema's dictionary already held 4,096 strings, so it raised and sent nothing. The dictionary never forgets a string, so it fills only when its types take values with no end, such as text players type or names built from numbers. Keep those types without `@dictionary` ([Strings sent as ids](#strings-sent-as-ids)).
+
+```
+Volt: decode failure: Status: no baseline
+```
+
+The client got a `@delta` message that leaves out fields, for an event it has had no whole value of, so it had nothing to fill them from and dropped the message with the rest of its packet. Volt's server always sends a player the whole value first, and again after any message to them is dropped.
+
+```
+Volt: decode failure: Picked: Picked.item: unknown dictionary id
+Volt: decode failure: Volt.dictionary: out of order
+```
+
+The first names a `@dictionary` string by an id the client was never sent. The second means the message that carries the strings could not be taken whole: its strings were not the next ones in order (`out of order`), it was cut short (`truncated`), it held none (`no entries`) or it would take the list past 4,096 (`past 4096 entries`). The client takes none of a message it refuses. Volt's server sends every player each string, in order, before the first packet that names it, so a client module and a server module from the same schema never see either.
+
+```
 Volt: queue failure from Alice: Ping: queue full, oldest dropped
 ```
 
@@ -985,7 +1572,13 @@ The client module has waited 10 seconds for remotes the server has not created, 
 The system cannot find the path specified. (os error 3)
 ```
 
-On Windows, `volt` prints this when the folder an output option points into does not exist. Create the folder and run `volt` again. Other systems word the message differently.
+On Windows, `volt` prints this when the folder an output option points into does not exist. Create the folder and run `volt` again. Other systems word the message differently. Under `--watch` it follows `volt: internal error:`, and the watch goes on, so create the folder and save the schema again.
+
+```
+Game.volt: src/Shared/Network/ServerShard1.luau is no longer generated
+```
+
+`volt --check` found a shard file the schema no longer writes, because the schema shrank or lost its `shardSize`. Run `volt Game.volt` without `--check`, which deletes it, and commit the deletion ([A schema too big for one module](#a-schema-too-big-for-one-module)).
 
 ```
 Unknown type 'Volt.Runtime'
@@ -1031,4 +1624,4 @@ lune run src/Compiler tests/Schemas/Smoke.volt
 rojo build place/place.project.json -o Smoke.rbxl
 ```
 
-Open `Smoke.rbxl`, start a test with "Start Server + 1 Player", and both Output windows print `Volt smoke: pass`.
+Open `Smoke.rbxl`, start a test with "Start Server + 1 Player", and both Output windows print `Volt smoke: pass`. The place turns on StreamingEnabled, so it also proves `AwaitedInstance` against real streaming: a part beside the spawn arrives, a part 5,000 studs away arrives once the server moves it beside the spawn, and a part kept in ServerStorage never does, which the client expects as its one `resolve` failure.

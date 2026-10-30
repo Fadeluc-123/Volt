@@ -3,8 +3,8 @@
     text compiled through every stage before the generator, its events
     rendered as one loadable chunk that is also the emitter's golden, the
     chunk loaded over the calls a writer makes, and an assembled module
-    loaded as a game would, over a transport of the test's and with the
-    promise stand-in for the promise library
+    loaded as a game would, over a transport of the test's, with the
+    promise stand-in for the promise library and its shards by their names
 --]]
 
 --!strict
@@ -26,11 +26,13 @@ local Resolve = require("@volt/Compiler/Resolve")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Source = require("@volt/Compiler/Source")
 local Targets = require("@volt/Compiler/Targets")
+local TargetsTypes = require("@volt/Compiler/Config/Types/Targets")
 local Types = require("@volt/Compiler/Targets/Types")
 
 type Block = Blocks.Block
 type Diagnostics = Diagnostics.Diagnostics
 type Event = Schema.Event
+type Extra = TargetsTypes.Extra
 type Field = Schema.Field
 type File = Schema.File
 type Transport = Volt.Transport
@@ -58,14 +60,14 @@ function Generated.compile(name: string, text: string): (File, number, Diagnosti
 	return file, hash, diagnostics
 end
 
--- The assembled modules of a schema text: the client's, the server's and the types
-function Generated.modules(name: string, text: string): (string, string, string)
+-- The assembled modules of a schema text: the client's, the server's, the types, and the shards of a side that shards
+function Generated.modules(name: string, text: string): (string, string, string, { Extra })
 	local file: File, hash: number, diagnostics: Diagnostics = Generated.compile(name, text)
-	local client: string, server: string, types: string = Targets.modules(file, diagnostics, hash)
+	local client: string, server: string, types: string, extra: { Extra } = Targets.modules(file, diagnostics, hash)
 
 	assert(diagnostics.errors == 0, diagnostics:render())
 
-	return client, server, types
+	return client, server, types, extra
 end
 
 function Generated.events(file: File): { Event }
@@ -261,13 +263,22 @@ end
 
 --[[
     Loads an assembled module as a game would: game answers GetService
-    with a path any runtime path resolves under, and require hands back
+    with a path any runtime path resolves under, and require hands back a
+    shard's text, loaded the same way, for a string the shards map names,
     the promise stand-in for the promise library's path and, for any
     other, a Volt whose start takes the transport given here in place of
-    the remotes. Returns the module, then the runtime it started
+    the remotes. Globals given take the place of those, or of any other,
+    a recording debug among them. Returns the module, then the runtime it
+    started
 --]]
 
-function Generated.module(name: string, text: string, transport: Transport): (any, Volt.Runtime)
+function Generated.module(
+	name: string,
+	text: string,
+	transport: Transport,
+	shards: { [string]: string }?,
+	globals: { [string]: any }?
+): (any, Volt.Runtime)
 	local environment: { [string]: any } = table.clone(Environment)
 	local started: Volt.Runtime
 
@@ -278,6 +289,12 @@ function Generated.module(name: string, text: string, transport: Transport): (an
 	}
 
 	environment.require = function (target: any): any
+		local shard: string? = shards and type(target) == "string" and shards[target] or nil
+
+		if shard then
+			return luau.load(shard, { debugName = target, environment = environment })()
+		end
+
 		if tostring(target):match("%.Promise$") then
 			return Promise
 		end
@@ -288,6 +305,10 @@ function Generated.module(name: string, text: string, transport: Transport): (an
 				return started
 			end,
 		}
+	end
+
+	for global: string, value: any in globals or {} do
+		environment[global] = value
 	end
 
 	local chunk = luau.load(text, { debugName = name, environment = environment })

@@ -115,6 +115,9 @@ describe("Surface", function ()
 					end
 
 					expect(keys(side.module.Ns.Ask)).is(cased({ side.server and "on" or "invoke" }, casing))
+					expect(keys(side.module.Ns.Tell)).is(
+						cased(side.server and { "invoke" } or { "on", "connected" }, casing)
+					)
 				end
 			end)
 
@@ -149,6 +152,7 @@ describe("Surface", function ()
 					expect(table.isfrozen(module)).is(true)
 					expect(table.isfrozen(module.Ns)).is(true)
 					expect(table.isfrozen(module.Ns.Ask)).is(true)
+					expect(table.isfrozen(module.Ns.Tell)).is(true)
 
 					for _, map: string in { "events", "functions", "exports" } do
 						expect(table.isfrozen(module[Types.cased(map, casing)])).is(true)
@@ -173,6 +177,7 @@ describe("Surface", function ()
 
 						expect(events.BothPolling).is(module.BothPolling)
 						expect(functions["Ns.Ask"]).is(module.Ns.Ask)
+						expect(functions["Ns.Tell"]).is(module.Ns.Tell)
 						expect(events.Nope).is(nil)
 						expect((next(exports))).is(nil)
 					end
@@ -226,11 +231,12 @@ describe("Surface", function ()
 			expect(table.concat(failures, " ")).is("rate")
 		end)
 
-		test("on the server refuses a name it does not hear, unknown or send-only", function ()
+		test("on the server refuses a name it does not hear: unknown, send-only, or a function it calls", function ()
 			local harness: Harness = setup(SURFACE)
 
 			expect((pcall(harness.server.rate, "Nope", 1))).is(false)
 			expect((pcall(harness.server.rate, "ServerSingleSync", 1))).is(false)
+			expect((pcall(harness.server.rate, "Ns.Tell", 1))).is(false)
 		end)
 
 		test("on the client returns without effect", function ()

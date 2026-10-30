@@ -80,16 +80,18 @@ describe("Volt", function ()
 		expect(runtime:target(alice)).is(true)
 	end)
 
-	test("points both sends at the scratch states for a broadcast", function ()
+	test("raises for a target of no player, leaving both sends where they pointed", function ()
 		local mock = Volt.mock(task.spawn)
 		local alice = mock:join("Alice")
 		local runtime: Runtime = Volt.start(schema("server"), mock.server)
 
 		runtime:target(alice)
 
-		expect(runtime:target(nil)).is(true)
-		expect(runtime.reliable.current == runtime.reliable.scratch).is(true)
-		expect(runtime.unreliable.current == runtime.unreliable.scratch).is(true)
+		local ok: boolean = pcall(runtime.target, runtime, nil)
+
+		expect(ok).is(false)
+		expect(runtime.reliable.current == runtime.reliable.scratch).is(false)
+		expect(runtime.unreliable.current == runtime.unreliable.scratch).is(false)
 	end)
 
 	test("flushes every flush-th Heartbeat, to the player the bytes were written for", function ()

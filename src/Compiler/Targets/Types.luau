@@ -20,8 +20,13 @@ type Type = Schema.Type
 type TypeDeclaration = Schema.TypeDeclaration
 type Variant = Schema.Variant
 
--- A handle type: the side whose API has entries of its shape, or neither, and its lines with each member name in braces
-type Handle = { side: string?, lines: { string } }
+--[[
+    A handle type: the side whose API has entries of its shape, or
+    neither, its lines with each member name in braces, and whether only
+    a schema that declares a from: Server function has it
+--]]
+
+type Handle = { side: string?, reversed: boolean?, lines: { string } }
 
 local VERSION: string = Contract.version
 local BOT: string = "export type Bot = { Name: string }" -- What a bot is to the types module; a realm module takes Volt's
@@ -74,6 +79,30 @@ local HANDLES: { Handle } = {
 	{ side = "client", lines = { "export type ClientPolling<A...> = { {iter}: () -> () -> (number, A...) }" } },
 	{ side = "client", lines = { "export type ClientFunction<A..., R...> = { {invoke}: (A...) -> (boolean, R...) }" } },
 	{ side = "client", lines = { "export type ClientPromise<A...> = { {invoke}: (A...) -> any }" } },
+	{
+		side = "server",
+		reversed = true,
+		lines = {
+			"export type ServerInvoke<A..., R...> = {",
+			"\t{invoke}: (player: Player | Bot, A...) -> (boolean, R...),",
+			"}",
+		},
+	},
+	{
+		side = "server",
+		reversed = true,
+		lines = { "export type ServerPromise<A...> = { {invoke}: (player: Player | Bot, A...) -> any }" },
+	},
+	{
+		side = "client",
+		reversed = true,
+		lines = {
+			"export type ClientHandler<A..., R...> = {",
+			"\t{on}: (handler: (A...) -> R...) -> () -> (),",
+			"\t{connected}: () -> boolean,",
+			"}",
+		},
+	},
 	{
 		lines = {
 			"export type Exported<T> = {",
@@ -197,17 +226,32 @@ function Types.named(declarations: { Declaration }, lines: { string }): { string
 	return lines
 end
 
+-- Whether a declaration list, namespaces walked, declares a function the server calls
+function Types.reversed(declarations: { Declaration }): boolean
+	for _, declaration: Declaration in declarations do
+		if declaration.kind == "function" and declaration.from == "Server" then
+			return true
+		elseif declaration.kind == "namespace" and Types.reversed(declaration.declarations) then
+			return true
+		end
+	end
+	return false
+end
+
 --[[
     The handle types of one side, or of both when none is given, each
     with its members in the schema's casing, one text each; exported, or
-    local to a module whose schema keeps them in a types module
+    local to a module whose schema keeps them in a types module. Those of
+    a from: Server function only when the schema declares one
 --]]
 
-function Types.handles(side: string?, casing: string, exported: boolean): { string }
+function Types.handles(side: string?, casing: string, exported: boolean, reversed: boolean): { string }
 	local texts: { string } = {}
 
 	for _, handle: Handle in HANDLES do
-		if side == nil or handle.side == nil or handle.side == side then
+		local sided: boolean = side == nil or handle.side == nil or handle.side == side
+
+		if sided and (reversed or not handle.reversed) then
 			local text: string = table.concat(handle.lines, "\n")
 			local cased: string = text:gsub("{(%a+)}", function (name: string)
 				return Types.cased(name, casing)
@@ -245,7 +289,7 @@ function Types.module(file: File, name: string): string
 
 	table.insert(parts, `{BOT}\n`)
 
-	for _, handle: string in Types.handles(nil, casing, true) do
+	for _, handle: string in Types.handles(nil, casing, true, Types.reversed(file.declarations)) do
 		table.insert(parts, `{handle}\n`)
 	end
 

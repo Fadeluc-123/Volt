@@ -33,15 +33,16 @@ local refusal = Expressions.refusal
 --[[
     Whether a type's walk puts every byte among the fixed bytes of the
     block walking it, which is what lets a run of them share one region:
-    scalars, exact strings, Roblox types, unit enums, literals, which have
-    none, and structs of those. A prefixed payload, a child block, a run
-    of its own and a shared named type all put bytes in the tail instead
+    scalars, exact strings, @dictionary strings, which are their id,
+    Roblox types, unit enums, literals, which have none, and structs of
+    those. A prefixed payload, a child block, a run of its own and a
+    shared named type all put bytes in the tail instead
 --]]
 
 local function inline(node: Type): boolean
 	if node.kind == "reference" then
 		local target: TypeDeclaration = node.target :: TypeDeclaration
-		return not Sizes.shared(target) and inline(target.type)
+		return Sizes.dictionary(target) or (not Sizes.shared(target) and inline(target.type))
 	elseif node.kind == "literal" then
 		return true
 	elseif node.kind == "primitive" then

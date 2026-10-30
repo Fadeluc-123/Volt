@@ -1,7 +1,8 @@
 --[[
     Proves the volt command compiles one file, or a folder and the further
-    files it reuses, to the modules the options file asks for, names each
-    module that is missing or out of date on --check, prints the canonical
+    files it reuses, to the modules and shards the options file asks for,
+    names each file missing, out of date or no longer generated on --check,
+    removes shards past a side's count on a write, prints the canonical
     form on --ast, drops the summary on --quiet and exits 2 on bad arguments
 --]]
 
@@ -10,30 +11,19 @@ local fs = require("@lune/fs")
 local process = require("@lune/process")
 
 local Suite = require("./Suite")
+local scratch = require("./Scratch")
 
 local describe = Suite.describe
 local test = Suite.test
 local expect = Suite.expect
 
 local EXAMPLE: string = "tests/Schemas/Example.volt"
-local EXPORTS: string = "tests/Schemas/Exports.volt" -- The one test schema whose outputs sit beside it
+local EXPORTS: string = "tests/Schemas/Exports.volt" -- A test schema whose outputs sit beside it
+local SHARDED: string = "tests/Schemas/Sharded.volt" -- One whose outputs sit beside it too, three shards a side
 local SPLIT: string = "tests/Schemas/Split" -- An arena's schema folder and the game's files it reuses
-local SCRATCH: string = `{process.env.TEMP or process.env.TMPDIR or "/tmp"}/VoltCompilerTest`
 
 local function volt(...: string): process.ExecResult
 	return process.exec("lune", { "run", "src/Compiler", ... })
-end
-
--- A fresh folder for one test, emptied of whatever an earlier run left behind
-local function scratch(name: string): string
-	local directory: string = `{SCRATCH}/{name}`
-
-	if fs.isDir(directory) then
-		fs.removeDir(directory)
-	end
-
-	fs.writeDir(directory)
-	return directory
 end
 
 local function crlf(path: string)
@@ -106,6 +96,75 @@ describe("Compiler", function ()
 		expect(fs.readFile(`{directory}/Client.luau`):find("The client module Volt", 1, true) ~= nil).is(true)
 		expect(fs.readFile(`{directory}/Server.luau`):find("The server module Volt", 1, true) ~= nil).is(true)
 		expect(fs.readFile(`{directory}/Types.luau`):find("The types module Volt", 1, true) ~= nil).is(true)
+
+		fs.removeDir(directory)
+	end)
+
+	test("writes and checks every shard and removes those past a side's count", function ()
+		local directory: string = scratch("Sharded")
+		local schema: string = `{directory}/Sharded.volt`
+		local text: string = fs.readFile(SHARDED)
+
+		fs.writeFile(schema, text)
+
+		local written: process.ExecResult = volt(schema, "--quiet")
+
+		expect(written.code).is(0)
+		expect(written.stderr).is("")
+
+		for _, side: string in { "Client", "Server" } do
+			for index: number = 1, 3 do
+				expect(fs.isFile(`{directory}/{side}Shard{index}.luau`)).is(true)
+			end
+
+			expect(fs.isFile(`{directory}/{side}Shard4.luau`)).is(false)
+		end
+
+		local checked: process.ExecResult = volt(schema, "--check", "--quiet")
+
+		expect(checked.code).is(0)
+		expect(checked.stderr).is("")
+
+		-- A removed shard is missing, and of two left past the server's count only the first is named
+		fs.removeFile(`{directory}/ClientShard2.luau`)
+		fs.writeFile(`{directory}/ServerShard4.luau`, "")
+		fs.writeFile(`{directory}/ServerShard5.luau`, "")
+
+		local stale: process.ExecResult = volt(schema, "--check")
+		local named: string = table.concat({
+			`{schema}: ClientShard2.luau is missing`,
+			`{schema}: ServerShard4.luau is no longer generated`,
+			"",
+		}, "\n")
+
+		expect(stale.code).is(1)
+		expect(stale.stdout).is("")
+		expect(stale.stderr).is(named)
+		expect(fs.isFile(`{directory}/ServerShard4.luau`)).is(true)
+
+		-- A write puts the missing shard back and removes every one past the count
+		expect(volt(schema, "--quiet").code).is(0)
+		expect(fs.isFile(`{directory}/ClientShard2.luau`)).is(true)
+		expect(fs.isFile(`{directory}/ServerShard4.luau`)).is(false)
+		expect(fs.isFile(`{directory}/ServerShard5.luau`)).is(false)
+
+		-- Four entries a shard leaves two a side, then without the option none, each time with nothing left behind
+		local shrunk: string = (text:gsub("option shardSize[^\n]*\n", "option shardSize = 4\n"))
+		local plain: string = (text:gsub("option shardSize[^\n]*\n", ""))
+		local cases: { { text: string, count: number } } = { { text = shrunk, count = 2 }, { text = plain, count = 0 } }
+
+		for _, case: { text: string, count: number } in cases do
+			fs.writeFile(schema, case.text)
+			expect(volt(schema, "--quiet").code).is(0)
+
+			for _, side: string in { "Client", "Server" } do
+				for index: number = 1, 3 do
+					expect(fs.isFile(`{directory}/{side}Shard{index}.luau`)).is(index <= case.count)
+				end
+			end
+
+			expect(volt(schema, "--check", "--quiet").code).is(0)
+		end
 
 		fs.removeDir(directory)
 	end)
