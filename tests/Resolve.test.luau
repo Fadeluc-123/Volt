@@ -10,6 +10,7 @@ local rendered = require("./Rendered")
 local Diagnostics = require("@volt/Compiler/Diagnostics")
 local Lexer = require("@volt/Compiler/Lexer")
 local Parser = require("@volt/Compiler/Parser")
+local Print = require("@volt/Compiler/Analyse/Print")
 local Resolve = require("@volt/Compiler/Resolve")
 local Schema = require("@volt/Compiler/Config/Types/Schema")
 local Source = require("@volt/Compiler/Source")
@@ -137,6 +138,14 @@ describe("Resolve", function ()
 		expect(on.options.stamp).is(true)
 	end)
 
+	test("flushBytes prints after flush when a schema sets it, and not otherwise", function ()
+		local set: Schema.File = resolve(schema("option flush = 4\noption flushBytes = 8"))
+		local unset: Schema.File = resolve(schema("option flush = 4"))
+
+		expect(Print.file(set):find("option flush = 4\noption flushBytes = 8\n", 1, true) ~= nil).is(true)
+		expect(Print.file(unset):find("flushBytes", 1, true)).is(nil)
+	end)
+
 	describe("diagnostics", function ()
 		test("V3001 reports an unknown name and a name that is not a type", function ()
 			local text: string = schema(
@@ -161,22 +170,12 @@ describe("Resolve", function ()
 			expect((file.declarations[1] :: Schema.TypeDeclaration).references).is(1)
 		end)
 
-		test("V3003 reports a recursive type once per cycle, at the reference that closes it", function ()
-			local text: string = schema("type A = struct { next: A? }\ntype B = C[]\ntype C = struct { b: B }")
-			local first: string = rendered(
-				text,
-				"A",
-				`error V3003: "A" contains itself; recursive types are not supported in this version`,
-				2
-			)
-			local second: string = rendered(
-				text,
-				"B",
-				`error V3003: "B" contains itself; recursive types are not supported in this version`,
-				2
-			)
+		test("V3003 reports a recursive type no value of which ends, at its name, once Expand has run", function ()
+			local text: string = schema("struct Chain { next: Chain }\ntype Ends = struct { next: Ends? }")
+			local message: string =
+				`error V3003: "Chain" has no finite value: every way through it leads back to it; an optional, a collection that may be empty or another variant on the way ends it`
 
-			expect(report(text)).is(`{first}\n\n{second}`)
+			expect(report(text)).is(rendered(text, "Chain", message))
 		end)
 
 		test(
@@ -254,6 +253,24 @@ describe("Resolve", function ()
 			}
 
 			expect(report(text)).is(table.concat(expected, "\n\n"))
+		end)
+
+		test("V3005 reports a flushBytes of zero", function ()
+			local text: string = schema("option flush = 4\noption flushBytes = 0")
+			local message: string = "error V3005: flushBytes must be a positive integer, got 0"
+
+			expect(report(text)).is(rendered(text, "flushBytes", message))
+		end)
+
+		test("V3013 warns about flushBytes when every frame flushes, and about nothing when some do not", function ()
+			local text: string = schema("option flushBytes = 8")
+			local message: string = "warning V3013: flushBytes means nothing when every frame flushes"
+			local diagnostics: Diagnostics.Diagnostics = select(2, resolve(text))
+
+			expect(diagnostics:render()).is(rendered(text, "flushBytes", message))
+			expect(diagnostics.errors).is(0)
+			expect(report(schema("option flush = 4\noption flushBytes = 8"))).is("")
+			expect(report(schema("option manualReplication = true\noption flushBytes = 8"))).is("")
 		end)
 
 		test("V3006 warns about a rate on a Server event", function ()

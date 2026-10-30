@@ -2,8 +2,8 @@
     The wire rules as arithmetic: the bytes any type takes at its least
     and most, the flag bits it adds to the block it sits in and the side
     array slots it can fill, plus the questions the emitter asks of the
-    same rules, such as what a length's prefix is, how a discriminant is
-    carried, and which runtime classes a union member can be
+    same rules, such as what a length's prefix is and how a discriminant
+    is carried
 --]]
 
 --!strict
@@ -12,6 +12,7 @@ local Sizes = {}
 local Primitives = require("../Config/Primitives")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
+local Unions = require("./Unions")
 local Wire = require("../Config/Wire")
 
 type Field = Schema.Field
@@ -24,38 +25,22 @@ type Variant = Schema.Variant
 
 export type Size = { min: number, max: number, bits: number, slots: number }
 
--- Named types being sized right now, so a reference back into one stops
-local visiting: { [TypeDeclaration]: boolean } = {}
-
 -- The bytes a Roblox type's component takes when the type names none
 local COMPONENT_BYTES: number = Primitives[Wire.component].bytes :: number
 local DICTIONARY_BYTES: number = Wire.dictionaryBytes
+
+-- What each named type's contents take per level, so a tree with two references to itself costs one walk per level
+local Contents: { [TypeDeclaration]: { [number]: Size } } = setmetatable({}, { __mode = "k" }) :: any
+
+Sizes.resolved = Unions.resolved
 
 function Sizes.fixed(bytes: number): Size
 	return { min = bytes, max = bytes, bits = 0, slots = 0 }
 end
 
---[[
-    Follows references to the type they name, so a rule about what a value
-    is at runtime sees through named types
---]]
-
-function Sizes.resolved(node: Type): Type
-	while node.kind == "reference" and node.target do
-		node = node.target.type
-	end
-	return node
-end
-
 function Sizes.isPrimitive(node: Type, name: string): boolean
 	local actual: Type = Sizes.resolved(node)
 	return actual.kind == "primitive" and actual.name == name
-end
-
--- Two unit enums in one union flatten their variants into one discriminant, so they never clash
-function Sizes.isUnitEnum(node: Type): boolean
-	local actual: Type = Sizes.resolved(node)
-	return actual.kind == "enum" and actual.tag == nil
 end
 
 -- Whether a named type is @dictionary, so every value of it travels as its id
@@ -65,29 +50,12 @@ end
 
 --[[
     Whether a named type is generated as one function pair that every
-    reference calls, rather than inlined at each: when it is exported or
-    referenced more than once, and never when it is @dictionary
+    reference calls, rather than inlined at each: when it is exported,
+    referenced more than once or recursive, and never when it is @dictionary
 --]]
 
 function Sizes.shared(target: TypeDeclaration): boolean
-	return not Sizes.dictionary(target) and (target.export or (target.references or 0) > 1)
-end
-
---[[
-    The variants of a union whose members are all unit enums, which
-    flatten into one discriminant, or nil when any member is not one
---]]
-
-function Sizes.flattened(members: { Type }): { Variant }?
-	local variants: { Variant } = {}
-	for _, member: Type in members do
-		local actual: Type = Sizes.resolved(member)
-		if actual.kind ~= "enum" or actual.tag then
-			return nil
-		end
-		table.move(actual.variants, 1, #actual.variants, #variants + 1, variants)
-	end
-	return variants
+	return not Sizes.dictionary(target) and (target.export or target.depth ~= nil or (target.references or 0) > 1)
 end
 
 --[[
@@ -147,10 +115,10 @@ function Sizes.block(size: Size): (number, number)
 	return flags + size.min, flags + size.max
 end
 
-local function fields(list: { Field }): Size
+local function fields(list: { Field }, level: number?): Size
 	local total: Size = Sizes.fixed(0)
 	for _, field: Field in list do
-		local size: Size = Sizes.size(field.type)
+		local size: Size = Sizes.size(field.type, level)
 
 		total.min += size.min
 		total.max += size.max
@@ -240,13 +208,29 @@ local function roblox(node: Roblox): Size
 	return Sizes.fixed(row.bytes :: number)
 end
 
+-- What a named type's contents take when they sit at a level, walked once per type and level
+local function contents(target: TypeDeclaration, level: number): Size
+	local levels: { [number]: Size } = Contents[target] or {}
+	local size: Size = levels[level] or Sizes.size(target.type, level)
+
+	Contents[target] = levels
+	levels[level] = size
+
+	return size
+end
+
 --[[
     The bytes a type takes at its least and most, the flag bits it adds to
     the block it sits in, and the most side-array slots it can fill, by the
-    wire rules. Total over any tree the parser produces, resolved or not
+    wire rules, with a recursive value at the level given, 1 when no
+    recursive type holds it. A recursive type's contents sit one level
+    deeper than it does, and past its own bound it adds nothing, since no
+    value can hold it there. A shared type that is not recursive starts its
+    contents over, since its pair calls a recursive pair at level 1. Total
+    over any tree the parser produces, resolved or not
 --]]
 
-function Sizes.size(node: Type | Pack): Size
+function Sizes.size(node: Type | Pack, level: number?): Size
 	if node.kind == "primitive" then
 		if node.name == "boolean" then
 			return { min = 0, max = 0, bits = 1, slots = 0 }
@@ -261,30 +245,30 @@ function Sizes.size(node: Type | Pack): Size
 	elseif node.kind == "roblox" then
 		return roblox(node)
 	elseif node.kind == "struct" then
-		return fields(node.fields)
+		return fields(node.fields, level)
 	elseif node.kind == "pack" then
-		return fields(node.parameters)
+		return fields(node.parameters, level)
 	elseif node.kind == "enum" then
 		local bodies: { Size } = {}
 		for _, variant: Variant in node.variants do
-			table.insert(bodies, fields(variant.fields or {}))
+			table.insert(bodies, fields(variant.fields or {}, level))
 		end
 
 		return choice(bodies)
 	elseif node.kind == "union" then
-		local variants: { Variant }? = Sizes.flattened(node.members)
+		local variants: { Variant }? = Unions.flattened(node.members)
 		if variants then
 			return choice(table.create(#variants, Sizes.fixed(0)))
 		end
 
 		local bodies: { Size } = {}
 		for _, member: Type in node.members do
-			table.insert(bodies, Sizes.size(member))
+			table.insert(bodies, Sizes.size(member, level))
 		end
 
 		return choice(bodies)
 	elseif node.kind == "optional" then
-		local inner: Size = Sizes.size(node.inner)
+		local inner: Size = Sizes.size(node.inner, level)
 
 		-- unknown carries its own presence bit, so nil is already a value it can hold
 		if Sizes.isPrimitive(node.inner, "unknown") then
@@ -295,7 +279,7 @@ function Sizes.size(node: Type | Pack): Size
 		return { min = 0, max = high, bits = 1, slots = inner.slots }
 	elseif node.kind == "array" then
 		if not Sizes.isPrimitive(node.element, "boolean") then
-			return repeated(node.range, Sizes.size(node.element))
+			return repeated(node.range, Sizes.size(node.element, level))
 		end
 
 		-- Booleans pack into a bitset, and an exact count of them into the block's own flags
@@ -311,28 +295,29 @@ function Sizes.size(node: Type | Pack): Size
 			fields({
 				{ name = "", type = node.key, start = 0, finish = 0 },
 				{ name = "", type = node.value, start = 0, finish = 0 },
-			})
+			}, level)
 		)
 	elseif node.kind == "set" then
-		return repeated(node.range, Sizes.size(node.element))
+		return repeated(node.range, Sizes.size(node.element, level))
 	elseif node.kind == "literal" then
 		return Sizes.fixed(0) -- The reader yields the value itself, so nothing is carried
 	end
 
 	local target: TypeDeclaration? = node.target
-	if not target or visiting[target] then
+	local at: number = level or 1
+
+	if not target or (target.depth and at > target.depth) then
 		return Sizes.fixed(0)
 	elseif Sizes.dictionary(target) then
 		return Sizes.fixed(DICTIONARY_BYTES)
 	end
 
-	visiting[target] = true
-
-	local size: Size = Sizes.size(target.type)
-	visiting[target] = nil
+	local shared: boolean = Sizes.shared(target)
+	local inner: number = target.depth and at + 1 or shared and 1 or at
+	local size: Size = contents(target, inner)
 
 	-- A shared named type is a block of its own, so its flag bits stay inside its function pair
-	if Sizes.shared(target) then
+	if shared then
 		local low: number, high: number = Sizes.block(size)
 		return { min = low, max = high, bits = 0, slots = size.slots }
 	end
@@ -357,43 +342,6 @@ function Sizes.delta(node: Type | Pack): Size
 	end
 
 	return size
-end
-
---[[
-    The runtime classes a union member can be, through references and
-    nested unions, which is what the writer tells members apart by
---]]
-
-function Sizes.classes(node: Type): { string }
-	local actual: Type = Sizes.resolved(node)
-
-	if actual.kind == "union" then
-		local list: { string } = {}
-		for _, member: Type in actual.members do
-			for _, class: string in Sizes.classes(member) do
-				table.insert(list, class)
-			end
-		end
-
-		return list
-	elseif actual.kind == "primitive" then
-		local name: string = actual.name
-		local named: boolean = name == "boolean" or name == "string" or name == "buffer" or name == "unknown"
-
-		return { named and name or "number" }
-	elseif actual.kind == "roblox" then
-		return { Roblox[actual.name].class }
-	elseif actual.kind == "enum" then
-		return { actual.tag and "table" or "string" }
-	elseif actual.kind == "optional" then
-		return { "nil" }
-	elseif actual.kind == "literal" then
-		return { typeof(actual.value) }
-	elseif actual.kind == "reference" then
-		return {} -- Unresolved, and already reported
-	end
-
-	return { "table" }
 end
 
 return Sizes

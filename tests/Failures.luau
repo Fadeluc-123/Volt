@@ -27,6 +27,7 @@ export type Harness = {
 	player: any,
 	transport: Transport, -- The player's client side, which a raw packet is sent through
 	server: any,
+	runtime: Volt.Runtime, -- What the server module started, which a budget is set on
 	client: any,
 	names: { [string]: boolean }, -- Every registry name either side has
 	failures: { server: { Report }, client: { Report } },
@@ -34,6 +35,7 @@ export type Harness = {
 
 -- Unchecked, so a value only a reader refuses can be sent; the reply path and the readers are checked in every build
 local SCHEMAS: { string } = {
+	"Broadcasts",
 	"Events",
 	"Functions",
 	"Exports",
@@ -49,6 +51,7 @@ local SCHEMAS: { string } = {
 	"Volumes",
 	"Deltas",
 	"Dictionary",
+	"Recursive",
 }
 local CAP: number = 16 -- A player's frame in the capped Prompts, which a Confirm call with a title of 12 bytes crosses
 
@@ -99,7 +102,7 @@ end
 function Failures.setup(name: string): Harness
 	local mock: Mock = Volt.mock(task.spawn)
 	local player: any, transport: Transport = mock:join("Alice")
-	local server: any = Generated.module("Server", MODULES[name].server, mock.server)
+	local server: any, runtime: Volt.Runtime = Generated.module("Server", MODULES[name].server, mock.server)
 	local client: any = Generated.module("Client", MODULES[name].client, transport)
 	local names: { [string]: boolean } = {}
 
@@ -116,6 +119,7 @@ function Failures.setup(name: string): Harness
 		player = player,
 		transport = transport,
 		server = server,
+		runtime = runtime,
 		client = client,
 		names = names,
 		failures = { server = recorded(server), client = recorded(client) },

@@ -40,6 +40,7 @@ local SCHEMAS: { string } = {
 	"Tables",
 	"Text",
 	"Literals",
+	"Generics",
 }
 
 local Families = {

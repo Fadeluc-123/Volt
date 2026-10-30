@@ -5,10 +5,13 @@
 --]]
 
 --!strict
-type Span = { start: number, finish: number }
+export type Span = { start: number, finish: number }
 
 export type Range = { min: number?, max: number?, start: number, finish: number }
-export type Field = { name: string, type: Type, start: number, finish: number }
+export type Parameter = { name: string, start: number, finish: number } -- A type parameter a generic declares
+
+-- A spread entry has no name and a reference as its type, and Expand replaces it with the fields it names
+export type Field = { name: string, type: Type, spread: boolean?, start: number, finish: number }
 export type Variant = { name: string, fields: { Field }?, start: number, finish: number }
 export type Pack = { kind: "pack", parameters: { Field }, start: number, finish: number }
 export type Roblox = {
@@ -21,7 +24,12 @@ export type Roblox = {
 	finish: number,
 }
 
--- A string primitive carries utf8 only when written string.utf8, and a literal holds the one value it allows
+--[[
+    A string primitive carries utf8 only when written string.utf8, a literal
+    holds the one value it allows, and a reference to a type parameter holds
+    the parameter's index in place of a target
+--]]
+
 export type Type =
 	{ kind: "primitive", name: string, range: Range?, utf8: boolean?, start: number, finish: number }
 	| Roblox
@@ -32,17 +40,34 @@ export type Type =
 	| { kind: "array", element: Type, range: Range?, start: number, finish: number }
 	| { kind: "optional", inner: Type, start: number, finish: number }
 	| { kind: "union", members: { Type }, start: number, finish: number }
-	| { kind: "reference", name: string, target: TypeDeclaration?, start: number, finish: number }
+	| {
+		kind: "reference",
+		name: string,
+		target: TypeDeclaration?,
+		arguments: { Type }?,
+		parameter: number?,
+		start: number,
+		finish: number,
+	}
 	| { kind: "literal", value: string | number | boolean, start: number, finish: number }
+
+-- Keyed by the attribute's name without its @: an argument's number, or true for one that takes none
+export type Attributes = { [string]: boolean | number }
 
 export type TypeDeclaration = {
 	kind: "type",
 	name: string,
 	export: boolean,
 	type: Type,
-	attributes: { [string]: boolean }?, -- Keyed by the attribute's name without its @, absent when there are none
+	parameters: { Parameter }?, -- Absent when the declaration is no generic
+	attributes: Attributes?, -- Absent when there are none
+	spans: { [string]: Span }?, -- Where each attribute was written
 	path: string?,
 	references: number?,
+	depth: number?, -- The deepest level a value may sit at, set only on a recursive type
+	generic: TypeDeclaration?, -- The generic an instantiation is made from
+	arguments: { Type }?, -- What an instantiation's parameters stand for
+	label: string?, -- An instantiation's name as a Luau identifier
 	start: number,
 	finish: number,
 }
@@ -58,7 +83,7 @@ export type Event = {
 	rate: (number | string)?,
 	timeout: number?, -- Seconds an AwaitedInstance waits on the client; unset, the file's
 	channel: string?, -- The channel's name as written, then its full path once resolved
-	attributes: { [string]: boolean }?, -- As a type declaration's are
+	attributes: Attributes?, -- As a type declaration's are
 	spans: { [string]: Span },
 	path: string?,
 	toServer: number?,
@@ -109,6 +134,7 @@ export type Options = {
 	writeValidation: boolean?,
 	manualReplication: boolean?,
 	flush: number?,
+	flushBytes: number?,
 	maxPacket: number?,
 	maxPacketsPerSecond: number?,
 	unreliableBudget: number?,
@@ -125,6 +151,7 @@ export type Options = {
 	spans: { [string]: Span },
 }
 
-export type File = { options: Options, declarations: { Declaration } }
+-- Instantiations are kept in the order references first name them, and Expand fills the list
+export type File = { options: Options, declarations: { Declaration }, instantiations: { TypeDeclaration }? }
 
 return {}

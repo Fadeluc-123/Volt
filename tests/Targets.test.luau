@@ -383,4 +383,13 @@ describe("Targets", function ()
 			expect(heard).is(4)
 		end)
 	end)
+
+	test("the schema table holds flushBytes when the schema sets it and not otherwise", function ()
+		local set: string = `option flush = 4\noption flushBytes = 8\n{MODULES.Events.schema}`
+		local client: string, server: string = Generated.modules("Events", set)
+
+		expect(client:find("\t\tflushBytes = 8,\n", 1, true) ~= nil).is(true)
+		expect(server:find("\t\tflushBytes = 8,\n", 1, true) ~= nil).is(true)
+		expect(MODULES.Events.server:find("flushBytes", 1, true)).is(nil)
+	end)
 end)

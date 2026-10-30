@@ -174,7 +174,7 @@ function Dispatch.run(frames: Frames): string
 		"| Scenario | Run | ms per 1000 calls | FPS median |",
 		"|---|---|---|---|",
 	}
-	
+
 	local gates: { string } = {
 		`\nPooled against spawned, each the mean of its {RUNS} runs, beside the gate it is held to.\n`,
 		"| Gate | Scenario | Spawned ms | Pooled ms | Pooled / spawned | Spawned - pooled ms | Needs | Holds |",

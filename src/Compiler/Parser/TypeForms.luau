@@ -177,6 +177,7 @@ function TypeForms.atom(self: Parser): Type
 	return {
 		kind = "reference",
 		name = table.concat(path, "."),
+		arguments = self:arguments(),
 		start = token.start,
 		finish = self:previous().finish,
 	}
@@ -292,7 +293,8 @@ function TypeForms.fields(self: Parser, open: string, close: string): { Field }
 	self:expect("punctuation", open)
 	self:list(close, function ()
 		if self:at("..") then
-			self:fail("V2008", "struct spread is not supported in this version", self:peek())
+			table.insert(fields, self:spread(open == "("))
+			return
 		end
 
 		local name: Token = self:name()

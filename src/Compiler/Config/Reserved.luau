@@ -49,6 +49,7 @@ local Reserved = {
 		"cursor",
 		"debug",
 		"deliver",
+		"depth",
 		"dictionaryEntries",
 		"enumItem",
 		"error",
@@ -89,6 +90,7 @@ local Reserved = {
 
 	-- In camel casing; the schema's casing is applied before a name is checked
 	api = {
+		"budget",
 		"events",
 		"exports",
 		"flush",
@@ -106,9 +108,14 @@ local Reserved = {
 		"version",
 	} :: { string },
 
-	-- The types every generated module declares or names, the player and the Roblox classes its annotations spell
-	-- among them, which a top-level named type would collide with or shadow
+	-- The types every generated module declares or names, Luau's own, the player and the Roblox classes its annotations
+	-- spell among them, which a top-level named type or a type parameter would collide with or shadow
 	types = {
+		"any",
+		"boolean",
+		"buffer",
+		"number",
+		"string",
 		"Bot",
 		"BrickColor",
 		"CFrame",

@@ -1,27 +1,32 @@
 --[[
     Binds every name in a parsed schema to its declaration through the
-    namespace rules, fills the option and message defaults, and reports
-    unknown and duplicate names, recursive types, missing options and
-    numbers that are not positive, so later stages walk a tree in which
-    every lookup succeeds
+    namespace rules, a generic's parameters first inside its body, fills
+    the option and message defaults, and reports unknown and duplicate
+    names, wrong argument counts, missing options and numbers that are not
+    positive, then runs Expand, so later stages walk a tree in which every
+    lookup succeeds
 --]]
 
 --!strict
 local Resolve = {}
 Resolve.__index = Resolve
 
+local Attributes = require("./Config/Attributes")
 local Diagnostics = require("./Diagnostics")
+local Expand = require("./Expand")
 local Options = require("./Config/Options")
 local Parser = require("./Parser")
 local Schema = require("./Config/Types/Schema")
 local Source = require("./Source")
 
+type Attribute = Attributes.Attribute
 type Declaration = Schema.Declaration
 type Diagnostics = Diagnostics.Diagnostics
 type Event = Schema.Event
 type File = Schema.File
 type Options = Schema.Options
 type Pack = Schema.Pack
+type Parameter = Schema.Parameter
 type Source = Source.Source
 type Span = Diagnostics.Span
 type Spec = Options.Spec
@@ -40,7 +45,6 @@ local KINDS: { [string]: string } = {
 type Fields = {
 	_diagnostics: Diagnostics,
 	_names: { [string]: Declaration },
-	_state: { [TypeDeclaration]: string },
 	_promise: Span?,
 }
 
@@ -59,22 +63,20 @@ end
 
 --[[
     Resolves a parsed file in place: options and message keys take their
-    defaults, every declaration gets its full path, every reference its
-    target and every named type its reference count
+    defaults, every declaration gets its full path and every reference its
+    target, then Expand turns spreads and generics into plain named types
 --]]
 
 function Resolve.file(file: File, diagnostics: Diagnostics)
 	local self: Self = setmetatable({
 		_diagnostics = diagnostics,
 		_names = {} :: { [string]: Declaration },
-		_state = {} :: { [TypeDeclaration]: string }, -- Cycle search: visiting or done
 		_promise = nil :: Span?, -- What first asked for a promise yield
 	}, Resolve)
 
 	self:options(file.options, diagnostics.source)
 	self:declare(file.declarations, "")
 	self:bind(file.declarations, "", file.options)
-	self:cycles(file.declarations)
 
 	if self._promise and file.options.promise == nil then
 		self._diagnostics:error(
@@ -83,6 +85,8 @@ function Resolve.file(file: File, diagnostics: Diagnostics)
 			self._promise
 		)
 	end
+
+	Expand.file(file, diagnostics)
 end
 
 --[[
@@ -107,6 +111,11 @@ function Resolve.options(self: Self, options: Options, source: Source)
 	end
 
 	self:positive(keyed, Options.file)
+
+	-- A threshold has nothing to add to a cadence that sends every frame
+	if options.flushBytes and options.flush == 1 and not options.manualReplication then
+		self._diagnostics:warn("V3013", "flushBytes means nothing when every frame flushes", options.spans.flushBytes)
+	end
 
 	options.scope = options.scope or path:match("([^/\\]+)%.volt$") or path
 	options.stamp = options.stamp or nil -- Off is the schema with no stamp, so it prints and hashes as one
@@ -136,6 +145,27 @@ function Resolve.positive(self: Self, target: { [string]: any }, shape: { Spec }
 				`{spec.key} must be a positive {wanted}, got {value}`,
 				target.spans[spec.key]
 			)
+		end
+	end
+end
+
+--[[
+    Reports an attribute's argument that is not a positive whole number or
+    is past the most its row allows
+--]]
+
+function Resolve.attributes(self: Self, declaration: TypeDeclaration)
+	for _, row: Attribute in Attributes do
+		local value: any = declaration.attributes and declaration.attributes[row.name]
+
+		if row.argument and value then
+			local span: Span = (declaration.spans :: { [string]: Span })[row.name]
+
+			if value <= 0 or value % 1 ~= 0 then
+				self._diagnostics:error("V3005", `@{row.name} must be a positive integer, got {value}`, span)
+			elseif row.most and value > row.most then
+				self._diagnostics:error("V3005", `@{row.name} must be at most {row.most}, got {value}`, span)
+			end
 		end
 	end
 end
@@ -173,7 +203,8 @@ end
 function Resolve.bind(self: Self, declarations: { Declaration }, prefix: string, options: Options)
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
-			self:type(declaration.type, prefix)
+			self:attributes(declaration)
+			self:type(declaration.type, prefix, declaration.parameters)
 		elseif declaration.kind == "namespace" then
 			self:bind(declaration.declarations, declaration.path :: string, options)
 		elseif declaration.kind == "event" then
@@ -250,28 +281,49 @@ function Resolve.channel(self: Self, event: Event, prefix: string)
 end
 
 --[[
-    Binds every reference inside a type to the named type it reaches from
-    the namespace it is written in, and counts the reference on its target
+    Binds every reference inside a type where it is written, its arguments
+    included: to a parameter of the generic whose body it sits in, by that
+    parameter's index, or to the named type it reaches from its namespace,
+    when it passes as many arguments as that type takes parameters
 --]]
 
-function Resolve.type(self: Self, node: Type | Pack, prefix: string)
-	if node.kind == "reference" then
-		local found: Declaration? = self:lookup(prefix, node.name)
+function Resolve.type(self: Self, node: Type | Pack, prefix: string, parameters: { Parameter }?)
+	for _, child: Type in Parser.children(node) do
+		self:type(child, prefix, parameters)
+	end
 
-		if not found then
-			self._diagnostics:error("V3001", `unknown type "{node.name}"`, node)
-		elseif found.kind ~= "type" then
-			self._diagnostics:error("V3001", `"{node.name}" is {KINDS[found.kind]}, not a type`, node)
-		else
-			node.target = found
-			found.references = (found.references :: number) + 1
-		end
-
+	if node.kind ~= "reference" then
 		return
 	end
 
-	for _, child: Type in Parser.children(node) do
-		self:type(child, prefix)
+	for index: number, parameter: Parameter in parameters or {} do
+		if parameter.name == node.name then
+			if node.arguments then
+				self._diagnostics:error("V3007", `type parameter "{node.name}" takes no type arguments`, node)
+			end
+
+			node.parameter = index
+			return
+		end
+	end
+
+	local found: Declaration? = self:lookup(prefix, node.name)
+
+	if not found then
+		self._diagnostics:error("V3001", `unknown type "{node.name}"`, node)
+	elseif found.kind ~= "type" then
+		self._diagnostics:error("V3001", `"{node.name}" is {KINDS[found.kind]}, not a type`, node)
+	else
+		local takes: number = found.parameters and #found.parameters or 0
+		local given: number = node.arguments and #node.arguments or 0
+
+		if takes ~= given then
+			local wanted: string = takes == 0 and "no type arguments"
+				or `{takes} type argument{takes == 1 and "" or "s"}`
+			self._diagnostics:error("V3007", `"{node.name}" takes {wanted}, got {given}`, node)
+		else
+			node.target = found
+		end
 	end
 end
 
@@ -292,46 +344,6 @@ function Resolve.lookup(self: Self, prefix: string, name: string): Declaration?
 		end
 
 		scope = scope:match("^(.*)%.[^.]*$") or ""
-	end
-end
-
---[[
-    Reports every named type that contains itself, once per cycle, at the
-    reference that closes it
---]]
-
-function Resolve.cycles(self: Self, declarations: { Declaration })
-	for _, declaration: Declaration in declarations do
-		if declaration.kind == "type" and not self._state[declaration] then
-			self:visit(declaration)
-		elseif declaration.kind == "namespace" then
-			self:cycles(declaration.declarations)
-		end
-	end
-end
-
-function Resolve.visit(self: Self, declaration: TypeDeclaration)
-	self._state[declaration] = "visiting"
-	self:follow(declaration.type)
-	self._state[declaration] = "done"
-end
-
-function Resolve.follow(self: Self, node: Type)
-	if node.kind == "reference" then
-		local target: TypeDeclaration? = node.target
-
-		if target and self._state[target] == "visiting" then
-			local message: string = `"{target.path}" contains itself; recursive types are not supported in this version`
-			self._diagnostics:error("V3003", message, node)
-		elseif target and not self._state[target] then
-			self:visit(target)
-		end
-
-		return
-	end
-
-	for _, child: Type in Parser.children(node) do
-		self:follow(child)
 	end
 end
 

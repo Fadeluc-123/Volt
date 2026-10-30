@@ -138,6 +138,8 @@ function Send.new(
 		order = order,
 		current = scratch, -- The state the next write lands in, pointed by the runtime's target
 		scratch = scratch, -- Where a broadcast is written before it is copied to every target
+		allowance = nil :: number?, -- The bytes a second at which this send gives way to a player, while a budget is set
+		lost = nil :: ((target: any, count: number) -> ())?, -- What hears how many messages a budget dropped for a target
 		_fire = fire,
 		_total = total,
 		_dropped = dropped,
@@ -146,6 +148,7 @@ function Send.new(
 		_keeps = budget == nil, -- A reliable send has no budget and keeps a held state's bytes; an unreliable one drops them
 		_states = {} :: { [any]: State },
 		_drops = {} :: { any }, -- Whom a copy or a flush dropped a message for, told once its loop is done
+		_losses = {} :: { Types.Loss }, -- What a flush's budget dropped per target, told once its walk is done
 		_channel = channel, -- The byte every packet opens with in a schema with a channel: 0, or the channel's number
 		_stamped = stamped == true, -- Whether the server time follows it
 		_prefix = prefix, -- The bytes before a packet's first message

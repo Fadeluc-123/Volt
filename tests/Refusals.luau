@@ -140,6 +140,15 @@ local Refusals: { [string]: { { any } } } = {
 		{ "Choices", 1, "ranged", `Choices.tag: expected "melee"` },
 		{ "Choices", 2, "other", `Choices.reason: expected "none"` },
 	},
+
+	Generics = {
+		{ "Moves", 1, { first = 256, second = 0 }, "Pair<u8, u8>.first: expected u8" },
+		{ "Moves", 2, { first = 0, second = -1 }, "Pair<u8, u8>.second: expected u8" },
+		{ "Moves", 3, { first = 0, second = "abcde" }, "Moves.c.second: length out of range" },
+		{ "Boxes", 1, { value = 256, spare = {} }, "Boxes.a.value: expected u8" },
+		{ "Boxes", 1, { value = 0, spare = { 0, 0, 0 } }, "Boxes.a.spare: length out of range" },
+		{ "Boxes", 2, { first = 70000, second = 0 }, "Scores.first: expected u16" },
+	},
 }
 
 return Refusals

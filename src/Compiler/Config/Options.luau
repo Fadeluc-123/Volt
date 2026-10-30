@@ -31,6 +31,7 @@ local Options = {
 		{ key = "writeValidation", kind = "boolean", default = true },
 		{ key = "manualReplication", kind = "boolean", default = false },
 		{ key = "flush", kind = "number", default = 1 },
+		{ key = "flushBytes", kind = "number" }, -- No default: unset, the canonical form leaves it out
 		{ key = "maxPacket", kind = "number", default = 8192 },
 		{ key = "maxPacketsPerSecond", kind = "number", default = 240 },
 		{ key = "maxOutgoing", kind = "number", default = 262144 },

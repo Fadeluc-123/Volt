@@ -105,9 +105,11 @@ function Pieces.reached(text: string): { [string]: boolean }
 	return names
 end
 
--- The one module-level local a piece or a generated function declares
+-- The one module-level local a piece or a generated function declares, or a recursive pair's half assigns
 function Pieces.name(piece: string): string
-	return piece:match("local function ([%w_]+)") or piece:match("local ([%w_]+)") :: string
+	return piece:match("^function ([%w_]+)")
+		or piece:match("local function ([%w_]+)")
+		or piece:match("local ([%w_]+)") :: string
 end
 
 --[[
@@ -139,25 +141,36 @@ function Pieces.list(emitter: Emit): { string }
 end
 
 --[[
-    The module-level pieces a module keeps, each a helper, a constant or
-    one half of a shared pair: walked from the last, since a piece names
-    only those above it, and kept when the text below that is kept names
-    the one local it declares
+    The module-level pieces a module keeps, each a helper, a constant, one
+    half of a shared pair or its forward declaration: kept when the text
+    or a kept piece names the one local it declares, walked until nothing
+    new is kept, since the pairs of a cycle name each other both ways
 --]]
 
 function Pieces.kept(pieces: { string }, below: string): { string }
-	local list: { string } = {}
 	local reached: { [string]: boolean } = Pieces.reached(below)
+	local held: { [number]: boolean } = {}
+	local list: { string } = {}
+	local grew: boolean = true
 
-	for index: number = #pieces, 1, -1 do
-		local piece: string = pieces[index]
+	while grew do
+		grew = false
 
-		if reached[Pieces.name(piece)] then
-			table.insert(list, 1, piece)
+		for index: number = #pieces, 1, -1 do
+			if not held[index] and reached[Pieces.name(pieces[index])] then
+				held[index] = true
+				grew = true
 
-			for name: string in Pieces.reached(piece) do
-				reached[name] = true
+				for name: string in Pieces.reached(pieces[index]) do
+					reached[name] = true
+				end
 			end
+		end
+	end
+
+	for index: number, piece: string in pieces do
+		if held[index] then
+			table.insert(list, piece)
 		end
 	end
 

@@ -1,8 +1,9 @@
 --[[
-    What the tests of the player lifecycle and of reentry run over: each
-    schema's generated client and server compiled once, Broadcasts again
-    with a frame capped at two Damage messages, a server module started
-    over a mock with every failure kept, and the steps a held fire takes
+    What the tests of the player lifecycle, of reentry and of the budget
+    run over: each schema's generated client and server compiled once,
+    Broadcasts again with a frame capped at two Damage messages, a server
+    module started over a mock with every failure kept, and the steps a
+    held fire takes
 --]]
 
 --!strict
@@ -16,7 +17,8 @@ type Runtime = Volt.Runtime
 
 type Modules = { client: string, server: string }
 
-local SCHEMAS: { string } = { "Broadcasts", "Events" } -- A reliable and an unreliable event the server fires, then the client's
+-- A reliable and an unreliable event the server fires, then the client's, then a reply, a channel and a dictionary
+local SCHEMAS: { string } = { "Broadcasts", "Events", "Functions", "Streams", "Dictionary" }
 local CAP: number = 8 -- Two Damage messages' bytes, so a third takes a player's frame past the cap
 
 local Served = {

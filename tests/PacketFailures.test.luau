@@ -3,8 +3,9 @@
     over the generated modules on the server and on the client: a packet
     before the handshake, an unknown id, a wrong hash, the packet rate,
     the outgoing cap, a call either side's cap drops, a departed player,
-    fired at or called, a channel byte naming no channel, a channel's cap
-    and a stamped packet too short for its stamp name no message
+    fired at or called, a channel byte naming no channel, a channel's cap,
+    a budget's drops and a stamped packet too short for its stamp name no
+    message
 --]]
 
 --!strict
@@ -35,6 +36,7 @@ local CROSSING: string = "Sell 3 wood?" -- A title of 12 bytes, so its Confirm c
 local CHAT_BYTES: number = 202 -- Streams' longest Chat: its id, its length and 200 bytes
 local LONGEST: string = string.rep("x", 200)
 local NO_CHANNEL: number = 2 -- A byte past Streams' one channel, Bulk
+local SPRAYS: number = 3 -- Sprays a budget drops in one flush
 
 -- Every failure of a kind names no message, so nothing routes it to a message's owner
 local function unnamed(harness: Harness, reports: { Report }, kind: string)
@@ -137,6 +139,28 @@ describe("Failures", function ()
 			expect(harness.failures.server[2].detail).is("over maxOutgoing, a message was dropped")
 			unnamed(harness, harness.failures.server, "packet")
 			unnamed(harness, harness.failures.server, "outgoing")
+		end)
+
+		test("the Sprays a budget drops in one flush are one failure, counted and naming no message", function ()
+			local harness: Harness = setup("Broadcasts")
+
+			steps(harness.mock)
+			harness.runtime:budget(1)
+
+			harness.server.Damage.fire(harness.player, { target = 1, amount = 1 })
+			harness.mock:step()
+
+			for _ = 1, SPRAYS do
+				harness.server.Spray.fire(harness.player, 1, 2)
+			end
+
+			harness.mock:step()
+
+			expect(#harness.failures.server).is(1)
+			expect(harness.failures.server[1].player).is(harness.player)
+			expect(harness.failures.server[1].detail).is(`over the budget, unreliable messages dropped: {SPRAYS}`)
+			expect(harness.runtime:stats(harness.player).failures.budget).is(1)
+			unnamed(harness, harness.failures.server, "budget")
 		end)
 	end)
 

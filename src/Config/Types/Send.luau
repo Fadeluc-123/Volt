@@ -41,7 +41,15 @@ export type State = {
 	held: boolean, -- Until the player's handshake: a flush keeps reliable bytes and drops unreliable ones
 	refused: boolean, -- After a failed handshake: nothing is written or kept for the player again
 	sequences: { [number]: number }?, -- The last sequence of each ordered event sent to the target, made at the first
+	waiting: { Waiting }?, -- The finished packets a budget holds back, in the order they were cut, made at the first
+	queued: number, -- Their bytes
+	since: number, -- The clock when the first of them was cut
+	opened: boolean, -- Whether the state has sent a packet, since a budget never holds back its first
 }
+
+export type Waiting = { packet: buffer, side: { any }? } -- A packet a budget holds back, its opening bytes still to write
+
+export type Loss = { target: any, count: number } -- The unreliable messages a flush's budget dropped for one target
 
 export type Fields = {
 	begin: (bytes: number) -> (number, buffer),
@@ -53,6 +61,8 @@ export type Fields = {
 	order: (id: number) -> number,
 	current: State,
 	scratch: State,
+	allowance: number?,
+	lost: ((target: any, count: number) -> ())?,
 	_fire: Fire,
 	_total: Stats,
 	_dropped: (target: any) -> (),
@@ -61,6 +71,7 @@ export type Fields = {
 	_keeps: boolean,
 	_states: { [any]: State },
 	_drops: { any },
+	_losses: { Loss },
 	_channel: number?,
 	_stamped: boolean,
 	_prefix: number,
@@ -82,10 +93,15 @@ export type Broadcast = {
 
 export type Flush = {
 	flush: (self: Send, stamp: number?) -> (),
+	reached: (self: Send, bytes: number) -> boolean,
 	_discard: (self: Send, state: State) -> (),
 	_tell: (self: Send) -> (),
 	_send: (self: Send, target: any, state: State) -> (),
+	_spend: (self: Send, target: any, state: State) -> (),
+	_thin: (self: Send, target: any, state: State) -> (),
 	_packet: (self: Send, target: any, state: State, from: number, to: number, sideFrom: number, sideTo: number) -> (),
+	_cut: (self: Send, state: State, from: number, to: number, sideFrom: number, sideTo: number) -> (buffer, { any }?),
+	_launch: (self: Send, target: any, state: State, packet: buffer, side: { any }?) -> (),
 }
 
 export type Send = Fields & Own & Broadcast & Flush

@@ -9,11 +9,14 @@
 local Types = {}
 
 local Contract = require("../Config/Contract")
+local Diagnostics = require("../Diagnostics")
 local Expressions = require("../Emit/Expressions")
+local Reserved = require("../Config/Reserved")
 local Roblox = require("../Config/Roblox")
 local Schema = require("../Config/Types/Schema")
 
 type Declaration = Schema.Declaration
+type Diagnostics = Diagnostics.Diagnostics
 type Field = Schema.Field
 type File = Schema.File
 type Type = Schema.Type
@@ -125,9 +128,26 @@ function Types.cased(name: string, casing: string): string
 	return name
 end
 
--- The name a named type is exported under: its path with every dot an underscore
+-- The name a named type is exported under, its path with every dot an underscore, or an instantiation's own label
 function Types.label(declaration: TypeDeclaration): string
-	return ((declaration.path :: string):gsub("%.", "_"))
+	return declaration.label or ((declaration.path :: string):gsub("%.", "_"))
+end
+
+-- A generic's alias over some arguments' annotations
+local function applied(generic: TypeDeclaration, arguments: { Type }): string
+	local parts: { string } = {}
+	for _, argument: Type in arguments do
+		table.insert(parts, Types.annotation(argument))
+	end
+	return `{Types.label(generic)}<{table.concat(parts, ", ")}>`
+end
+
+-- The Luau type a value of a named type is annotated as: its label, or for an instantiation its generic's alias
+function Types.of(declaration: TypeDeclaration): string
+	if declaration.generic then
+		return applied(declaration.generic, declaration.arguments :: { Type })
+	end
+	return Types.label(declaration)
 end
 
 -- The fields of a struct or a variant, each typed, as the inside of a table type
@@ -154,13 +174,20 @@ end
 
 --[[
     The Luau type a value of a schema type is annotated as: a named type
-    by its label, a struct or a tagged variant as a table type, a unit
-    enum as its names, a union as its members
+    by its label, an instantiation or a generic's body's reference to a
+    generic by the alias over its arguments, a type parameter by its name,
+    a struct or a tagged variant as a table type, a unit enum as its
+    names, a union as its members
 --]]
 
 function Types.annotation(node: Type): string
 	if node.kind == "reference" then
-		return Types.label(node.target :: TypeDeclaration)
+		if node.parameter then
+			return node.name
+		end
+
+		local target: TypeDeclaration = node.target :: TypeDeclaration
+		return target.parameters and applied(target, node.arguments :: { Type }) or Types.of(target)
 	elseif node.kind == "primitive" then
 		local name: string = node.name
 		local direct: boolean = name == "boolean" or name == "string" or name == "buffer"
@@ -209,21 +236,72 @@ end
 --[[
     The line of every named type in a declaration list, namespaces walked,
     in declaration order: exported, or local to the module for a private
-    one, which the module's own signatures still name
+    one, which the module's own signatures still name. A generic's line is
+    its one alias, which every annotation of an instantiation applies
 --]]
 
 function Types.named(declarations: { Declaration }, lines: { string }): { string }
 	for _, declaration: Declaration in declarations do
 		if declaration.kind == "type" then
-			local attributes: { [string]: boolean }? = declaration.attributes
+			local attributes: Schema.Attributes? = declaration.attributes
 			local exported: string = (attributes and attributes.private) and "" or "export "
+			local names: { string } = {}
 
-			table.insert(lines, `{exported}type {Types.label(declaration)} = {Types.annotation(declaration.type)}`)
+			for _, parameter: Schema.Parameter in declaration.parameters or {} do
+				table.insert(names, parameter.name)
+			end
+
+			local given: string = #names > 0 and `<{table.concat(names, ", ")}>` or ""
+			local alias: string = `{exported}type {Types.label(declaration)}{given}`
+
+			table.insert(lines, `{alias} = {Types.annotation(declaration.type)}`)
 		elseif declaration.kind == "namespace" then
 			Types.named(declaration.declarations, lines)
 		end
 	end
 	return lines
+end
+
+-- Every named type's label in a declaration list, namespaces walked
+local function labels(declarations: { Declaration }, set: { [string]: boolean }): { [string]: boolean }
+	for _, declaration: Declaration in declarations do
+		if declaration.kind == "type" then
+			set[Types.label(declaration)] = true
+		elseif declaration.kind == "namespace" then
+			labels(declaration.declarations, set)
+		end
+	end
+	return set
+end
+
+--[[
+    Refuses a type parameter named like a type the modules declare or
+    name, a Roblox type or a named type's label, namespaces walked, since
+    it would hide that type inside its generic's alias
+--]]
+
+function Types.parameters(declarations: { Declaration }, diagnostics: Diagnostics, taken: { [string]: boolean }?)
+	local named: { [string]: boolean } = taken or labels(declarations, {})
+
+	for _, declaration: Declaration in declarations do
+		if declaration.kind == "namespace" then
+			Types.parameters(declaration.declarations, diagnostics, named)
+		elseif declaration.kind == "type" then
+			for _, parameter: Schema.Parameter in declaration.parameters or {} do
+				local name: string = parameter.name
+				local why: string? = (
+					table.find(Reserved.types, name) and "a type the generated modules declare or name"
+				)
+					or (Roblox[name] and "a Roblox type the schema language names")
+					or (named[name] and "the label of a named type of the schema")
+					or nil
+
+				if why then
+					diagnostics:error("V4002", `"{name}" is {why} and cannot name a type parameter`, parameter)
+				end
+			end
+		end
+	end
 end
 
 -- Whether a declaration list, namespaces walked, declares a function the server calls

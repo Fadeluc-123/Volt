@@ -299,14 +299,15 @@ end
 
 --[[
     The failure handler a runtime starts with: a handshake failure kicks
-    the player with both hashes, a fire at a player who left is silent,
-    and anything else warns, once a minute per kind and per player so an
-    attack cannot flood the log while the counters stay exact. A bot is
-    never kicked and its name never read, so it is warned about instead
+    the player with both hashes, a fire at a player who left and what a
+    budget drops are silent, and anything else warns, once a minute per
+    kind and per player so an attack cannot flood the log while the counters
+    stay exact. A bot is never kicked and its name never read, so it is
+    warned about instead
 --]]
 
 function Limits._report(self: Runtime, player: any, kind: string, detail: string)
-	if kind == "departed" then
+	if kind == "departed" or kind == "budget" then
 		return
 	end
 

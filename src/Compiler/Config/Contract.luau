@@ -4,7 +4,8 @@
     in, a refusal's last status, what a message's writer begins and trims
     with and when it reserves, what a shared type's writer takes before
     its value, what every reader takes and the player a message reader
-    takes first, and the options the schema table carries
+    takes first, the level a recursive pair takes last, and the options
+    the schema table carries
 --]]
 
 --!strict
@@ -37,9 +38,12 @@ local Contract = {
 		{ name = "player", type = "(Player | Bot)?" }, -- Nil on the client, which is how the runtime tells the sides apart
 	} :: { Parameter },
 
+	depth = { name = "depth", type = "number" } :: Parameter, -- The level a recursive pair is called at, which it takes last
+
 	-- What the runtime reads
 	options = {
 		"flush",
+		"flushBytes",
 		"manualReplication",
 		"maxOutgoing",
 		"maxPacket",

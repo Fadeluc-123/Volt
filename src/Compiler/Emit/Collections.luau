@@ -16,6 +16,7 @@ local Parser = require("../Parser")
 local Schema = require("../Config/Types/Schema")
 local Sizes = require("../Analyse/Sizes")
 local Types = require("../Targets/Types")
+local Unions = require("../Analyse/Unions")
 
 type Block = Blocks.Block
 type Emit = EmitTypes.Emit
@@ -53,7 +54,7 @@ local function inline(node: Type): boolean
 	elseif node.kind == "enum" then
 		return node.tag == nil
 	elseif node.kind == "union" then
-		return Sizes.flattened(node.members) ~= nil
+		return Unions.flattened(node.members) ~= nil
 	elseif node.kind ~= "struct" then
 		return false
 	end

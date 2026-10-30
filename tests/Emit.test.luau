@@ -287,5 +287,6 @@ describe("Emit", function ()
 
 		expect(table.concat(unreserved, ", ")).is("")
 		expect(reserved.utf8 and utf8In.Text and utf8In.Console).is(true)
+		expect(reserved.depth).is(true) -- No global, but the level a recursive pair takes under that name
 	end)
 end)

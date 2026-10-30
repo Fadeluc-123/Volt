@@ -262,14 +262,16 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		self:packet(player, packet, side)
 	end
 
-	-- Every frame counts for the yield check; every flush-th one sends, unless the game flushes by hand
+	-- Every frame counts for the yield check; every flush-th one sends, unless the game flushes by hand, and any
+	-- frame on which a target's unsent bytes have reached flushBytes sends, by hand or not
 	local every: number = options.flush
 	local manual: boolean = options.manualReplication
+	local threshold: number? = options.flushBytes
 
 	local function heartbeat()
 		self.frame += 1
 
-		if not manual and self.frame % every == 0 then
+		if not manual and self.frame % every == 0 or threshold and self:_piled(threshold) then
 			self:flush()
 		end
 	end
@@ -339,6 +341,21 @@ function Runtime.flush(self: Self)
 			end
 		end
 	end
+end
+
+-- Whether one target's unsent bytes on any send have reached a size, which is what flushBytes flushes at
+function Runtime._piled(self: Self, bytes: number): boolean
+	if self.reliable:reached(bytes) or self.unreliable:reached(bytes) then
+		return true
+	end
+
+	for _, stream: Send.Send in self.streams do
+		if stream:reached(bytes) then
+			return true
+		end
+	end
+
+	return false
 end
 
 local _: Types.Own, _: Types.Awaited, _: Types.Calls, _: Types.Fires = Runtime, Awaited, Calls, Fires
