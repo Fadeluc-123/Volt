@@ -14,7 +14,6 @@
 			"Benchmark": {
 				"$className": "Folder",
 				"Benches": { "$path": "Benches.luau" },
-				"Dispatch": { "$path": "Dispatch.luau" },
 				"Modes": { "$path": "Modes.luau" },
 				"Generated": { "$path": "Generated" },
 				"Sample": { "$className": "RemoteFunction" },

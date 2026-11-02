@@ -19,6 +19,8 @@ local SHOUT: string = "bulk"
 local YAW: number = 3.2 -- Each an end of its q16 range, which comes back exact
 local PITCH: number = -1.6
 local CLOCK_SECONDS: number = 5 -- How far the stamp a listener reads may be from this client's own server clock
+local DEPTH: number = 1000 -- The levels of the chain Deep carries, the most @depth allows
+local BYTE: number = 256 -- Level n holds n % BYTE, so the levels run through every u8 in turn
 
 -- One of each value Shapes carries, every number exact in f32, so what comes back compares equal
 local LAYOUT: UDim2 = UDim2.new(0.5, 10, 1, -20)
@@ -26,6 +28,9 @@ local RANGE: NumberRange = NumberRange.new(1, 2)
 local RECT: Rect = Rect.new(0, 0, 10, 20)
 local RAY: Ray = Ray.new(Vector3.new(0, 5, 0), Vector3.new(0, 0, -100))
 local REGION: Region3 = Region3.new(Vector3.zero, Vector3.new(4, 2, 8))
+
+-- The generated module's own Chain, which a require this script waits for cannot name
+type Chain = { value: number, next: Chain? }
 
 task.wait(LOAD_DELAY)
 
@@ -40,6 +45,7 @@ local waiting: { [string]: boolean } = {
 	Shout = true,
 	Aim = true,
 	Shapes = true,
+	Deep = true,
 	["Placed 1"] = true,
 	["Placed 2"] = true,
 	Resolve = true,
@@ -77,6 +83,17 @@ local function stamped(name: string, remote: string)
 	end
 
 	newest[remote] = time
+end
+
+-- DEPTH levels, level n holding n % BYTE, built from the deepest up
+local function chain(): Chain
+	local head: Chain = { value = DEPTH % BYTE }
+
+	for level: number = DEPTH - 1, 1, -1 do
+		head = { value = level % BYTE, next = head }
+	end
+
+	return head
 end
 
 -- Placed 3's part never streams in, so its one resolve failure is expected; any other failure is a fault
@@ -141,6 +158,25 @@ Network.Shapes.on(function (layout: UDim2, range: NumberRange, rect: Rect, ray: 
 	arrived("Shapes", same, `{layout}; {range}; {rect}; {ray}; {region.CFrame}; {region.Size}`)
 end)
 
+-- Every level in order, each holding its own value, and nothing past the last
+Network.Deep.on(function (value: Chain)
+	stamped("Deep", "Reliable")
+
+	local link: Chain? = value
+
+	for level: number = 1, DEPTH do
+		if not link then
+			return arrived("Deep", false, `nothing at level {level}`)
+		elseif link.value ~= level % BYTE then
+			return arrived("Deep", false, `{link.value} at level {level}`)
+		end
+
+		link = link.next
+	end
+
+	arrived("Deep", link == nil, `a level past {DEPTH}`)
+end)
+
 -- Placed 1 and 2 each with its own part, Smoke2's once it streams in; a message that waited for its part is read
 -- under the stamp of the packet it came in, behind later ones, so it takes no part in the order checks
 Network.Placed.on(function (part: BasePart, index: number)
@@ -161,6 +197,7 @@ arrived("Echo", ok and echoed == WORD:upper(), echoed)
 Network.Shout.fire(SHOUT)
 Network.Aim.fire(YAW, PITCH)
 Network.Shapes.fire(LAYOUT, RANGE, RECT, RAY, REGION)
+Network.Deep.fire(chain())
 
 local deadline: number = os.clock() + DEADLINE
 while next(waiting) and not failed and os.clock() < deadline do

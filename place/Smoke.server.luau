@@ -25,10 +25,20 @@ local GAP: Vector3 = Vector3.new(6, 0, 0) -- Between Smoke1 and where Smoke2 mov
 local MOVE_SECONDS: number = 1 -- How long Smoke2 stays far away before it moves beside the spawn and streams in
 
 type Bot = Volt.Bot
+type Chain = Network.Chain
 
 -- What the client has yet to send, and the Late messages still to fire
-local waiting: { [string]: boolean } =
-	{ Ping = true, Move = true, Mark = true, Echo = true, Late = true, Shout = true, Aim = true, Shapes = true }
+local waiting: { [string]: boolean } = {
+	Ping = true,
+	Move = true,
+	Mark = true,
+	Echo = true,
+	Late = true,
+	Shout = true,
+	Aim = true,
+	Shapes = true,
+	Deep = true,
+}
 local failed: string? = nil
 
 -- Keeps the first failure only, since everything after it is noise
@@ -151,6 +161,12 @@ Network.Shapes.on(
 		Network.Shapes.fire(player, layout, range, rect, ray, region)
 	end
 )
+
+-- Sent back as the server read it, so the deepest chain is read and written on both sides
+Network.Deep.on(function (player: Player | Bot, value: Chain)
+	arrived("Deep")
+	Network.Deep.fire(player, value)
+end)
 
 -- Connected after the module, as a game's own is; the server lives as long as the place, so nothing disconnects it
 Players.PlayerAdded:Connect(function (player: Player)

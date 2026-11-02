@@ -16,6 +16,7 @@ local SKIPPED: { [string]: boolean } = {
 	["tests/Golden"] = true,
 	["place/Client.luau"] = true,
 	["place/Server.luau"] = true,
+	["place/RemoteName.profiler.luau"] = true,
 	["benchmark/Generated"] = true,
 }
 

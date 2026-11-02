@@ -1,5 +1,6 @@
 option clientOutput = "../../place/Client.luau"
 option serverOutput = "../../place/Server.luau"
+option inspectorOutput = "../../place/RemoteName.profiler.luau"
 option stamp = true
 
 -- A stream of its own on the Reliable remote, which adds no remote to the scope's folder
@@ -63,4 +64,13 @@ event Placed {
 event Shapes {
 	from: Both, type: Reliable, call: SingleAsync,
 	data: (a: UDim2, b: NumberRange, c: Rect, d: Ray, e: Region3),
+}
+
+-- As deep as @depth allows, so its write and its read each run a thousand levels down the stack
+@depth(1000) struct Chain { value: u8, next: Chain? }
+
+-- The deepest Chain each way, the server sending back what it heard
+event Deep {
+	from: Both, type: Reliable, call: SingleAsync,
+	data: Chain,
 }
