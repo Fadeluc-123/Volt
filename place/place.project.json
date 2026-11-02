@@ -12,7 +12,8 @@
 				"$className": "Folder",
 				"Volt": { "$path": "../default.project.json" }
 			},
-			"Network": { "$path": "Client.luau" }
+			"Network": { "$path": "Client.luau" },
+			"RemoteName.profiler": { "$path": "RemoteName.profiler.luau" }
 		},
 		"ServerScriptService": {
 			"Network": { "$path": "Server.luau" },
