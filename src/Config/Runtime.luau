@@ -1,15 +1,15 @@
 --[[
-    The runtime's tunables, one row each: how a send buffer starts and
-    grows, where the remotes and instance ids live, the calls a function
-    may have in flight, a reply's status, what opens a packet, an ordered
-    sequence's wrap, the dictionary's capacity, the default handler's
-    warnings and how traffic counts
+    The runtime's tunables, one row each: the send buffers, a client's flush
+    pace, the remotes and instance ids, the calls, what opens a packet, the
+    sequences, the dictionary, the default handler's warnings and traffic
 --]]
 
 --!strict
 local Runtime = {
 	initialBytes = 64, -- What a send buffer starts at; it grows to fit the first frame that needs more
 	growth = 1.5, -- How much a send buffer grows by when a frame overflows it
+	clientFlushes = 60, -- A client's automatic flushes a second at flush = 1, whatever its frame rate
+	flushEarly = 0.5, -- The share of an interval a client's Heartbeat may come before its flush is due and still take it
 	folder = "Volt", -- The folder under ReplicatedStorage every scope's remotes sit in
 	reliable = "Reliable", -- The RemoteEvent's name inside a scope
 	unreliable = "Unreliable", -- The UnreliableRemoteEvent's name inside a scope

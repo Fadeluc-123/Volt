@@ -13,8 +13,9 @@ Reference/
 # Roblox definitions luau-lsp analyzes the runtime against; lune run analyze fetches them
 Definitions/
 
-# Wally packages, the luau-lsp sourcemap and built place files
+# Wally packages and the lockfile, the luau-lsp sourcemap and built place files
 Packages/
+wally.lock
 sourcemap.json
 *.rbxl*
 
@@ -29,3 +30,10 @@ benchmark/Generated/
 
 # Graphify's knowledge graph of the code; /graphify rebuilds it
 graphify-out/
+
+# Secrets: environment files, private keys and Wally's auth token, never committed
+.env
+.env.*
+*.pem
+*.key
+auth.toml

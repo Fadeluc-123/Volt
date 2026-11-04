@@ -294,6 +294,7 @@ function Remotes.open(scope: string, server: boolean): Transport
 
 		heartbeat = heartbeat,
 		spawn = spawn,
+		clock = os.clock,
 		resolve = resolver(folder),
 		resolved = arrivals(folder),
 	}

@@ -1,8 +1,7 @@
 --[[
     The client half of the Studio smoke test: requires its module late, so
-    the server's Late messages are held for it, fires and invokes all it
-    can, checks every answer, Late's order, each listener's server time and
-    the parts Placed names, and prints Volt smoke: pass, or the first fault
+    the server's Late is held for it, sends everything, checks every answer,
+    and prints Volt smoke: pass, or the first fault
 --]]
 
 --!strict
@@ -21,6 +20,14 @@ local PITCH: number = -1.6
 local CLOCK_SECONDS: number = 5 -- How far the stamp a listener reads may be from this client's own server clock
 local DEPTH: number = 1000 -- The levels of the chain Deep carries, the most @depth allows
 local BYTE: number = 256 -- Level n holds n % BYTE, so the levels run through every u8 in turn
+local PAYLOAD_DEADLINE: number = 10 -- Seconds to wait for Reply and every Line once Payloads is fired
+local REPLY_BYTES: number = 16391 -- Reply's message with its id, as large as Decree's largest run reply
+local REPLY_TEXT: number = 16390 -- Its text, every byte REPLY_FILL
+local REPLY_FILL: string = "r"
+local LINES: number = 15 -- The Lines the server fires in one frame, numbered from 1, so they come as one packet
+local LINE_BYTES: number = 16388 -- Each Line's message with its id, as large as Decree's largest line
+local LINE_TEXT: number = 16386 -- Its text, its own number repeated
+local OPENING: number = 9 -- The channel byte and the stamp every server packet opens with
 
 -- One of each value Shapes carries, every number exact in f32, so what comes back compares equal
 local LAYOUT: UDim2 = UDim2.new(0.5, 10, 1, -20)
@@ -53,6 +60,8 @@ local waiting: { [string]: boolean } = {
 
 local failed: string? = nil
 local late: number = 0 -- The last Late number heard
+local line: number = 0 -- The last Line number heard
+local bytesHeard: number, packetsHeard: number = 0, 0 -- The client's counters when a payload was last measured
 -- The latest server time a listener read on each remote, which the next on it may never be before; the engine orders
 -- neither remote against the other
 local newest: { [string]: number } = { Reliable = 0, Unreliable = 0 }
@@ -94,6 +103,36 @@ local function chain(): Chain
 	end
 
 	return head
+end
+
+-- The bytes and packets the client has heard since it last asked, which measure a payload's packet
+local function since(): (number, number)
+	local stats: { bytesIn: number, packetsIn: number } = Network.stats()
+	local bytes: number, packets: number = stats.bytesIn - bytesHeard, stats.packetsIn - packetsHeard
+
+	bytesHeard, packetsHeard = stats.bytesIn, stats.packetsIn
+
+	return bytes, packets
+end
+
+-- A payload's messages came alone in one packet, opened as every server packet is; its sizes print before the pass line
+local function measured(label: string, size: number)
+	local bytes: number, packets: number = since()
+
+	if packets ~= 1 or bytes ~= size + OPENING then
+		return fail(`Q8 {label}: {size} bytes came in {packets} packets of {bytes} bytes`)
+	end
+
+	print(`Volt smoke: Q8 {label} {size} bytes in a {bytes}-byte packet`)
+end
+
+-- Waits until every answer in waiting has arrived, a failure has come or the seconds have passed
+local function settle(seconds: number)
+	local deadline: number = os.clock() + seconds
+
+	while next(waiting) and not failed and os.clock() < deadline do
+		task.wait()
+	end
 end
 
 -- Placed 3's part never streams in, so its one resolve failure is expected; any other failure is a fault
@@ -184,6 +223,29 @@ Network.Placed.on(function (part: BasePart, index: number)
 	arrived(name, waiting[name] == true and part.Name == `Smoke{index}`, part:GetFullName())
 end)
 
+-- Every byte of it, and its packet, which holds nothing else
+Network.Reply.on(function (text: string)
+	stamped("Reply", "Reliable")
+	measured("Reply", REPLY_BYTES)
+	arrived("Reply", text == string.rep(REPLY_FILL, REPLY_TEXT), `a different text of {#text} bytes`)
+end)
+
+-- Every number once and in order, each text that number repeated, and the one packet all of them came in
+Network.Line.on(function (index: number, text: string)
+	stamped("Line", "Reliable")
+
+	if index ~= line + 1 or text ~= string.rep(string.char(index), LINE_TEXT) then
+		fail(`Line: got {index} with {#text} bytes after {line}`)
+	end
+
+	line = index
+
+	if line == LINES then
+		measured(`Line x{LINES}`, LINE_BYTES * LINES)
+		waiting.Line = nil
+	end
+end)
+
 -- The server places the parts when it hears Ping, so every listener above is connected first
 Network.Ping.fire(PING)
 Network.Move.fire(MOVE_X, MOVE_Y)
@@ -199,17 +261,31 @@ Network.Aim.fire(YAW, PITCH)
 Network.Shapes.fire(LAYOUT, RANGE, RECT, RAY, REGION)
 Network.Deep.fire(chain())
 
-local deadline: number = os.clock() + DEADLINE
-while next(waiting) and not failed and os.clock() < deadline do
-	task.wait()
+settle(DEADLINE)
+
+-- The largest payloads only once every echo is in, so nothing else rides in their packets
+if not next(waiting) and not failed then
+	waiting.Reply = true
+	waiting.Line = true
+
+	since()
+	Network.Payloads.fire()
+	settle(PAYLOAD_DEADLINE)
 end
 
-local missing: string? = next(waiting)
+-- Every answer still missing, sorted so the line names them all in one order
+local missing: { string } = {}
+
+for name: string in waiting do
+	table.insert(missing, name)
+end
+
+table.sort(missing)
 
 if failed then
 	warn(`Volt smoke: {failed}`)
-elseif missing then
-	warn(`Volt smoke: never heard {missing}`)
+elseif #missing > 0 then
+	warn(`Volt smoke: never heard {table.concat(missing, ", ")}`)
 else
 	print("Volt smoke: pass")
 end

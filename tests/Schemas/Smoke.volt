@@ -74,3 +74,20 @@ event Deep {
 	from: Both, type: Reliable, call: SingleAsync,
 	data: Chain,
 }
+
+-- Asks for Reply and then the fifteen Lines, once the client has heard every echo
+event Payloads {
+	from: Client, type: Reliable, call: SingleAsync,
+}
+
+-- 16,391 bytes with its id, as large as Decree's largest run reply, alone in its packet
+event Reply {
+	from: Server, type: Reliable, call: SingleAsync,
+	data: string(16390),
+}
+
+-- 16,388 bytes with its id, as large as Decree's largest line, fifteen of them to one packet
+event Line {
+	from: Server, type: Reliable, call: SingleSync,
+	data: (index: u8, text: string(16386)),
+}
