@@ -46,6 +46,7 @@ export type Transport = {
 	present: ((player: any) -> boolean)?, -- Whether a player is listed, so a fire before Volt's own join can set them up
 	traffic: ((player: any) -> Record)?, -- The player's byte count, one per VM, from the hub that serves the transport
 	now: (() -> number)?, -- The server's clock, which a stamped server's packets carry
+	clock: (() -> number)?, -- The client's own clock, which paces its automatic flush
 	reference: ((instance: Instance) -> number)?, -- The server's id for an instance a message names, kept for its life
 	resolve: ((id: number) -> Instance?)?, -- The client's instance for an id, or nil while it has not arrived
 	resolved: ((callback: (id: number) -> ()) -> ())?, -- Calls back on the client with each id whose instance arrives
@@ -213,7 +214,7 @@ export type Fields = {
 	_profiler: Profiler?,
 }
 
-export type Own = {
+export type Flushes = {
 	flush: (self: Runtime) -> (),
 	_piled: (self: Runtime, bytes: number) -> boolean,
 }
@@ -377,7 +378,7 @@ export type Wrapper = {
 
 export type Runtime =
 	Fields
-	& Own
+	& Flushes
 	& Awaited
 	& Calls
 	& Delta

@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: CompeyDev/setup-rokit@v0.2.1
+        with:
+          version: v1.2.0
+          cache: true
+      - name: Format
+        run: lune run format && git diff --exit-code
+      - name: Lint
+        run: selene src tests .lune place benchmark
+      - name: Analyze
+        # .luaurc's lune alias names the typedefs lune setup writes under the home folder, and setup rewrites .luaurc
+        run: |
+          lune setup
+          git checkout -- .luaurc
+          lune run analyze
+      - name: Tests
+        run: lune run test
+      - name: Package build
+        # Neither built tree may hold a Compiler module
+        run: |
+          rojo build default.project.json -o "${{ runner.temp }}/Volt.rbxm"
+          rojo sourcemap default.project.json --output "${{ runner.temp }}/Volt.json"
+          if grep -qF '"name":"Compiler"' "${{ runner.temp }}/Volt.json"; then exit 1; fi
+      - name: Smoke place
+        run: |
+          lune run src/Compiler tests/Schemas/Smoke.volt
+          rojo build place/place.project.json -o "${{ runner.temp }}/Smoke.rbxl"
+          rojo sourcemap place/place.project.json --output "${{ runner.temp }}/Smoke.json"
+          if grep -qF '"name":"Compiler"' "${{ runner.temp }}/Smoke.json"; then exit 1; fi
+      - name: Benchmark build
+        run: lune run bench --build

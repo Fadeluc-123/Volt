@@ -1,8 +1,7 @@
 --[[
-    The server half of the Studio smoke test: checks the scope's folder
-    holds its two remotes and no other, hears and answers every event the
-    client fires, serves its function, fires Late at a joiner and Placed
-    naming three parts, and prints Volt smoke: pass, or the first fault
+    The server half of the Studio smoke test: checks the scope's remotes,
+    answers all the client sends, fires Late, Placed and the largest payloads
+    at the player, and prints Volt smoke: pass, or the first fault
 --]]
 
 --!strict
@@ -16,13 +15,19 @@ local Volt = require(Packages.Volt)
 
 local Network = require(ServerScriptService.Network)
 
-local DEADLINE: number = 40 -- Seconds to wait for the client, which joins a while after the server and loads late
+local JOIN_SECONDS: number = 300 -- Seconds to wait for a join, as Studio can start the player's window long after us
+local DEADLINE: number = 60 -- Seconds from the player's join to wait for the client, which loads late
 local LATE: number = 600 -- Late messages fired at a joiner, one a frame, while their client has yet to load its module
 local REMOTES: string = "Reliable Unreliable" -- Every remote the scope's folder may hold, sorted, a channel adding none
 local NEAR: Vector3 = Vector3.new(0, 4, 12) -- Beside the spawn at the origin, well inside any streaming radius
 local FAR: Vector3 = Vector3.new(5000, 4, 12) -- Past any streaming radius, so the client has nothing there
 local GAP: Vector3 = Vector3.new(6, 0, 0) -- Between Smoke1 and where Smoke2 moves to, so the two stand apart
 local MOVE_SECONDS: number = 1 -- How long Smoke2 stays far away before it moves beside the spawn and streams in
+local REPLY_TEXT: number = 16390 -- Reply's text, which with its id is as large as Decree's largest run reply
+local REPLY_FILL: string = "r" -- Every byte of Reply's text
+local LINES: number = 15 -- The Lines fired in one frame, numbered from 1, which go as one packet
+local LINE_TEXT: number = 16386 -- Each Line's text, which with its id and number is as large as Decree's largest line
+local FLUSH_SECONDS: number = 5 -- How long the server waits for the flush that sends Reply, due at the next Heartbeat
 
 type Bot = Volt.Bot
 type Chain = Network.Chain
@@ -38,8 +43,10 @@ local waiting: { [string]: boolean } = {
 	Aim = true,
 	Shapes = true,
 	Deep = true,
+	Payloads = true,
 }
 local failed: string? = nil
+local joined: number? = nil -- When the player joined, from which DEADLINE counts
 
 -- Keeps the first failure only, since everything after it is noise
 local function fail(detail: string)
@@ -168,8 +175,45 @@ Network.Deep.on(function (player: Player | Bot, value: Chain)
 	Network.Deep.fire(player, value)
 end)
 
+--[[
+    Fires Reply, the only message the player is sent that frame, then,
+    once its flush has sent it, the fifteen Lines in one later frame, each
+    its number and that number repeated, so each packet holds only them;
+    a flush that never comes is the failure, and no Line is fired
+--]]
+
+Network.Payloads.on(function (player: Player | Bot)
+	local sent: number = Network.stats(player).packetsOut
+	local texts: { string } = {}
+
+	-- Built before any fire, so the fifteen go in one run with nothing built between them
+	for index: number = 1, LINES do
+		texts[index] = string.rep(string.char(index), LINE_TEXT)
+	end
+
+	Network.Reply.fire(player, string.rep(REPLY_FILL, REPLY_TEXT))
+
+	-- A player who left reads fresh counters at zero, so only a count past the one before Reply means it went
+	local deadline: number = os.clock() + FLUSH_SECONDS
+	while Network.stats(player).packetsOut <= sent and not failed and os.clock() < deadline do
+		task.wait()
+	end
+
+	if Network.stats(player).packetsOut <= sent then
+		return fail("Payloads: Reply's flush never came")
+	end
+
+	for index: number = 1, LINES do
+		Network.Line.fire(player, index, texts[index])
+	end
+
+	arrived("Payloads")
+end)
+
 -- Connected after the module, as a game's own is; the server lives as long as the place, so nothing disconnects it
 Players.PlayerAdded:Connect(function (player: Player)
+	joined = joined or os.clock()
+
 	for index: number = 1, LATE do
 		Network.Late.fire(player, index)
 		task.wait()
@@ -178,17 +222,27 @@ Players.PlayerAdded:Connect(function (player: Player)
 	arrived("Late")
 end)
 
-local deadline: number = os.clock() + DEADLINE
-while next(waiting) and not failed and os.clock() < deadline do
+-- Waits JOIN_SECONDS from the start for the player to join, then DEADLINE from their join
+local started: number = os.clock()
+while next(waiting) and not failed and os.clock() < (joined and joined + DEADLINE or started + JOIN_SECONDS) do
 	task.wait()
 end
 
-local missing: string? = next(waiting)
+-- Every message still missing, sorted so the line names them all in one order
+local missing: { string } = {}
+
+for name: string in waiting do
+	table.insert(missing, name)
+end
+
+table.sort(missing)
 
 if failed then
 	warn(`Volt smoke: {failed}`)
-elseif missing then
-	warn(`Volt smoke: never heard {missing}`)
+elseif not joined then
+	warn(`Volt smoke: no player joined within {JOIN_SECONDS} seconds`)
+elseif #missing > 0 then
+	warn(`Volt smoke: never heard {table.concat(missing, ", ")}`)
 else
 	print("Volt smoke: pass")
 end

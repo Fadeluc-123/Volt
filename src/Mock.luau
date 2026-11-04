@@ -1,9 +1,7 @@
 --[[
     The in-memory transport pair a test drives instead of the remotes: a
-    server side served through a hub of its own, a client side per joined
-    player, packets copied at fire time and delivered on step, one
-    Heartbeat per step, a player list with join, leave and a kick, bots,
-    the server's clock, and instance ids a test can hide from the clients
+    server side, a client side per joined player, bots, the server's clock
+    and instance ids a test can hide from the clients
 --]]
 
 --!strict
@@ -49,6 +47,34 @@ type Fields = {
 	_revealed: { any },
 	_resolved: { [Player]: (id: number) -> () },
 }
+
+--- @class Mock
+--- An in-memory transport pair a test drives in place of the remotes, made
+--- by `Volt.mock`. `server` is the server's transport, `join` hands out a
+--- client transport per player, and `Volt.start` runs a runtime over
+--- either. Nothing moves until `step`: a packet between the server and a
+--- player is copied when it is fired, as the engine copies it, and waits in
+--- one ordered, lossless queue per direction until the next step delivers
+--- it and fires one Heartbeat on every runtime. A mock serves one scope, so
+--- two Volt scopes never share one
+
+--- @prop server Transport
+--- @within Mock
+--- The server's transport, which a test hands to `Volt.start` in place of
+--- the remotes. A second server runtime started on it replaces the first's
+--- receive
+
+--- @prop players { Player }
+--- @within Mock
+--- Every player who has joined and not yet left, in the order they joined.
+--- Each is a plain, unfrozen table standing in for a Player, with `Name`,
+--- `UserId` counting up from 1, `Kick` and `kicked`. A bot is never listed
+
+--- @prop time number
+--- @within Mock
+--- The server's clock, 0 until a test sets it. The server transport's `now`
+--- returns it, so a test sets it to stamp what the server sends under
+--- `option stamp`
 
 local SCOPE: string = "Mock" -- The one scope a mock's hub serves, since two scopes cannot share a mock
 
@@ -131,7 +157,7 @@ function Mock.new(spawn: Spawn): Self
 	self = setmetatable({
 		server = server,
 		players = {} :: { Player },
-		time = 0, -- What the server transport's now returns, which a test sets to stamp what the server sends
+		time = 0,
 		_spawn = spawn,
 		_present = {} :: { [Player]: boolean },
 		_toServer = {} :: { Packet },
@@ -153,10 +179,16 @@ function Mock.new(spawn: Spawn): Self
 	return self
 end
 
---[[
-    A player joins: the server hears it, and the transport returned is
-    that player's client side, so a client runtime can be started on it
---]]
+--- A player joins: the server's join callbacks run at once, in the order
+--- they were registered, before this returns. The player's `Kick` keeps
+--- its message in `kicked` and makes the player leave, as the engine's
+--- does. Each player has a client transport of their own, so any number of
+--- client runtimes can run on one mock
+--- @method join
+--- @within Mock
+--- @param name string -- The player's `Name`
+--- @return Player -- The new player, now in `players`
+--- @return Transport -- The player's client side, on which a test starts a client runtime
 
 function Mock.join(self: Self, name: string): (Player, Transport)
 	self._joined += 1
@@ -215,7 +247,14 @@ function Mock.join(self: Self, name: string): (Player, Transport)
 		}
 end
 
--- A player leaves: the server hears it while the player is still listed, as the engine orders it
+--- A player leaves: the server's leave callbacks run at once, in the order
+--- they were registered, while the player is still in `players`, as the
+--- engine orders it. Then the mock forgets them, and a packet queued from
+--- or for them is dropped at the next step
+--- @method leave
+--- @within Mock
+--- @param player Player -- A player `join` returned
+
 function Mock.leave(self: Self, player: Player)
 	for _, callback in self._removing do
 		callback(player)
@@ -231,12 +270,16 @@ function Mock.leave(self: Self, player: Player)
 	self._resolved[player] = nil
 end
 
---[[
-    Tells every client the id of each instance revealed since the last
-    step and still visible, then delivers every packet queued in both
-    directions to the handler on the other side, dropping one from or
-    for a player who has left, then fires one Heartbeat on every runtime
---]]
+--- Moves the mock forward one frame. First every client hears the id of
+--- each instance revealed since the last step, if the server has named it
+--- and it is still visible. Then every packet queued in both directions
+--- reaches the handler on the other side, those bound for the server
+--- first, and one from or for a player who has left, or for a player with
+--- no client runtime, is dropped. Last, one Heartbeat fires on every
+--- runtime in the order they connected, which is when each one sends, so
+--- with `flush = 1` a fire made outside `step` arrives at the second step
+--- @method step
+--- @within Mock
 
 function Mock.step(self: Self)
 	local toServer: { Packet }, toClient: { Packet } = self._toServer, self._toClient
@@ -281,27 +324,60 @@ function Mock.step(self: Self)
 	end
 end
 
--- Makes an instance invisible to every client of the mock, as if it had not streamed in; a bot still sees it
+--- Makes an instance invisible to every player's client, as if it had not
+--- streamed in, so a message naming it as an `AwaitedInstance` waits. A
+--- bot still sees it
+--- @method hide
+--- @within Mock
+--- @param instance any -- The instance to hide
+
 function Mock.hide(self: Self, instance: any)
 	self._hidden[instance] = true
 end
 
--- Makes a hidden instance visible again; each client hears its id arrive at the start of the next step
+--- Makes a hidden instance visible again. Each client hears its id arrive
+--- at the start of the next step, before that step's packets
+--- @method reveal
+--- @within Mock
+--- @param instance any -- The instance to show again
+
 function Mock.reveal(self: Self, instance: any)
 	self._hidden[instance] = nil
 	table.insert(self._revealed, instance)
 end
 
--- A bot every runtime on the mock's server sets up as a player; the mock's own list, joins and leaves never see one
+--- Adds a bot, which every server runtime on `server` sets up as a
+--- player, one started later included. A bot is never in `players`, and
+--- `join` and `leave` never see one
+--- @method addBot
+--- @within Mock
+--- @param name string -- The bot's `Name`
+--- @return Bot -- The bot, a frozen table with a `Name` and no `UserId` or `Kick`
+
 function Mock.addBot(self: Self, name: string): Bot
 	return self._hub:add(name)
 end
+
+--- Takes a bot away: the server's leave callbacks run while it is still
+--- present, then its client side stops, its Heartbeats disconnected and
+--- every packet queued for it or by it dropped
+--- @method removeBot
+--- @within Mock
+--- @param bot Bot -- A bot `addBot` returned
 
 function Mock.removeBot(self: Self, bot: Bot)
 	self._hub:remove(bot)
 end
 
--- The bot's client side, whose packets reach the server in the same step and whose Heartbeat takes what it was sent
+--- The bot's client side. Its packets reach the server in the same step,
+--- or at its first frame after the server runtime starts when sent before
+--- it, and each of its frames first takes what the server sent it. A bot
+--- connects once, and connecting it again, or after it was removed, errors
+--- @method connectBot
+--- @within Mock
+--- @param bot Bot -- A bot `addBot` returned
+--- @return Transport -- The bot's client side, on which a test starts a client runtime
+
 function Mock.connectBot(self: Self, bot: Bot): Transport
 	return self._hub:connect(bot, SCOPE)
 end

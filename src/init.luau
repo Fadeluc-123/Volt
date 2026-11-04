@@ -1,8 +1,7 @@
 --[[
-    The Volt runtime: the engine every generated module drives. It moves
-    bytes between the send states and the transport, hands each incoming
-    message to its reader and its listeners, and knows nothing about any
-    type; the schema table a module hands to start tells it the rest
+    Volt's root: start, which every generated module begins its runtime
+    with, the members a game or a test calls, and the Runtime class that
+    every sibling file's methods merge onto
 --]]
 
 --!strict
@@ -16,6 +15,7 @@ local Contract = require("@self/Config/Types/Contract")
 local Delta = require("@self/Delta")
 local Dictionary = require("@self/Dictionary")
 local Fires = require("@self/Fires")
+local Flushes = require("@self/Flushes")
 local Handlers = require("@self/Handlers")
 local Limits = require("@self/Limits")
 local Mock = require("@self/Mock")
@@ -28,6 +28,8 @@ local Types = require("@self/Config/Types/Runtime")
 local Wrapper = require("@self/Wrapper")
 
 local CHANNEL_BYTES: number = Config.channelBytes
+local CLIENT_FLUSHES: number = Config.clientFlushes
+local FLUSH_EARLY: number = Config.flushEarly
 
 local SERVER: string = "server" -- The one target a client's sends go to
 local MAX_OUTGOING: string = "maxOutgoing" -- The caps a dropped message's failure names
@@ -55,8 +57,18 @@ type Profiler = Types.Profiler
 type Self = Types.Runtime
 type Waiter = Types.Waiter
 
+--- @class Volt
+--- The runtime every generated module drives. A module hands its schema
+--- table to start and makes every call into the runtime it gets back, so
+--- a game or a test reaches Volt itself for the version, the mock that
+--- runs generated modules without Studio, and the bots a server adds
+
 local Volt = {
-	version = "0.1.0", -- Shared with the compiler; a schema from another major or minor is refused at start
+	--- @prop version string
+	--- @within Volt
+	--- Volt's version, shared with the compiler. A schema compiled by
+	--- another major or minor version is refused at start
+	version = "0.1.0",
 }
 
 -- What a server writer of an awaited instance meets on a transport that keeps no instance references
@@ -64,12 +76,16 @@ local function unreferenced(_: Instance): number
 	error("Volt: this transport carries no instance references", 0)
 end
 
---[[
-    Starts a runtime for a generated module's schema table over the real
-    remotes, or over the transport handed in, which is how the mock and
-    the tests drive it. A schema from another compiler version is refused
-    here, named by its scope, rather than on the wire
---]]
+--- Starts a runtime for a generated module's schema table over the real
+--- remotes, or over the transport handed in, which is how the mock, the
+--- tests and a bot's client side drive it. A schema compiled by another
+--- major or minor version of Volt errors here, named by its scope, rather
+--- than failing on the wire
+--- @function start
+--- @within Volt
+--- @param schema Schema -- The schema table a generated module hands over
+--- @param transport Transport? -- In place of the real remotes: a mock's, or a bot's client side from connectBot
+--- @return Runtime -- The runtime the generated module drives, which a game never calls by hand
 
 function Volt.start(schema: Schema, transport: Transport?): Runtime
 	local compiled: string? = schema.version:match("^%d+%.%d+")
@@ -262,16 +278,35 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 		self:packet(player, packet, side)
 	end
 
-	-- Every frame counts for the yield check; every flush-th one sends, unless the game flushes by hand, and any
-	-- frame on which a target's unsent bytes have reached flushBytes sends, by hand or not
+	-- Every frame counts for the yield check. Every flush-th one sends unless the game flushes by hand, and so
+	-- does any frame on which a target's unsent bytes have reached flushBytes, by hand or not. A client with a
+	-- clock sends by time instead of frames, at most clientFlushes / flush times a second whatever its frame rate
 	local every: number = options.flush
 	local manual: boolean = options.manualReplication
 	local threshold: number? = options.flushBytes
+	local clock: (() -> number)? = not server and live.clock or nil -- A server counts frames, clock or not
+	local interval: number = every / CLIENT_FLUSHES
+	local due: number = 0 -- When the next paced flush falls due
+
+	local function paced(): boolean
+		if not clock then
+			return self.frame % every == 0
+		end
+
+		local now: number = clock()
+		if now < due - interval * FLUSH_EARLY then
+			return false
+		end
+
+		due = math.max(due, now) + interval -- From now when late, so a hitch is followed by no burst
+
+		return true
+	end
 
 	local function heartbeat()
 		self.frame += 1
 
-		if not manual and self.frame % every == 0 or threshold and self:_piled(threshold) then
+		if not manual and paced() or threshold and self:_piled(threshold) then
 			self:flush()
 		end
 	end
@@ -284,88 +319,72 @@ function Volt.start(schema: Schema, transport: Transport?): Runtime
 	return self :: any
 end
 
--- An in-memory transport pair for tests, over the scheduler handed in
+--- An in-memory transport pair for tests, which runs generated modules
+--- end to end under Lune or in Studio with no remotes: its server
+--- transport and each joined player's client transport are handed to
+--- start, and each step delivers the queued packets in both directions
+--- and then fires one Heartbeat on every runtime
+--- @function mock
+--- @within Volt
+--- @param spawn Spawn -- The scheduler: Lune's task.spawn under the test runner, the engine's in Studio
+--- @return Mock
+
 function Volt.mock(spawn: Spawn): Mock
 	return Mock.new(spawn)
 end
 
--- A bot that every server runtime of the VM sets up as a player, those started later included; never on a client
+--- Adds a bot, which every server runtime of the VM sets up as a player,
+--- those started later included, and errors outside a running game. A
+--- bot is a frozen table holding only its Name, with no UserId and no
+--- Kick, so strict code narrows before it treats one as a Player; the
+--- server module's isBot tells the two apart
+--- @function addBot
+--- @within Volt
+--- @server
+--- @param name string -- The bot's Name
+--- @return Bot
+
 function Volt.addBot(name: string): Bot
 	return Remotes.hub():add(name)
 end
 
--- Takes a bot away from every runtime, each hearing it leave as a player does
+--- Takes a bot away from every server runtime of the VM, each hearing it
+--- leave as a player does, then stops its client sides and drops anything
+--- queued for them or waiting from them
+--- @function removeBot
+--- @within Volt
+--- @server
+--- @param bot Bot -- A bot addBot made
+
 function Volt.removeBot(bot: Bot)
 	Remotes.hub():remove(bot)
 end
 
--- The client side of one scope for a bot, which a harness starts a client runtime on to send as the bot
+--- The client side of one scope for a bot, which a harness starts a client
+--- runtime on to send as the bot, through the same generated client
+--- writers a player's client uses. Its fires reach the scope's server in
+--- the same frame, or once that server starts when sent before it, and a
+--- second connect of a bot to one scope errors
+--- @function connectBot
+--- @within Volt
+--- @server
+--- @param bot Bot -- A bot addBot made
+--- @param scope string -- The scope whose server the bot's packets reach
+--- @return Transport -- The bot's client transport for that scope, to hand to start
+
 function Volt.connectBot(bot: Bot, scope: string): Transport
 	return Remotes.hub():connect(bot, scope)
 end
 
---[[
-    Fails the calls and drops the awaited messages past their deadlines,
-    sends every target's accumulated bytes, the default stream's first,
-    then each channel's in order, then the unreliable, with each send's
-    drops reported, then announces every handshake accepted before it
-    began, in the order read, for each player still here; the Heartbeat
-    does this every flush-th frame
---]]
-
-function Runtime.flush(self: Self)
-	local accepted: { any }? = nil
-	local clock: (() -> number)? = self._clock
-	local stamp: number? = clock and clock() -- The time every packet of this flush opens with, on a stamped server
-
-	-- Taken first, so a handshake accepted while this runs is left for a later flush and nobody is announced twice
-	if self._accepted[1] ~= nil then
-		accepted = self._accepted
-		self._accepted = {}
-	end
-
-	self:_sweep()
-	self:_expire()
-	self.reliable:flush(stamp)
-
-	for _, stream: Send.Send in self.streams do
-		stream:flush(stamp)
-	end
-
-	self.unreliable:flush(stamp)
-
-	if accepted then
-		for _, player: any in accepted do
-			if self._players[player] then
-				self:_announce(self._handshakes, player)
-			end
-		end
-	end
-end
-
--- Whether one target's unsent bytes on any send have reached a size, which is what flushBytes flushes at
-function Runtime._piled(self: Self, bytes: number): boolean
-	if self.reliable:reached(bytes) or self.unreliable:reached(bytes) then
-		return true
-	end
-
-	for _, stream: Send.Send in self.streams do
-		if stream:reached(bytes) then
-			return true
-		end
-	end
-
-	return false
-end
-
-local _: Types.Own, _: Types.Awaited, _: Types.Calls, _: Types.Fires = Runtime, Awaited, Calls, Fires
+local _: Types.Awaited, _: Types.Calls, _: Types.Fires, _: Types.Flushes = Awaited, Calls, Fires, Flushes
 local _: Types.Delta, _: Types.Dictionary = Delta, Dictionary
 local _: Types.Handlers, _: Types.Limits, _: Types.Players = Handlers, Limits, Players
 local _: Types.Receive, _: Types.Wrapper = Receive, Wrapper
 
--- The awaited instances, each side of a call, the baselines, the dictionary, the fires, the receive side, the limits,
--- the players and the wrapper's hooks are a sibling each, and a name defined twice is a bug
-local parts: { any } = { Awaited, Calls, Delta, Dictionary, Fires, Handlers, Limits, Players, Receive, Wrapper }
+-- The awaited instances, each side of a call, the baselines, the dictionary, the fires, the flush, the receive side,
+-- the limits, the players and the wrapper's hooks are a sibling each, and a name defined twice is a bug
+local parts: { any } =
+	{ Awaited, Calls, Delta, Dictionary, Fires, Flushes, Handlers, Limits, Players, Receive, Wrapper }
 
 for _, part in parts do
 	for name: string, method in part do
